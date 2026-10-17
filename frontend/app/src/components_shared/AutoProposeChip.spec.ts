@@ -34,7 +34,7 @@ const messageSources = [
 describe.each(messageSources)("%s message proposal wiring", (_name, source) => {
     it("keeps the suggestion after successful extraction and only dismisses explicitly", () => {
         const handler = source.match(
-            /async function proposeLocalSuggestedAction[\s\S]+?(?=\n    function muteAutoProposeSuggestions)/,
+            /async function proposeLocalSuggestedAction[\s\S]+?(?=\n {4}function muteAutoProposeSuggestions)/,
         )?.[0];
         expect(handler).toBeDefined();
         expect(handler).toContain("await runAiActionHandler(undefined, suggestion)");

@@ -19,7 +19,7 @@
     import Overlay from "../../Overlay.svelte";
     import Search from "../../Search.svelte";
     import Toggle from "../../Toggle.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import BalanceWithRefresh from "../BalanceWithRefresh.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -91,7 +91,6 @@
             } else {
                 config.tokens.add(ledger);
             }
-            config = config;
         }
     }
 

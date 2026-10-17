@@ -1,14 +1,14 @@
 use crate::activity_notifications::handle_activity_notification;
 use crate::guards::caller_is_local_user_index;
-use crate::{RuntimeState, execute_update_async, mutate_state, read_state};
+use crate::{Data, RuntimeState, execute_update_async, mutate_state, read_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use group_canister::remove_participant::*;
 use group_chat_core::GroupRoleInternal;
 use local_user_index_canister_c2c_client::lookup_user;
+use multi_user_canister::{GroupCanisterEvent, RemovedFromGroup};
 use oc_error_codes::OCErrorCode;
 use types::{BotCaller, BotPermissions, Caller, CanisterId, ChatPermission, OCResult, UnitResult, UserId};
-use user_canister::{GroupCanisterEvent, RemovedFromGroup};
 
 #[update(msgpack = true)]
 #[trace]
@@ -44,6 +44,8 @@ async fn c2c_bot_remove_user(args: group_canister::c2c_bot_remove_user::Args) ->
 }
 
 async fn remove_participant_impl(user_to_remove: UserId, block: bool, ext_caller: Option<Caller>) -> OCResult {
+    read_state(|state| state.data.verify_not_old_user_id(user_to_remove))?;
+
     // Check the caller can remove the user
     let prepare_result = match read_state(|state| prepare(user_to_remove, block, ext_caller, state))? {
         Some(ok) => ok,
@@ -60,8 +62,19 @@ async fn remove_participant_impl(user_to_remove: UserId, block: bool, ext_caller
         }
     }
 
-    // Remove the user from the group
+    // Remove the user from the group, unless it has been frozen (eg. to be imported into a community)
+    // while awaiting a lookup
+    verify_not_frozen()?;
     mutate_state(|state| commit(user_to_remove, block, prepare_result.remove, prepare_result.removed_by, state))
+}
+
+// The group may have been frozen (including to be imported into a community) while awaiting a call
+fn verify_not_frozen() -> OCResult {
+    if read_state(|state| state.data.is_frozen()) {
+        Err(OCErrorCode::ChatFrozen.into())
+    } else {
+        Ok(())
+    }
 }
 
 struct PrepareResult {
@@ -137,7 +150,7 @@ fn commit(user_to_remove: UserId, block: bool, remove: bool, caller: Caller, sta
         .remove_member(caller, user_to_remove, block, state.env.now())?;
 
     if remove {
-        state.data.remove_user(user_to_remove, None, false);
+        state.data.remove_user(user_to_remove, None);
     }
 
     state.push_bot_notification(bot_notification);
@@ -163,4 +176,47 @@ fn commit(user_to_remove: UserId, block: bool, remove: bool, caller: Caller, sta
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ic_principal::Principal;
+
+    use types::{EventIndex, MessageIndex, UserType};
+
+    fn canister_id(i: u8) -> CanisterId {
+        CanisterId::from_slice(&[0, 0, 0, 0, 0, 0, 0, i, 1, 1])
+    }
+
+    // The User canister id a migrated user had, and the id they were migrated to
+    fn old_user_id(i: u8) -> UserId {
+        canister_id(100 + i).into()
+    }
+
+    fn new_user_id(i: u8) -> UserId {
+        UserId::new_indexed(canister_id(1), i as u16)
+    }
+
+    #[test]
+    fn a_user_canister_id_is_refused_unless_it_is_a_bot_member() {
+        let owner = new_user_id(1);
+        let mut data = Data::new_for_tests(owner, Principal::from_slice(&[1]), String::new());
+        let bot_id: UserId = canister_id(50).into();
+        data.chat.members.add(
+            bot_id,
+            None,
+            0,
+            EventIndex::default(),
+            MessageIndex::default(),
+            false,
+            UserType::Bot,
+        );
+
+        assert!(data.verify_not_old_user_id(old_user_id(2)).is_err());
+        assert!(data.verify_not_old_user_id(bot_id).is_ok());
+        assert!(data.verify_not_old_user_id(new_user_id(2)).is_ok());
+        // Bots without canisters of their own and webhooks have ids which aren't canisters'
+        assert!(data.verify_not_old_user_id(Principal::from_slice(&[1; 8]).into()).is_ok());
+    }
 }

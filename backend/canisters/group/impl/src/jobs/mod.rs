@@ -7,7 +7,6 @@ use crate::RuntimeState;
 pub mod expire_members;
 pub mod garbage_collect_stable_memory;
 pub mod make_pending_payments;
-pub mod migrate_chat_events_to_stable_memory;
 pub mod process_expire_member_actions;
 pub mod unlapse_members;
 
@@ -15,7 +14,6 @@ pub(crate) fn start(state: &RuntimeState) {
     expire_members::start_job_if_required(state);
     garbage_collect_stable_memory::start_job_if_required(state);
     make_pending_payments::start_job_if_required(state);
-    migrate_chat_events_to_stable_memory::start_job_if_required(state);
     process_expire_member_actions::start_job_if_required(state);
     unlapse_members::start_job_if_required(state);
 }

@@ -6,9 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+## [[2.0.2148](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2148-notifications_index)] - 2026-10-16
+
+### Removed
+
+- Remove the one-offs which recomputed the `subscriptions` metric and moved the subscriptions of the users migrated so far, now that they have run ([#9871](https://github.com/open-chat-labs/open-chat/pull/9871))
+- Remove `c2c_user_index`, which only told it of users migrated to MultiUser canisters ([#9922](https://github.com/open-chat-labs/open-chat/pull/9922))
+
+## [[2.0.2115](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2115-notifications_index)] - 2026-10-08
+
 ### Changed
 
 - Run the repeating jobs on `PerRoundTimer` rather than `set_timer_interval` ([#9772](https://github.com/open-chat-labs/open-chat/pull/9772))
+
+### Fixed
+
+- Move a migrated user's web push subscriptions and FCM tokens onto their new id, including, once, those of the users migrated so far ([#9842](https://github.com/open-chat-labs/open-chat/pull/9842))
+- Send a new LocalUserIndex the existing FCM tokens, not just the web push subscriptions ([#9843](https://github.com/open-chat-labs/open-chat/pull/9843))
+- Reduce the `subscriptions` metric when inactive subscriptions are removed, and recompute it on upgrade ([#9843](https://github.com/open-chat-labs/open-chat/pull/9843))
 
 ## [[2.0.2079](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2079-notifications_index)] - 2026-09-30
 

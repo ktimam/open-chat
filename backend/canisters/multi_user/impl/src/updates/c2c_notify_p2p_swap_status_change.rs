@@ -3,13 +3,12 @@ use crate::{MultiUserEventPusher, execute_update_async, mutate_state, read_state
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use escrow_canister::SwapStatusChange as Args;
+use multi_user_canister::UserCanisterEvent;
 use types::{Chat, P2PSwapLocation, UserId};
-use user_canister::UserCanisterEvent;
 use user_core::updates::c2c_notify_p2p_swap_status_change::{apply_status_change, offerer_user_id};
 
-// The User canister's `c2c_notify_p2p_swap_status_change`, for swaps offered in direct chats. The
-// escrow canister notifies the canister of the user the swap was offered to, whose copy of the
-// message records the change, which is then sent to the offerer as in the User canister.
+// For swaps offered in direct chats. The escrow canister notifies the canister of the user the swap
+// was offered to, whose copy of the message records the change, which is then sent to the offerer.
 #[update(guard = "caller_is_escrow_canister", msgpack = true)]
 #[trace]
 async fn c2c_notify_p2p_swap_status_change(args: Args) {
@@ -25,6 +24,7 @@ async fn c2c_notify_p2p_swap_status_change_impl(args: Args) {
         return;
     };
     let offered_to = UserId::from(chat_id);
+    let thread_root_message_index = m.thread_root_message_index;
 
     // A user in this canister holds their funds under their own principal, by which escrow names
     // them as the offerer
@@ -43,7 +43,7 @@ async fn c2c_notify_p2p_swap_status_change_impl(args: Args) {
             Some(offerer) => (offered_to_index, offerer),
             None => return,
         },
-        // As the User canister does, an offerer who is notified records the change themselves
+        // An offerer who is notified records the change themselves
         (None, Some(offerer_index)) => (offerer_index, offered_to),
         (None, None) => return,
     };
@@ -57,17 +57,16 @@ async fn c2c_notify_p2p_swap_status_change_impl(args: Args) {
             rng: state.env.rng(),
             queue: &mut state.data.local_user_index_event_sync_queue,
         };
-        let migrated_user_ids = &state.data.migrated_user_ids;
         let change = state
             .data
             .users
             .with_user_mut(recipient_index, |user| {
-                // The location names the chat by the other user's id when the swap was offered
-                let other = user.direct_chats.latest_user_id(other, migrated_user_ids);
                 apply_status_change(user, other, args, now, event_pusher).map(|change| (other, change))
             })
             .flatten();
         if let Some((other, change)) = change {
+            // The swap has ended, so there is no longer any need to mark it as expired
+            state.cancel_mark_p2p_swap_expired_job(recipient_index, other, thread_root_message_index, change.message_id);
             state.send_user_canister_event(
                 recipient_index,
                 other,

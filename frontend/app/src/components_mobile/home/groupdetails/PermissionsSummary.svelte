@@ -13,7 +13,7 @@
         type PermissionsByRole,
     } from "@client";
     import { _ } from "svelte-i18n";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import GroupPermissionsPartitionViewer from "../GroupPermissionsPartitionViewer.svelte";
     import Separator from "../Separator.svelte";
 
@@ -27,7 +27,7 @@
 
     let { permissions, isPublic, isCommunityPublic, isChannel, embeddedContent }: Props = $props();
 
-    let items = embeddedContent
+    const items = embeddedContent
         ? [i18nKey("permissions.general")]
         : [
               i18nKey("permissions.general"),
@@ -56,6 +56,7 @@
                 startVideoCall: permissions.startVideoCall,
                 pinMessages: permissions.pinMessages,
                 reactToMessages: permissions.reactToMessages,
+                tipMessages: permissions.tipMessages,
                 mentionAllMembers: permissions.mentionAllMembers,
             },
             "",

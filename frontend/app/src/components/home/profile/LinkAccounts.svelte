@@ -12,12 +12,11 @@
         type ResourceKey,
         type WebAuthnKey,
     } from "@client";
-    import { ErrorCode } from "@shared";
+    import { configKeys, ErrorCode } from "@shared";
     import { getContext, onMount } from "svelte";
     import ArrowRightBoldOutline from "svelte-material-icons/ArrowRightBoldOutline.svelte";
     import LinkVariantPlus from "svelte-material-icons/LinkVariantPlus.svelte";
     import { i18nKey } from "../../../i18n/i18n";
-    import { configKeys } from "../../../utils/config";
     import {
         EmailPollerError,
         EmailPollerSuccess,
@@ -28,8 +27,8 @@
     import ButtonGroup from "../../ButtonGroup.svelte";
     import ErrorMessage from "../../ErrorMessage.svelte";
     import InternetIdentityLogo from "../../landingpages/InternetIdentityLogo.svelte";
-    import Translatable from "../../Translatable.svelte";
-    import EmailSigninFeedback from "../EmailSigninFeedback.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
+    import EmailSigninFeedback from "@shared_components/home/EmailSigninFeedback.svelte";
     import ChooseSignInOption from "./ChooseSignInOption.svelte";
     import SignInOption from "./SignInOption.svelte";
 
@@ -50,8 +49,6 @@
         onProceed,
         onClose,
     }: Props = $props();
-
-    iiPrincipal;
 
     type IdentityDetail = {
         key: ECDSAKeyIdentity;
@@ -76,14 +73,14 @@
         | "signing_in_with_email";
 
     let error: string | undefined = $state();
-    let emailSigninHandler = new EmailSigninHandler(client, "account_linking", false);
+    const emailSigninHandler = new EmailSigninHandler(client, "account_linking", false);
     let step: "explain" | "linking" = $state("explain");
     let substep = $state<LinkStage>({ kind: "initiator" });
     let emailInvalid = $state(false);
     let email = $state("");
     let providerStep: ProviderStep = $state("choose_provider");
     let linking = $state(false);
-    let loggingInInitiator = false;
+    const loggingInInitiator = false;
     let verificationCode: string | undefined = $state(undefined);
     let accounts: LinkedAuthenticationPrincipal[] = $state([]);
 

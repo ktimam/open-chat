@@ -4,26 +4,23 @@ use crate::{
     SavedCryptoAccounts, Streak, ThreadsRead, TokenSwaps,
 };
 use candid::Principal;
-use constants::OPENCHAT_BOT_USER_ID;
-use direct_chat::DirectChats;
+use constants::{MAX_WALLET_TOKENS, OPENCHAT_BOT_USER_ID};
+use direct_chat::{DirectChat, DirectChats};
 use installed_bots::InstalledBots;
+use multi_user_canister::{MessageActivityEvent, WalletConfig};
 use oc_error_codes::OCErrorCode;
 use serde::{Deserialize, Serialize};
 use stable_memory_map::BaseKeyPrefix;
 use std::collections::HashSet;
 use types::{
-    Achievement, BotDefinitionUpdate, BotInitiator, BotPermissions, BotUpdated, CanisterId, Chat, ChatId, ChitEvent,
-    ChitEventType, CommunityId, MultiUserChat, ReferralStatus, TimestampMillis, Timestamped, UniquePersonProof, UserId,
+    Achievement, BotDefinitionUpdate, BotInitiator, BotPermissions, BotUpdated, Chat, ChatId, ChitEvent, ChitEventType,
+    CommunityId, MultiUserChat, ReferralStatus, TimestampMillis, Timestamped, UniquePersonProof, UserId,
 };
-use user_canister::{MessageActivityEvent, WalletConfig};
-use utils::migrated_user_ids::MigratedUserIds;
 
-// The state of a single user, shared by the User canister, which holds one, and the MultiUser
-// canister, which holds many, so that the logic of each endpoint can be shared and a user could
-// later be moved between the two kinds of canister.
+// The state of a single user, many of whom are held in each MultiUser canister.
 //
-// In the MultiUser canister any stable memory map entries a user holds are keyed under that user's
-// index, so there a `User` must only be accessed within its key scope, which `Users` takes care of.
+// Any stable memory map entries a user holds are keyed under that user's index, so a `User` must
+// only be accessed within its key scope, which `Users` takes care of.
 #[derive(Serialize, Deserialize)]
 pub struct User {
     pub principal: Principal,
@@ -89,81 +86,22 @@ pub struct User {
     #[serde(default)]
     pub one_sec_address: Option<Timestamped<String>>,
     #[serde(default)]
+    pub sol_address: Option<Timestamped<String>>,
+    // The ckSOL minter's id of the latest SOL deposit forwarded to the user's wallet, ids being
+    // assigned in order, so that each deposit is forwarded once
+    #[serde(default)]
+    pub latest_sol_deposit_id: Option<u64>,
+    // Whether one of the user's SOL deposits has been seen minted, its sweep having left the minter's
+    // rent reserve on their deposit address, so that later deposits are charged the lower fee
+    #[serde(default)]
+    pub sol_deposit_address_funded: bool,
+    #[serde(default)]
     pub bots: InstalledBots,
     #[serde(default)]
     pub premium_items: PremiumItems,
 }
 
 impl User {
-    // Moves what the user holds under their own id onto their new id once they are migrated from a
-    // canister of their own to a MultiUser canister
-    pub fn migrate_own_user_id(&mut self, old_user_id: UserId, new_user_id: UserId) {
-        self.direct_chats.migrate_own_user_id(old_user_id, new_user_id);
-        self.favourite_chats.migrate_own_user_id(old_user_id, new_user_id);
-        // The deposit addresses were generated for the account of the user's old canister, so new
-        // ones are generated for the user's own account when next asked for
-        self.btc_address = None;
-        self.one_sec_address = None;
-    }
-
-    // Moves what the user holds under the id of another user onto that user's new id once they are
-    // migrated to a MultiUser canister: their chat with them, their block of them and their contact
-    // for them. Messages keep the id they were sent under.
-    pub fn migrate_their_user_id(&mut self, old_user_id: UserId, new_user_id: UserId, now: TimestampMillis) {
-        if self.blocked_users.unblock(old_user_id, now) {
-            self.blocked_users.block(new_user_id, now);
-        }
-        if self.direct_chats.migrate_their_user_id(old_user_id, new_user_id, now) {
-            self.favourite_chats.migrate_their_user_id(old_user_id, new_user_id, now);
-        }
-        self.contacts.migrate_user_id(old_user_id, new_user_id);
-    }
-
-    // Moves what the user holds under the previous ids a sender's MultiUser canister sent with their
-    // event onto the sender's id, before the event is applied, in case the notice of the sender's
-    // migration hasn't arrived yet. The ids, oldest first, are recorded in `migrated_user_ids`
-    // first, and an id is only moved if it now leads to the sender. Only what this is needed for, the
-    // chat and a block, is checked for, since this runs for every such event.
-    pub fn migrate_sender_user_id(
-        &mut self,
-        sender: UserId,
-        sender_previous_user_ids: &[UserId],
-        migrated_user_ids: &MigratedUserIds,
-        now: TimestampMillis,
-    ) {
-        for &previous_user_id in sender_previous_user_ids {
-            if migrated_user_ids.latest(previous_user_id) == sender
-                && (self.direct_chats.exists(&previous_user_id.into()) || self.blocked_users.contains(&previous_user_id))
-            {
-                self.migrate_their_user_id(previous_user_id, sender, now);
-            }
-        }
-    }
-
-    // The users the user has, or had, a direct chat with, other than themselves and bots, who are
-    // told of the user's new id once they are migrated to a MultiUser canister
-    pub fn direct_chat_user_ids(&self, my_user_id: UserId) -> Vec<UserId> {
-        let mut user_ids: HashSet<UserId> = self
-            .direct_chats
-            .iter()
-            .filter(|chat| !chat.user_type.is_bot())
-            .map(|chat| chat.them)
-            .collect();
-        // A chat removed by the user is still held by the other user
-        user_ids.extend(self.direct_chats.removed_since(0).into_iter().map(UserId::from));
-        user_ids.remove(&my_user_id);
-        user_ids.into_iter().collect()
-    }
-
-    // The canisters of the groups and communities the user is in
-    pub fn group_and_community_canisters(&self) -> Vec<CanisterId> {
-        self.group_chats
-            .iter()
-            .map(|g| CanisterId::from(g.chat_id))
-            .chain(self.communities.iter().map(|c| CanisterId::from(c.community_id)))
-            .collect()
-    }
-
     pub fn new(principal: Principal, username: String, referred_by: Option<UserId>, now: TimestampMillis) -> User {
         User {
             principal,
@@ -203,6 +141,9 @@ impl User {
             p2p_swaps: P2PSwaps::default(),
             btc_address: None,
             one_sec_address: None,
+            sol_address: None,
+            latest_sol_deposit_id: None,
+            sol_deposit_address_funded: false,
             bots: InstalledBots::default(),
             premium_items: PremiumItems::default(),
         }
@@ -273,15 +214,31 @@ impl User {
     // the caller to garbage collect
     pub fn uninstall_bot(&mut self, bot_id: UserId, now: TimestampMillis) -> Vec<BaseKeyPrefix> {
         self.bots.remove(bot_id, now);
-        self.direct_chats
-            .remove(bot_id.into(), now)
+        self.remove_direct_chat(bot_id, now)
             .map(|chat| chat.stable_memory_key_prefixes())
             .unwrap_or_default()
     }
 
+    // Removes the user's chat with `them`, along with its pin and their favourite of it
+    pub fn remove_direct_chat(&mut self, them: UserId, now: TimestampMillis) -> Option<DirectChat> {
+        self.favourite_chats.remove(&Chat::Direct(them.into()), now);
+        self.direct_chats.remove(them.into(), now)
+    }
+
+    // Sets the wallet config, keeping at most `MAX_WALLET_TOKENS` distinct tokens in a manual wallet.
+    // Any more are dropped rather than the config being rejected, since there are far fewer tokens.
+    pub fn set_wallet_config(&mut self, mut config: WalletConfig, now: TimestampMillis) {
+        if let WalletConfig::Manual(manual) = &mut config {
+            let mut seen = HashSet::new();
+            manual.tokens.retain(|token| seen.insert(*token));
+            manual.tokens.truncate(MAX_WALLET_TOKENS);
+        }
+        self.wallet_config = Timestamped::new(config, now);
+    }
+
     fn apply_bot_update(&mut self, bot_id: UserId, updated_by: Option<UserId>, now: TimestampMillis) {
         // The user may have deleted their chat with the bot while keeping it installed
-        let Some(chat) = self.direct_chats.get_mut(&bot_id.into()) else {
+        let Some(mut chat) = self.direct_chats.get_mut(&bot_id.into()) else {
             return;
         };
 
@@ -342,20 +299,25 @@ impl User {
         if self.suspended.value { Err(OCErrorCode::InitiatorSuspended) } else { Ok(()) }
     }
 
-    // Blocks the user with the given id, returning false if they were already blocked. The caller
-    // tells the LocalUserIndex (`UserBlocked`) if the user is newly blocked, as the User canister does.
+    // Blocks the user, returning false if they already were. The caller refuses a User canister's
+    // id, which users had before being migrated to MultiUser canisters, and tells the LocalUserIndex
+    // (`UserBlocked`) if the user is newly blocked.
     pub fn block_user(&mut self, user_id: UserId, now: TimestampMillis) -> bool {
         self.blocked_users.block(user_id, now)
     }
 
-    // Unblocks the user with the given id, returning false if they weren't blocked. The caller tells
-    // the LocalUserIndex (`UserUnblocked`) if the user is newly unblocked.
+    // Unblocks the user, returning false if they weren't blocked. The caller tells the LocalUserIndex
+    // (`UserUnblocked`) if the user is newly unblocked.
     pub fn unblock_user(&mut self, user_id: UserId, now: TimestampMillis) -> bool {
         self.blocked_users.unblock(user_id, now)
     }
 
+    pub fn has_blocked(&self, user_id: UserId) -> bool {
+        self.blocked_users.contains(&user_id)
+    }
+
     // Awards the achievement along with its CHIT, returning false if the user already had it. The
-    // caller tells the LocalUserIndex of the user's new CHIT balance, as the User canister does.
+    // caller tells the LocalUserIndex of the user's new CHIT balance.
     pub fn award_achievement(&mut self, achievement: Achievement, now: TimestampMillis) -> bool {
         if self.achievements.insert(achievement) {
             self.chit_events.push(ChitEvent {
@@ -369,7 +331,7 @@ impl User {
         }
     }
 
-    // As the User canister's `award_external_achievement`, returning whether it was newly awarded
+    // Awards the external achievement along with its CHIT, returning whether it was newly awarded
     pub fn award_external_achievement(&mut self, name: String, chit_reward: u32, now: TimestampMillis) -> bool {
         if self.external_achievements.insert(name.clone()) {
             self.chit_events.push(ChitEvent {
@@ -383,17 +345,10 @@ impl User {
         }
     }
 
-    // Records the status a user this user referred has reached, as the User canister does on a
-    // `SetReferralStatus` event, returning whether CHIT was awarded for it. `previous_user_ids` are
-    // the ids the referred user had before being migrated to a MultiUser canister.
-    pub fn set_referral_status(
-        &mut self,
-        user_id: UserId,
-        previous_user_ids: &[UserId],
-        status: ReferralStatus,
-        now: TimestampMillis,
-    ) -> bool {
-        let chit_reward = self.referrals.set_status(user_id, previous_user_ids, status, now);
+    // Records the status a user this user referred has reached, as sent in a
+    // `SetReferralStatus` event, returning whether CHIT was awarded for it
+    pub fn set_referral_status(&mut self, user_id: UserId, status: ReferralStatus, now: TimestampMillis) -> bool {
+        let chit_reward = self.referrals.set_status(user_id, status, now);
         let mut rewarded = false;
 
         if chit_reward > 0 {
@@ -425,5 +380,51 @@ impl User {
         if event.user_id.is_none_or(|user_id| !self.blocked_users.contains(&user_id)) {
             self.message_activity_events.push(event, now);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ic_stable_structures::DefaultMemoryImpl;
+    use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
+    use multi_user_canister::ManualWallet;
+
+    use types::{CanisterId, UserType};
+
+    #[test]
+    fn manual_wallet_tokens_are_deduplicated_and_limited() {
+        let mut user = User::new(Principal::from_slice(&[1]), "user".to_string(), None, 0);
+        let token = |i: u32| CanisterId::from_slice(&i.to_be_bytes());
+        let tokens: Vec<_> = (0..MAX_WALLET_TOKENS as u32 + 10)
+            .flat_map(|i| [token(i), token(i)])
+            .collect();
+
+        user.set_wallet_config(WalletConfig::Manual(ManualWallet { tokens }), 10);
+
+        let WalletConfig::Manual(manual) = &user.wallet_config.value else {
+            panic!("Not a manual wallet");
+        };
+        assert_eq!(manual.tokens, (0..MAX_WALLET_TOKENS as u32).map(token).collect::<Vec<_>>());
+        assert_eq!(user.wallet_config.timestamp, 10);
+    }
+
+    #[test]
+    fn removing_a_direct_chat_removes_its_pin_and_favourite() {
+        let memory = MemoryManager::init(DefaultMemoryImpl::default());
+        stable_memory_map::init_with_small_entries_map(memory.get(MemoryId::new(1)), memory.get(MemoryId::new(2)));
+        let me: UserId = Principal::from_slice(&[1; 10]).into();
+        let them: UserId = Principal::from_slice(&[2; 10]).into();
+        let mut user = User::new(Principal::from_slice(&[1]), "user".to_string(), None, 0);
+        user.direct_chats.get_or_create(me, them, UserType::User, || 1, 10);
+        user.direct_chats.pin(them.into(), 20).unwrap();
+        user.favourite_chats.pin(Chat::Direct(them.into()), 20).unwrap();
+
+        assert!(user.remove_direct_chat(them, 30).is_some());
+
+        assert!(user.direct_chats.pinned_chats().is_empty());
+        assert!(user.favourite_chats.is_empty());
+        assert!(user.favourite_chats.pinned().is_empty());
+        assert!(user.remove_direct_chat(them, 40).is_none());
     }
 }

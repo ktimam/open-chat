@@ -3,10 +3,10 @@ use crate::{MultiUserEventPusher, RuntimeState, execute_update};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use chat_events::AddRemoveReactionArgs;
+use multi_user_canister::remove_reaction::*;
+use multi_user_canister::{ToggleReactionArgs, UserCanisterEvent};
 use oc_error_codes::OCErrorCode;
 use types::{EventIndex, MessageId, MessageIndex, OCResult, Reaction, UserId};
-use user_canister::remove_reaction::*;
-use user_canister::{ToggleReactionArgs, UserCanisterEvent};
 
 #[update(guard = "caller_is_hosted_user", msgpack = true)]
 #[trace]
@@ -54,7 +54,7 @@ pub(crate) fn toggle_reaction(
         .with_user_mut(my_index, |user| {
             user.verify_not_suspended()?;
 
-            let chat = user.direct_chats.get_mut_or_err(&them.into())?;
+            let mut chat = user.direct_chats.get_mut_or_err(&them.into())?;
             let args = AddRemoveReactionArgs {
                 user_id: my_user_id,
                 min_visible_event_index: EventIndex::default(),
@@ -63,11 +63,10 @@ pub(crate) fn toggle_reaction(
                 reaction: reaction.clone(),
                 now,
             };
-            let migrated_user_ids = &state.data.migrated_user_ids;
             if added {
-                chat.add_reaction(args, migrated_user_ids, Some(event_pusher))?;
+                chat.add_reaction(args, Some(event_pusher))?;
             } else {
-                chat.remove_reaction(args, migrated_user_ids)?;
+                chat.remove_reaction(args)?;
             }
             let thread_root_message_id = chat.thread_root_message_id(thread_root_message_index)?;
 

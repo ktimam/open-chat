@@ -30,9 +30,9 @@
     import ModalContent from "../../ModalContent.svelte";
     import Overlay from "../../Overlay.svelte";
     import Select from "../../Select.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import DurationPicker from "../DurationPicker.svelte";
-    import AccessGateExpiry from "./AccessGateExpiry.svelte";
+    import AccessGateExpiry from "@shared_components/home/access/AccessGateExpiry.svelte";
     import AccessGateIcon from "./AccessGateIcon.svelte";
     import LeafGateBuilder from "./LeafGateBuilder.svelte";
 
@@ -54,9 +54,9 @@
         onClose,
     }: Props = $props();
 
-    let gateValidity: boolean[] = $state([]);
+    const gateValidity: boolean[] = $state([]);
     let selectedGateIndex: number | undefined = $state(undefined);
-    let gateBindings: GateBinding[] = getGateBindings(level);
+    const gateBindings: GateBinding[] = getGateBindings(level);
     let evaluationIntervalValid = $state(true);
     let nsLedgers = $derived(
         new Set([...$nervousSystemLookup.values()].map((d) => d.ledgerCanisterId)),
@@ -94,7 +94,6 @@
                 operator: "and",
             };
         }
-        gateConfig = gateConfig;
         if (isCompositeGate(gateConfig.gate)) {
             selectedGateIndex = gateConfig.gate.gates.length - 1;
         }
@@ -107,8 +106,6 @@
             if (gateConfig.gate.gates.length === 1) {
                 gateConfig.gate = gateConfig.gate.gates[0];
             }
-            gateConfig = gateConfig;
-            gateValidity = gateValidity;
         }
     }
 

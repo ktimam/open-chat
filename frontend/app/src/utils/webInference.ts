@@ -19,7 +19,7 @@ import { currentWebGpuModelCatalog, subscribeWebGpuModelCatalog } from "./webGpu
 
 import type { InferenceRequest, InferenceResult, ModelFile, ModelModality } from "@shared";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { writable } from "svelte/store";
+import { writable } from "@client/reactiveStores";
 import { resolveTransformersWebGpuMaxOutputTokens } from "../stores/transformersWebGpuSettings";
 import { splitModelFiles, WEB_MODEL_MAX_BYTES } from "./modelCatalog";
 import {

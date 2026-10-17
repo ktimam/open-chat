@@ -31,13 +31,7 @@ import type {
     Tally,
     VerifiedCredentialArgs,
 } from "@shared";
-import {
-    max,
-    MAX_MISSING,
-    premiumPrices,
-    toBigInt32,
-    UnsupportedValueError,
-} from "@shared";
+import { MAX_MISSING, premiumPrices, toBigInt32, UnsupportedValueError } from "@shared";
 import {
     BotInstallationLocation as ApiBotInstallationLocation,
     Empty,
@@ -72,7 +66,6 @@ import {
     LocalUserIndexRegisterUserResponse,
     LocalUserIndexReinstateMissedDailyClaimsArgs,
     LocalUserIndexUninstallBotArgs,
-    LocalUserIndexWithdrawFromIcpswapArgs,
     SuccessOnly,
     MultiUserChat as TMultiUserChat,
     UnitResult,
@@ -107,7 +100,6 @@ import {
     moveFundsFromOldCanisterResponse,
     payForPremiumItemResponse,
     registerUserResponse,
-    withdrawFromIcpSwapResponse,
 } from "./mappers";
 import {
     dailyPuzzleFetchResponse,
@@ -198,12 +190,6 @@ export class LocalUserIndexClient extends MultiCanisterMsgpackAgent {
                     kind: "success",
                     result: cached,
                 };
-                if (cachePrimer && request.latestKnownUpdate !== undefined) {
-                    this.chatsDb.setCachePrimerEventIndex(
-                        request.context.chatId,
-                        max(cached.events, (e) => e.index),
-                    );
-                }
             }
         }
 
@@ -228,12 +214,6 @@ export class LocalUserIndexClient extends MultiCanisterMsgpackAgent {
                             request.context.threadRootMessageIndex,
                         ),
                     );
-                    if (cachePrimer) {
-                        this.chatsDb.setCachePrimerEventIndex(
-                            request.context.chatId,
-                            max(response.result.events, (e) => e.index),
-                        );
-                    }
                 }
 
                 // Insert the response into the first empty index, this will match the index of the request
@@ -549,30 +529,6 @@ export class LocalUserIndexClient extends MultiCanisterMsgpackAgent {
             accessTokenResponse,
             LocalUserIndexAccessTokenV2Args,
             LocalUserIndexAccessTokenV2Response,
-        );
-    }
-
-    withdrawFromIcpSwap(
-        localUserIndex: string,
-        userId: string,
-        swapId: bigint,
-        inputToken: boolean,
-        amount: bigint | undefined,
-        fee: bigint | undefined,
-    ): Promise<boolean> {
-        return this.update(
-            localUserIndex,
-            "withdraw_from_icpswap",
-            {
-                user_id: principalStringToBytes(userId),
-                swap_id: swapId,
-                input_token: inputToken,
-                amount,
-                fee,
-            },
-            withdrawFromIcpSwapResponse,
-            LocalUserIndexWithdrawFromIcpswapArgs,
-            SuccessOnly,
         );
     }
 

@@ -57,15 +57,15 @@
     import { buildDisplayName } from "../../utils/user";
     import Avatar from "../Avatar.svelte";
     import { clamp, swipe } from "@shared_components/chatSwipe";
-    import HeartMinus from "../icons/HeartMinus.svelte";
-    import HeartPlus from "../icons/HeartPlus.svelte";
+    import HeartMinus from "@shared_components/icons/HeartMinus.svelte";
+    import HeartPlus from "@shared_components/icons/HeartPlus.svelte";
     import WithVerifiedBadge from "../icons/WithVerifiedBadge.svelte";
     import Menu from "../Menu.svelte";
     import MenuIcon from "../MenuIcon.svelte";
     import MenuItem from "../MenuItem.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Typing from "@shared_components/Typing.svelte";
-    import ArchiveOffIcon from "./ArchiveOffIcon.svelte";
+    import ArchiveOffIcon from "@shared_components/home/ArchiveOffIcon.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
     import Badges from "./profile/Badges.svelte";
     import BotBadge from "./profile/BotBadge.svelte";
@@ -133,7 +133,7 @@
                   );
             unreadMentions = getUnreadMentionCount(chatSummary);
 
-            if (chatSummary.membership.archived && unreadMessages > 0 && !chat.bot) {
+            if (chatSummary.membership.archived && unreadMessages > 0) {
                 unarchiveChat();
             }
         });
@@ -147,7 +147,7 @@
             ? { muted: muted ? 1 : 0, unmuted: muted ? 0 : 1 }
             : { muted: 0, unmuted: 0 };
         switch (chatSummary.kind) {
-            case "direct_chat":
+            case "direct_chat": {
                 const them = $allUsersStore.get(chatSummary.them.userId);
                 return {
                     name: client.displayName(them),
@@ -170,6 +170,7 @@
                     uniquePerson: them?.isUniquePerson ?? false,
                     bot: them?.kind === "bot",
                 };
+            }
             default:
                 return {
                     name: chatSummary.name,
@@ -645,32 +646,30 @@
                                             {/snippet}
                                         </MenuItem>
                                     {/if}
-                                    {#if !chat.bot}
-                                        {#if chatSummary.membership.archived}
-                                            <MenuItem onclick={selectChat}>
-                                                {#snippet icon()}
-                                                    <ArchiveOffIcon
-                                                        size={$iconSize}
-                                                        color={"var(--icon-inverted-txt)"} />
-                                                {/snippet}
-                                                {#snippet text()}
-                                                    <Translatable
-                                                        resourceKey={i18nKey("unarchiveChat")} />
-                                                {/snippet}
-                                            </MenuItem>
-                                        {:else}
-                                            <MenuItem onclick={archiveChat}>
-                                                {#snippet icon()}
-                                                    <ArchiveIcon
-                                                        size={$iconSize}
-                                                        color={"var(--icon-inverted-txt)"} />
-                                                {/snippet}
-                                                {#snippet text()}
-                                                    <Translatable
-                                                        resourceKey={i18nKey("archiveChat")} />
-                                                {/snippet}
-                                            </MenuItem>
-                                        {/if}
+                                    {#if chatSummary.membership.archived}
+                                        <MenuItem onclick={selectChat}>
+                                            {#snippet icon()}
+                                                <ArchiveOffIcon
+                                                    size={$iconSize}
+                                                    color={"var(--icon-inverted-txt)"} />
+                                            {/snippet}
+                                            {#snippet text()}
+                                                <Translatable
+                                                    resourceKey={i18nKey("unarchiveChat")} />
+                                            {/snippet}
+                                        </MenuItem>
+                                    {:else}
+                                        <MenuItem onclick={archiveChat}>
+                                            {#snippet icon()}
+                                                <ArchiveIcon
+                                                    size={$iconSize}
+                                                    color={"var(--icon-inverted-txt)"} />
+                                            {/snippet}
+                                            {#snippet text()}
+                                                <Translatable
+                                                    resourceKey={i18nKey("archiveChat")} />
+                                            {/snippet}
+                                        </MenuItem>
                                     {/if}
                                     {#if chatSummary.kind !== "direct_chat" && client.canLeaveGroup(chatSummary.id)}
                                         <MenuItem warning onclick={leaveGroup}>

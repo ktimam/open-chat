@@ -56,6 +56,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # android_native_version.sh compares this commit with earlier Android tags.
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v3
@@ -285,6 +288,18 @@ jobs:
         with:
           files: |
             frontend/openchat_${{ env.VERSION }}_full.apk
+
+      # Write the marker only after the verified APK is attached, so a client
+      # never sees a release marker for an APK it cannot download yet.
+      - name: Record Native Version
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$GITHUB_REF_NAME" --json body --jq .body \
+            | bash app/android_native_version.sh "$VERSION" > release_notes.md
+          gh release edit "$GITHUB_REF_NAME" --notes-file release_notes.md
 
       - name: Notify Release
         if: github.event_name == 'release'

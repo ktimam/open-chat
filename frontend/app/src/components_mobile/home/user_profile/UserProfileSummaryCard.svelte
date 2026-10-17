@@ -1,4 +1,5 @@
 <script lang="ts">
+    import type { IconComponent } from "@src/utils/iconComponent";
     import { disableChit } from "@src/stores/settings";
     import {
         Avatar,
@@ -30,7 +31,7 @@
     import Markdown from "@shared_components/Markdown.svelte";
     import Badges from "../profile/Badges.svelte";
     import ChitSummary from "./ChitSummary.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Progress from "../../Progress.svelte";
     import DiamondOutline from "svelte-material-icons/DiamondOutline.svelte";
     import Lifetime from "svelte-material-icons/DiamondStone.svelte";
@@ -56,7 +57,9 @@
     onMount(async () => {
         try {
             lastOnline = await client.getLastOnlineDate(user.userId, Date.now());
-        } catch (_) {}
+        } catch {
+            // last-online is optional; leave it unset
+        }
     });
 
     // TODO last seen
@@ -91,7 +94,7 @@
     }
 </script>
 
-{#snippet accountPill(Icon: any, text: string, colour: string, onClick?: () => void)}
+{#snippet accountPill(Icon: IconComponent, text: string, colour: string, onClick?: () => void)}
     <Container
         {onClick}
         width={"hug"}
@@ -258,7 +261,7 @@
         {/if}
 
         {#if me}
-            <!-- Account principal -->
+            <!-- User id -->
             <Row
                 onClick={onCopy}
                 backgroundColor={ColourVars.surface1}
@@ -267,7 +270,7 @@
                 crossAxisAlignment="center">
                 <Column gap="xs">
                     <Body colour="textSecondary" fontWeight="bold">
-                        <Translatable resourceKey={i18nKey("User & canister id")} />
+                        <Translatable resourceKey={i18nKey("userId")} />
                     </Body>
                     <Body>{user.userId}</Body>
                 </Column>

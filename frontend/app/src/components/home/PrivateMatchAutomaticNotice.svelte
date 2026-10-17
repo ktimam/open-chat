@@ -10,7 +10,7 @@
         unmuteAutoProposeInChat,
     } from "@utils/autoPropose";
     import Button from "../Button.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     interface Props {
         app: AiAppRegistration;

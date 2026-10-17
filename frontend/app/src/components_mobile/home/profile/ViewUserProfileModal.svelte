@@ -26,7 +26,7 @@
     import Cog from "svelte-material-icons/Cog.svelte";
     import { i18nKey } from "../../../i18n/i18n";
     import { toastStore } from "../../../stores/toast";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import UserProfileSummaryCard from "../user_profile/UserProfileSummaryCard.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -63,7 +63,7 @@
                     }
                 },
             });
-        } catch (e: any) {
+        } catch (e) {
             client.logError("Failed to load user profile", e);
             onClose();
         }

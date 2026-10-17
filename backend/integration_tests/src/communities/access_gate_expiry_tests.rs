@@ -41,6 +41,7 @@ fn diamond_members_remain_unlapsed_after_expiry(container_type: ContainerType) {
         env,
         canister_ids,
         controller,
+        ..
     } = wrapper.env();
 
     let gate_config = AccessGateConfig {
@@ -94,6 +95,7 @@ fn diamond_member_lapses_and_rejoins_successfully(container_type: ContainerType)
         env,
         canister_ids,
         controller,
+        ..
     } = wrapper.env();
 
     let gate_config = AccessGateConfig {
@@ -142,6 +144,7 @@ fn remove_gate_unlapses_members(container_type: ContainerType) {
         env,
         canister_ids,
         controller,
+        ..
     } = wrapper.env();
 
     let gate_config = AccessGateConfig {
@@ -207,6 +210,7 @@ fn extend_or_reduce_expiry_then_member_lapses_when_expected(container_type: Cont
         env,
         canister_ids,
         controller,
+        ..
     } = wrapper.env();
 
     let min_balance = 900_000_000;
@@ -286,6 +290,7 @@ fn member_lapses_from_token_balance_gate_and_rejoins_successfully(container_type
         env,
         canister_ids,
         controller,
+        ..
     } = wrapper.env();
 
     let min_balance = 900_000_000;
@@ -333,7 +338,7 @@ fn member_lapses_from_token_balance_gate_and_rejoins_successfully(container_type
         wait_for_user_to_lapse(env, user, &container);
 
         // Increase token balance
-        client::ledger::happy_path::transfer(env, *controller, canister_ids.icp_ledger, user.user_id, min_balance);
+        client::ledger::happy_path::transfer(env, *controller, canister_ids.icp_ledger, user, min_balance);
 
         // User2 rejoins channel
         join_container(env, &owner, user, canister_ids, &container, false);
@@ -347,7 +352,6 @@ fn member_lapses_from_token_balance_gate_and_rejoins_successfully(container_type
 // and the member has an approval standing under their spender subaccount (such as one made for a tip
 // which wasn't spent). They lapse instead, and pay when they join again.
 #[test_case(ContainerType::Community)]
-#[test_case(ContainerType::Channel)]
 #[test_case(ContainerType::Group)]
 fn member_is_not_charged_for_a_payment_gate_as_it_expires(container_type: ContainerType) {
     let mut wrapper = ENV.deref().get();
@@ -355,6 +359,7 @@ fn member_is_not_charged_for_a_payment_gate_as_it_expires(container_type: Contai
         env,
         canister_ids,
         controller,
+        ..
     } = wrapper.env();
 
     let min_balance = 900_000_000;
@@ -436,6 +441,7 @@ fn gate_changes_and_members_lapse_as_expected(container_type: ContainerType) {
         env,
         canister_ids,
         controller,
+        ..
     } = wrapper.env();
 
     let gate_config = AccessGateConfig {
@@ -544,6 +550,7 @@ fn invited_users_pass_composite_gate_then_expire_later(container_type: Container
         env,
         canister_ids,
         controller,
+        ..
     } = wrapper.env();
 
     // Create a composite gate
@@ -575,7 +582,7 @@ fn invited_users_pass_composite_gate_then_expire_later(container_type: Container
     let user2 = &users[1];
 
     // Transfer more funds to user1 so they will pass the expiring gate check
-    client::ledger::happy_path::transfer(env, *controller, canister_ids.icp_ledger, user1.user_id, 200_000_000);
+    client::ledger::happy_path::transfer(env, *controller, canister_ids.icp_ledger, user1, 200_000_000);
 
     // Move the time forward so that the gate expires
     env.advance_time(Duration::from_millis(2 * DAY_IN_MS));

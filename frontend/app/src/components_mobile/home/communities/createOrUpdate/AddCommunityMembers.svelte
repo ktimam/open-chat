@@ -6,11 +6,11 @@
     import Check from "svelte-material-icons/Check.svelte";
     import SelectUsers from "../../SelectUsers.svelte";
     import SlidingPageContent from "../../SlidingPageContent.svelte";
-    import { updateCommunityState } from "./community.svelte";
+    import { updateCommunityState } from "@shared_components/home/communities/createOrUpdate/community.svelte";
 
     const client = getContext<OpenChat>("client");
 
-    let ucs = updateCommunityState;
+    const ucs = updateCommunityState;
 
     function searchUsers(term: string): Promise<[UserSummary[], UserSummary[]]> {
         return client.searchUsersForInvite(term, 20, ucs.candidateCommunity.level, true, true);

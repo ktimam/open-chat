@@ -1,14 +1,14 @@
-// Messages holding transfers, and tips, sent to a Group or Community directly rather than via the
-// sender's User canister, which the chat canister makes the transfers for. The chat canister never pays from its own account on a member's behalf,
-// so these tests pull the sender's funds via ICRC-2, against an approval made under the sender's
-// own spender subaccount.
+// Messages holding transfers, and tips, sent to a Group or Community directly, which the chat
+// canister makes the transfers for. The chat canister never pays from its own account on a member's
+// behalf, so these tests pull the sender's funds via ICRC-2, against an approval made under the
+// sender's own spender subaccount.
 
 use crate::env::ENV;
 use crate::p2p_swap_tests::verify_swap_status;
 use crate::utils::{chat_token_info, icp_token_info, now_millis, now_nanos, tick_many};
 use crate::{CanisterIds, TestEnv, User, client};
 use candid::Principal;
-use constants::{DAY_IN_MS, ICP_LEDGER_CANISTER_ID, ICP_SYMBOL, ICP_TRANSFER_FEE, PRIZE_FEE_PERCENT};
+use constants::{CHAT_TRANSFER_FEE, DAY_IN_MS, ICP_LEDGER_CANISTER_ID, ICP_SYMBOL, ICP_TRANSFER_FEE, PRIZE_FEE_PERCENT};
 use icrc_ledger_types::icrc1::account::Account;
 use oc_error_codes::{OCError, OCErrorCode};
 use pocket_ic::PocketIc;
@@ -16,9 +16,9 @@ use std::ops::Deref;
 use test_case::test_case;
 use testing::rng::{random_from_u128, random_string};
 use types::{
-    CanisterId, ChannelId, ChatEvent, ChatId, CommunityId, CryptoContent, CryptoTransaction, EventIndex, Message,
-    MessageContent, MessageContentInitial, MessageId, P2PSwapContentInitial, P2PSwapStatus, PendingCryptoTransaction,
-    PrizeContentInitial, UnitResult, icrc1, icrc2,
+    CanisterId, ChannelId, ChatEvent, ChatId, CommunityId, CryptoContent, CryptoTransaction, EventIndex, GroupPermissionRole,
+    Message, MessageContent, MessageContentInitial, MessageId, OptionUpdate, OptionalGroupPermissions, P2PSwapContentInitial,
+    P2PSwapStatus, PendingCryptoTransaction, PrizeContentInitial, UnitResult, icrc1, icrc2,
 };
 
 const AMOUNT: u128 = 1_000_000;
@@ -57,7 +57,7 @@ fn send_crypto_directly_succeeds(in_channel: bool) {
     let event_index = chat.send_message_with_transfer(env, &user1, content).unwrap();
 
     assert_eq!(
-        client::ledger::happy_path::balance_of(env, canister_ids.icp_ledger, user2.user_id),
+        client::ledger::happy_path::balance_of(env, canister_ids.icp_ledger, &user2),
         AMOUNT
     );
 
@@ -152,7 +152,7 @@ fn tip_message_directly_succeeds(in_channel: bool) {
     ));
 
     assert_eq!(
-        client::ledger::happy_path::balance_of(env, canister_ids.icp_ledger, user2.user_id),
+        client::ledger::happy_path::balance_of(env, canister_ids.icp_ledger, &user2),
         AMOUNT
     );
     let message = chat.message(env, &user2, event_index);
@@ -160,6 +160,60 @@ fn tip_message_directly_succeeds(in_channel: bool) {
         *message.tips.first().unwrap(),
         (ICP_LEDGER_CANISTER_ID, vec![(user1.user_id, AMOUNT)])
     );
+}
+
+// Tipping has its own permission, so members can be stopped from tipping while still being able to react
+#[test_case(false; "group")]
+#[test_case(true; "channel")]
+fn tip_message_directly_rejected_if_not_permitted(in_channel: bool) {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let TestData { user1, user2, chat } = init_test_data(env, canister_ids, *controller, in_channel);
+
+    chat.update_permissions(
+        env,
+        &user1,
+        OptionalGroupPermissions {
+            tip_messages: Some(GroupPermissionRole::Admins),
+            ..Default::default()
+        },
+    );
+
+    let message_id = random_from_u128();
+    let event_index = chat.send_text_message(env, &user1, message_id);
+
+    approve_chat(
+        env,
+        canister_ids,
+        *controller,
+        &user2,
+        chat,
+        user2.principal,
+        AMOUNT + ICP_TRANSFER_FEE,
+    );
+
+    let transfer = icrc2_transfer(env, user2.principal, icrc1::Account::legacy_for_user(user1.user_id));
+    let response = chat.tip_message(env, &user2, message_id, transfer);
+    assert!(
+        matches!(&response, UnitResult::Error(error) if error.matches_code(OCErrorCode::InitiatorNotAuthorized)),
+        "{response:?}"
+    );
+    assert_eq!(
+        client::ledger::happy_path::balance_of(env, canister_ids.icp_ledger, user2.principal),
+        FUNDS - ICP_TRANSFER_FEE
+    );
+
+    chat.add_reaction(env, &user2, message_id);
+
+    let message = chat.message(env, &user1, event_index);
+    assert!(message.tips.is_empty());
+    assert_eq!(message.reactions.len(), 1);
 }
 
 #[test_case(false; "group")]
@@ -186,7 +240,9 @@ fn create_p2p_swap_directly_succeeds(in_channel: bool) {
         user1.principal,
         token0_amount + 2 * ICP_TRANSFER_FEE,
     );
-    client::ledger::happy_path::transfer(env, *controller, canister_ids.chat_ledger, user2.user_id, 11_000_000_000);
+    client::ledger::happy_path::transfer(env, *controller, canister_ids.chat_ledger, &user2, 11_000_000_000);
+    // user2's canister deposits their side of the swap from their wallet when they accept it
+    client::approve_user_canister(env, &user2, canister_ids.chat_ledger, token1_amount + 2 * CHAT_TRANSFER_FEE);
 
     let message_id = random_from_u128();
     let content = MessageContentInitial::P2PSwap(P2PSwapContentInitial {
@@ -208,13 +264,13 @@ fn create_p2p_swap_directly_succeeds(in_channel: bool) {
 
     tick_many(env, 10);
 
-    // The swap pays out to the offerer's wallet, which is their User canister's account
+    // The swap pays out to the offerer's wallet
     assert_eq!(
-        client::ledger::happy_path::balance_of(env, canister_ids.chat_ledger, user1.user_id),
+        client::ledger::happy_path::balance_of(env, canister_ids.chat_ledger, &user1),
         token1_amount
     );
     assert_eq!(
-        client::ledger::happy_path::balance_of(env, canister_ids.icp_ledger, user2.user_id),
+        client::ledger::happy_path::balance_of(env, canister_ids.icp_ledger, &user2),
         token0_amount
     );
 
@@ -601,6 +657,47 @@ impl DirectChat {
                     Some(message_id),
                 )
                 .event_index
+            }
+        }
+    }
+
+    fn update_permissions(&self, env: &mut PocketIc, sender: &User, permissions: OptionalGroupPermissions) {
+        match self {
+            DirectChat::Group(group_id) => client::group::happy_path::update_group(
+                env,
+                sender.principal,
+                *group_id,
+                &group_canister::update_group_v2::Args {
+                    permissions_v2: Some(permissions),
+                    ..Default::default()
+                },
+            ),
+            DirectChat::Channel(community_id, channel_id) => client::community::happy_path::update_channel(
+                env,
+                sender.principal,
+                *community_id,
+                &community_canister::update_channel::Args {
+                    channel_id: *channel_id,
+                    name: None,
+                    description: None,
+                    rules: None,
+                    avatar: OptionUpdate::NoChange,
+                    permissions_v2: Some(permissions),
+                    events_ttl: OptionUpdate::NoChange,
+                    gate_config: OptionUpdate::NoChange,
+                    public: None,
+                    messages_visible_to_non_members: None,
+                    external_url: OptionUpdate::NoChange,
+                },
+            ),
+        }
+    }
+
+    fn add_reaction(&self, env: &mut PocketIc, sender: &User, message_id: MessageId) {
+        match self {
+            DirectChat::Group(group_id) => client::group::happy_path::add_reaction(env, sender, *group_id, "👍", message_id),
+            DirectChat::Channel(community_id, channel_id) => {
+                client::community::happy_path::add_reaction(env, sender, *community_id, *channel_id, "👍", message_id)
             }
         }
     }

@@ -14,7 +14,10 @@ const backend = vi.hoisted(() => ({
     searchCommunityMembers: vi.fn(async () => ({ kind: "success", members: [] })),
     searchUsers: vi.fn(async () => []),
     approveAccessGatePayment: vi.fn(async () => ({ kind: "success" })),
-    userMigration: vi.fn(async () => ({ kind: "queued" })),
+    createMultiUserCanister: vi.fn(async () => ({
+        kind: "success",
+        canisterId: "synthetic-multi-user",
+    })),
     log: { debug: vi.fn(), error: vi.fn(), log: vi.fn(), warn: vi.fn() },
 }));
 
@@ -34,7 +37,7 @@ vi.mock("@agent", () => ({
         searchCommunityMembers = backend.searchCommunityMembers;
         searchUsers = backend.searchUsers;
         approveAccessGatePayment = backend.approveAccessGatePayment;
-        userMigration = backend.userMigration;
+        createMultiUserCanister = backend.createMultiUserCanister;
         dispose() {}
         addEventListener() {}
     },
@@ -106,7 +109,7 @@ describe("existing-account-only worker boundary", () => {
         backend.searchCommunityMembers.mockClear();
         backend.searchUsers.mockClear();
         backend.approveAccessGatePayment.mockClear();
-        backend.userMigration.mockClear();
+        backend.createMultiUserCanister.mockClear();
     });
 
     afterAll(() => {
@@ -173,7 +176,7 @@ describe("existing-account-only worker boundary", () => {
         expect(backend.editMessage).toHaveBeenCalledOnce();
     });
 
-    it("forwards merged member, paging, payment and migration requests without relaxing card denial", async () => {
+    it("forwards merged member, paging, payment and multi-user requests without relaxing card denial", async () => {
         await send({ kind: "init", clientOnlyApps: true });
         await send({ kind: "setAuthIdentity", identity: {} });
         const chatId = { kind: "group_chat", groupId: "synthetic-group" } as const;
@@ -181,12 +184,12 @@ describe("existing-account-only worker boundary", () => {
         const cases = [
             {
                 request: {
-                    kind: "userMigration",
-                    userId: "synthetic-migrating-user",
+                    kind: "createMultiUserCanister",
+                    localUserIndexCanisterId: "synthetic-local-index",
                 } satisfies WorkerRequest,
-                method: backend.userMigration,
-                arguments: ["synthetic-migrating-user"],
-                response: { kind: "queued" },
+                method: backend.createMultiUserCanister,
+                arguments: ["synthetic-local-index"],
+                response: { kind: "success", canisterId: "synthetic-multi-user" },
             },
             {
                 request: {

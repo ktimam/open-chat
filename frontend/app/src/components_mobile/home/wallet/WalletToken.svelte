@@ -15,8 +15,8 @@
     import HeartRemoveOutline from "svelte-material-icons/HeartRemoveOutline.svelte";
     import MenuRight from "svelte-material-icons/MenuRight.svelte";
     import Reload from "svelte-material-icons/Reload.svelte";
-    import Translatable from "../../Translatable.svelte";
-    import { TokenState, type ConversionToken } from "./walletState.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
+    import { TokenState, type ConversionToken } from "@shared_components/home/wallet/walletState.svelte";
 
     const client = getContext<OpenChat>("client");
 

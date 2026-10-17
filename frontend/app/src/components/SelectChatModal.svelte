@@ -38,7 +38,7 @@
     import HoverIcon from "./HoverIcon.svelte";
     import Search from "./Search.svelte";
     import SectionHeader from "./SectionHeader.svelte";
-    import Translatable from "./Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Badges from "./home/profile/Badges.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -149,7 +149,7 @@
         selectedChatId: ChatIdentifier | undefined,
         searchTerm: string,
     ): Promise<ShareTo> {
-        let targets: ShareTo = {
+        const targets: ShareTo = {
             directChats: [],
             groupChats: [],
             favourites: [],
@@ -179,7 +179,9 @@
                 favourites: chatMatchesSearch(favourites, searchTerm),
                 communities: communityMatchesSearch(communities, searchTerm),
             };
-        } catch (err) {}
+        } catch {
+            // a search that throws leaves the targets unfiltered
+        }
         return targets;
     }
 
@@ -204,7 +206,7 @@
 
     async function normaliseChatSummary(now: number, chatSummary: ChatSummary): Promise<ShareChat> {
         switch (chatSummary.kind) {
-            case "direct_chat":
+            case "direct_chat": {
                 const description = await buildDirectChatDescription(chatSummary, now);
                 const them = $allUsersStore.get(chatSummary.them.userId);
                 return {
@@ -220,6 +222,7 @@
                     lastUpdated: chatSummary.lastUpdated,
                     uniquePerson: them?.isUniquePerson ?? false,
                 };
+            }
 
             default:
                 return {
@@ -281,12 +284,14 @@
 
 <section>
     <SectionHeader border={false} gap>
-        <HoverIcon>
+        <span class="icon">
             <AccountMultiple size={$iconSize} color={"var(--icon-txt)"} />
-        </HoverIcon>
+        </span>
         <h4><Translatable resourceKey={i18nKey("sendTo")} /></h4>
-        <span role="button" tabindex="0" title={$_("close")} class="close" onclick={onClose}>
-            <HoverIcon>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <span class="close" onclick={onClose}>
+            <HoverIcon title={$_("close")}>
                 <Close size={$iconSize} color={"var(--icon-txt)"} />
             </HoverIcon>
         </span>
@@ -486,6 +491,11 @@
         @include mobile() {
             width: 100%;
         }
+    }
+
+    .icon {
+        display: flex;
+        padding: $sp3;
     }
 
     .no-chats {

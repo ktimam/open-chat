@@ -19,7 +19,7 @@ import {
     dismissLocalAutoProposeSuggestion,
 } from "./localAppChatState";
 import { currentUserStore, type EventWrapper, type Message, type OpenChat } from "@client";
-import { get } from "svelte/store";
+import { get } from "@client/utils/stores";
 import { autoProposeSuggestions as autoProposeEnabled } from "../stores/settings";
 import {
     autoProposeBusyI18nKey,
@@ -114,6 +114,8 @@ vi.mock("./aiActionRunner", () => ({
 // Suggestions need imported declaration state only; do not initialise the inference/delivery UI.
 vi.mock("./privateAppWorkspace", () => ({
     privateAppWorkspaceState: {
+        value: {},
+        dirty: false,
         subscribe: (run: (value: object) => void) => {
             run({});
             return () => {};

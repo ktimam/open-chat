@@ -6,11 +6,11 @@
     import Save from "svelte-material-icons/ContentSaveOutline.svelte";
     import SelectUsers from "../SelectUsers.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
-    import { updateGroupState } from "./group.svelte";
+    import { updateGroupState } from "@shared_components/home/createOrUpdateGroup/group.svelte";
 
     const client = getContext<OpenChat>("client");
 
-    let ugs = updateGroupState;
+    const ugs = updateGroupState;
 
     function searchUsers(term: string): Promise<[UserSummary[], UserSummary[]]> {
         return client.searchUsersForInvite(term, 20, ugs.candidateGroup.level, true, true);

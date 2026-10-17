@@ -14,7 +14,7 @@
     import Menu from "../Menu.svelte";
     import MenuIcon from "../MenuIcon.svelte";
     import MenuItem from "../MenuItem.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     interface Props {
         label: ResourceKey;
@@ -35,7 +35,7 @@
             : defaultText + ` (${defaultRoleText})`,
     );
 
-    let selecting = false;
+    const selecting = false;
     let menu: MenuIcon | undefined = $state();
 
     function select(r: ChatPermissionRole | undefined) {

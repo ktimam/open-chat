@@ -16,14 +16,14 @@
     import Plus from "svelte-material-icons/Plus.svelte";
     import Pound from "svelte-material-icons/Pound.svelte";
     import Edit from "svelte-material-icons/TextBoxEditOutline.svelte";
-    import Translatable from "../../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import SlidingPageContent from "../../SlidingPageContent.svelte";
-    import { updateCommunityState } from "./community.svelte";
+    import { updateCommunityState } from "@shared_components/home/communities/createOrUpdate/community.svelte";
     import EditChannel from "./EditChannel.svelte";
 
     const MAX_CHANNELS = 15;
 
-    let ucs = updateCommunityState;
+    const ucs = updateCommunityState;
 
     let editingChannelName = $state<string>();
     let originalChannelName = $state<string>();

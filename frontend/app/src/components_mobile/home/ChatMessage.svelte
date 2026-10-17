@@ -122,7 +122,7 @@
     import BotMessageContext from "../bots/BotMessageContext.svelte";
     import BotProfile, { type BotProfileProps } from "../bots/BotProfile.svelte";
     import Checkbox from "../Checkbox.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AiAppLinkSheet from "./AiAppLinkSheet.svelte";
     import AutoProposeChip from "./AutoProposeChip.svelte";
     import ChatMessageContent from "./ChatMessageContent.svelte";
@@ -165,6 +165,7 @@
         canDelete: boolean;
         canQuoteReply: boolean;
         canReact: boolean;
+        canTipMessages: boolean;
         publicGroup: boolean;
         canStartThread: boolean;
         senderTyping: boolean;
@@ -211,6 +212,7 @@
         canDelete,
         canQuoteReply,
         canReact,
+        canTipMessages,
         publicGroup,
         canStartThread,
         senderTyping,
@@ -235,9 +237,9 @@
     let msgBubbleElement: HTMLElement | undefined;
     let componentMounted = true;
 
-    let multiUserChat = chatType === "group_chat" || chatType === "channel";
+    const multiUserChat = chatType === "group_chat" || chatType === "channel";
     let showEmojiPicker = $state(false);
-    let debug = false;
+    const debug = false;
     let showRemindMe = $state(false);
     let showReport = $state(false);
     let tipping: string | undefined = $state(undefined);
@@ -264,7 +266,9 @@
                 if (observer !== undefined && msgElement !== undefined) {
                     try {
                         observer.observe(msgElement);
-                    } catch {}
+                    } catch {
+                        // the element may already be detached; nothing to observe
+                    }
                 }
             });
         }
@@ -851,7 +855,7 @@
             msg.content.kind === "restricted_content" ||
             collapsed,
     );
-    let canTip = $derived(!me && confirmed && !inert && !failed);
+    let canTip = $derived(canTipMessages && !me && confirmed && !inert && !failed);
     let inThread = $derived(threadRootMessage !== undefined);
     let scrollingId = $derived(
         inThread ? "scrollable-list-thread-messages" : "scrollable-list-chat-messages",

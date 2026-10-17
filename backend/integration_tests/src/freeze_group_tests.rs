@@ -1,12 +1,13 @@
 use crate::delete_user_tests::{MAX_RESIDUAL_CYCLES, cycles_refunded_metric, wait_for_refund_queue_to_empty};
 use crate::env::ENV;
-use crate::utils::{tick_many, wait_for_canister_to_be_deleted};
+use crate::utils::{tick_many, tick_until, wait_for_deleted_canister_to_be_uninstalled};
 use crate::{CanisterIds, TestEnv, User, client};
 use candid::Principal;
 use group_index_canister::freeze_group::SuspensionDetails;
 use oc_error_codes::OCErrorCode;
 use pocket_ic::PocketIc;
 use std::ops::Deref;
+use std::time::Duration;
 use testing::rng::{random_from_u128, random_string};
 use types::{CanisterId, ChatId, MessageContentInitial, TextContent};
 
@@ -122,6 +123,150 @@ fn frozen_group_rejects_updates_other_than_those_exempted() {
 
     // Once unfrozen, sending a message succeeds
     client::group::happy_path::send_text_message(env, &user2, group_id, None, "hello", None);
+}
+
+// A group frozen by a platform moderator still applies the changes other canisters send it to keep
+// it in step, such as its verification, which the GroupIndex passes on via its LocalUserIndex
+#[test]
+fn frozen_group_still_applies_changes_from_other_canisters() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let TestData {
+        user1,
+        user2,
+        group_id,
+        group_name,
+    } = init_test_data(env, canister_ids, *controller);
+
+    client::group_index::freeze_group(
+        env,
+        user1.principal,
+        canister_ids.group_index,
+        &group_index_canister::freeze_group::Args {
+            chat_id: group_id,
+            reason: None,
+            suspend_members: None,
+        },
+    );
+
+    client::group_index::happy_path::set_group_verification(env, *controller, canister_ids.group_index, group_id, group_name);
+
+    tick_until(env, |env| {
+        client::group::happy_path::summary(env, user2.principal, group_id).verified
+    });
+
+    let summary = client::group::happy_path::summary(env, user2.principal, group_id);
+    assert!(summary.frozen.is_some());
+}
+
+#[test]
+fn frozen_community_still_applies_changes_from_other_canisters() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let TestData { user1, user2, .. } = init_test_data(env, canister_ids, *controller);
+
+    let community_name = random_string();
+    let community_id =
+        client::user::happy_path::create_community(env, &user2, &community_name, true, vec!["general".to_string()]);
+
+    let response = client::group_index::freeze_community(
+        env,
+        user1.principal,
+        canister_ids.group_index,
+        &group_index_canister::freeze_community::Args {
+            community_id,
+            reason: None,
+            suspend_members: None,
+        },
+    );
+    assert!(
+        matches!(response, group_index_canister::freeze_community::Response::Success(_)),
+        "{response:?}"
+    );
+
+    client::group_index::happy_path::set_community_verification(
+        env,
+        *controller,
+        canister_ids.group_index,
+        community_id,
+        community_name,
+    );
+
+    tick_until(env, |env| {
+        client::community::happy_path::summary(env, user2.principal, community_id).verified
+    });
+
+    let summary = client::community::happy_path::summary(env, user2.principal, community_id);
+    assert!(summary.frozen.is_some());
+}
+
+// A group being imported into a community is frozen too, but rejects the changes other canisters
+// send it, since its state has already been exported and they would be lost. They are retried, and
+// applied once the import is abandoned by unfreezing the group.
+#[test]
+fn group_being_imported_into_a_community_rejects_changes_from_other_canisters() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let TestData {
+        user1,
+        user2,
+        group_id,
+        group_name,
+    } = init_test_data(env, canister_ids, *controller);
+
+    let community_id =
+        client::user::happy_path::create_community(env, &user2, &random_string(), true, vec!["general".to_string()]);
+
+    client::community::happy_path::import_group(env, user2.principal, community_id, group_id);
+
+    // Stopping the community leaves the import unfinished, so the group stays frozen for it
+    client::stop_canister(env, canister_ids.local_user_index(env, community_id), community_id.into());
+
+    client::group_index::happy_path::set_group_verification(env, *controller, canister_ids.group_index, group_id, group_name);
+
+    // Long enough for the LocalUserIndex's first attempt and, 5 minutes after it traps, its retry
+    for _ in 0..40 {
+        env.advance_time(Duration::from_secs(10));
+        env.tick();
+    }
+    let summary = client::group::happy_path::summary(env, user2.principal, group_id);
+    assert!(summary.frozen.is_some());
+    assert!(!summary.verified, "the group applied a change while being imported");
+
+    // Unfreezing the group abandons the import, after which the change is applied
+    client::group_index::unfreeze_group(
+        env,
+        user1.principal,
+        canister_ids.group_index,
+        &group_index_canister::unfreeze_group::Args { chat_id: group_id },
+    );
+
+    // The LocalUserIndex retries a trapped call after 5 minutes
+    env.advance_time(Duration::from_secs(5 * 60));
+    tick_until(env, |env| {
+        client::group::happy_path::summary(env, user2.principal, group_id).verified
+    });
+
+    // The community is left stopped with its import unfinished
+    wrapper.discard();
 }
 
 #[test]
@@ -336,14 +481,111 @@ fn delete_frozen_group() {
         "{delete_group_response:?}"
     );
 
-    wait_for_canister_to_be_deleted(env, canister_id);
+    wait_for_deleted_canister_to_be_uninstalled(env, canister_id);
 
     // A frozen group can't refund its own cycles as a group deleting itself does, so they were all
-    // still in its canister, which the LocalUserIndex refunded them from before deleting it
-    let refunded = cycles_refunded_metric(env, local_user_index) - refunded_before;
+    // still in its canister, which the LocalUserIndex then refunds them from. That waits out the
+    // IC's install_code rate limit on the group's canister, so time is advanced.
+    let mut refunded = 0;
+    for _ in 0..50 {
+        refunded = cycles_refunded_metric(env, local_user_index) - refunded_before;
+        if refunded > balance_before - MAX_RESIDUAL_CYCLES {
+            break;
+        }
+        env.advance_time(Duration::from_secs(60));
+        tick_many(env, 5);
+    }
     assert!(refunded > balance_before - MAX_RESIDUAL_CYCLES, "{refunded}");
 
-    // Waiting out the IC's install_code rate limit on the group's canister advanced time
+    // The canister is kept, uninstalled, rather than deleted along with what couldn't be refunded
+    tick_many(env, 5);
+    assert!(env.canister_exists(canister_id));
+    let canister_status = env.canister_status(canister_id, Some(local_user_index)).unwrap();
+    assert!(canister_status.module_hash.is_none());
+
+    wrapper.discard();
+}
+
+// The LocalUserIndex refunds a deleted frozen group's cycles by installing the refunder in its
+// canister. An upgrade part way through clears what it was doing, but the canister is still at the
+// front of the queue, so the refund is picked up again and completed.
+#[test]
+fn deleted_groups_refund_resumes_after_the_local_user_index_is_upgraded_mid_way() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let TestData { user1, group_id, .. } = init_test_data(env, canister_ids, *controller);
+    let canister_id = CanisterId::from(group_id);
+    let local_user_index = canister_ids.local_user_index(env, group_id);
+
+    client::group_index::freeze_group(
+        env,
+        user1.principal,
+        canister_ids.group_index,
+        &group_index_canister::freeze_group::Args {
+            chat_id: group_id,
+            reason: None,
+            suspend_members: None,
+        },
+    );
+
+    // So that the refunds counted below are only this group's
+    wait_for_refund_queue_to_empty(env, local_user_index);
+    let balance_before = env.cycle_balance(canister_id);
+    let refunded_before = cycles_refunded_metric(env, local_user_index);
+
+    let response = client::group_index::delete_frozen_group(
+        env,
+        user1.principal,
+        canister_ids.group_index,
+        &group_index_canister::delete_frozen_group::Args { chat_id: group_id },
+    );
+    assert!(
+        matches!(response, group_index_canister::delete_frozen_group::Response::Success),
+        "{response:?}"
+    );
+    wait_for_deleted_canister_to_be_uninstalled(env, canister_id);
+
+    // Wait until the refunder has been installed but not yet uninstalled. The IC's install_code rate
+    // limit on the group's canister makes the LocalUserIndex retry after a delay, so time is advanced.
+    let mut refunder_installed = false;
+    for _ in 0..500 {
+        env.advance_time(Duration::from_secs(10));
+        env.tick();
+        if env
+            .canister_status(canister_id, Some(local_user_index))
+            .unwrap()
+            .module_hash
+            .is_some()
+        {
+            refunder_installed = true;
+            break;
+        }
+    }
+    assert!(refunder_installed);
+
+    let wasm = crate::wasms::LOCAL_USER_INDEX.clone();
+    let args = candid::encode_one(local_user_index_canister::post_upgrade::Args {
+        wasm_version: wasm.version,
+    })
+    .unwrap();
+    client::stop_canister(env, canister_ids.user_index, local_user_index);
+    env.upgrade_canister(local_user_index, wasm.module.into(), args, Some(canister_ids.user_index))
+        .unwrap();
+    client::start_canister(env, canister_ids.user_index, local_user_index);
+
+    wait_for_refund_queue_to_empty(env, local_user_index);
+    let refunded = cycles_refunded_metric(env, local_user_index) - refunded_before;
+    assert!(refunded > balance_before - MAX_RESIDUAL_CYCLES, "{refunded}");
+    let canister_status = env.canister_status(canister_id, Some(local_user_index)).unwrap();
+    assert!(canister_status.module_hash.is_none());
+
+    // The LocalUserIndex was upgraded
     wrapper.discard();
 }
 

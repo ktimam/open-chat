@@ -1,7 +1,3 @@
-<script lang="ts" module>
-    export type SwapOutcome = "success" | "rateChanged" | "insufficientFunds" | "error";
-</script>
-
 <script lang="ts">
     import { i18nKey } from "@src/i18n/i18n";
     import {
@@ -13,122 +9,57 @@
         Subtitle,
         type SizeMode,
     } from "component-lib";
-    import type { OpenChat } from "@client";
-    import { Poller, publish } from "@client";
-    import { getContext, onMount } from "svelte";
+    import type { InterpolationValues, SwapFromWalletStep, SwapOutcome } from "@client";
+    import { formatTokens, publish } from "@client";
     import Check from "svelte-material-icons/Check.svelte";
     import Close from "svelte-material-icons/Close.svelte";
     import Robot from "svelte-material-icons/RobotOutline.svelte";
     import ErrorMessage from "../../ErrorMessage.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     interface Props {
-        swapId: bigint;
-        tokenIn: string;
-        tokenOut: string;
-        ledgerIn: string;
-        ledgerOut: string;
-        amountIn: string;
+        // The quote's values, which fill in the step labels
+        values: InterpolationValues;
         decimalsOut: number;
-        dex: string;
+        // The step the swap, which the user makes straight from their wallet, has reached, once it
+        // is past initialising. Its steps are reported as they start.
+        step: SwapFromWalletStep | undefined;
+        // How the swap went, once it has
+        outcome: Exclude<SwapOutcome, { kind: "cancelled" }> | undefined;
     }
 
-    let { swapId, tokenIn, tokenOut, ledgerIn, ledgerOut, amountIn, decimalsOut, dex }: Props =
-        $props();
-
-    ledgerOut;
+    let { values, decimalsOut, step, outcome }: Props = $props();
 
     const height: SizeMode = { size: "16rem" };
-    const client = getContext<OpenChat>("client");
-    const POLL_INTERVAL = 1000;
     const labelPrefix = "tokenSwap.progress.";
 
-    let amountOut = $state("");
-    let poller: Poller | undefined = undefined;
-    let outcome = $state<SwapOutcome>();
+    let amountOut = $derived(
+        outcome?.kind === "swapped"
+            ? formatTokens(outcome.amountOut, decimalsOut)
+            : step?.step === "withdraw"
+              ? formatTokens(step.amountOut, decimalsOut)
+              : "",
+    );
 
-    let labelValues = $derived({
-        tokenIn,
-        tokenOut,
-        amountIn,
-        amountOut,
-        dex,
-    });
-
-    let stages = $state<Stage["kind"][]>(["get", "deposit", "notify", "swap", "withdraw", "done"]);
+    let labelValues = $derived({ ...values, amountOut });
 
     type Stage =
-        | { kind: "get" }
-        | { kind: "deposit" }
-        | { kind: "notify" }
+        | { kind: "init" }
+        | { kind: "approve" }
         | { kind: "swap" }
         | { kind: "withdraw" }
-        | { kind: "refund" }
         | { kind: "done" };
 
-    let currentStage = $state<Stage["kind"]>("get");
+    const stages: Stage["kind"][] = ["init", "approve", "swap", "withdraw", "done"];
+
+    let currentStage = $derived<Stage["kind"]>(
+        outcome?.kind === "swapped" ? "done" : (step?.step ?? "init"),
+    );
     let currentStageIndex = $derived(stages.findIndex((s) => s === currentStage));
-    let error = $state(false);
-
-    onMount(() => {
-        poller = new Poller(querySwapProgress, POLL_INTERVAL, POLL_INTERVAL, true);
-        return () => poller?.stop();
-    });
-
-    function notifyFinished(o: "success" | "rateChanged" | "insufficientFunds" | "error") {
-        outcome = o;
-        poller?.stop();
-    }
-
-    async function querySwapProgress() {
-        let response = await client.tokenSwapStatus(swapId);
-
-        if (response.kind === "success") {
-            if (
-                response.amountSwapped?.kind === "ok" &&
-                response.amountSwapped?.value.kind === "ok"
-            ) {
-                amountOut = client.formatTokens(response.amountSwapped.value.value, decimalsOut);
-            }
-
-            if (response.withdrawnFromDex?.kind === "ok") {
-                const success =
-                    response.amountSwapped?.kind === "ok" &&
-                    response.amountSwapped.value.kind === "ok";
-
-                currentStage = "done";
-                notifyFinished(success ? "success" : "rateChanged");
-            } else if (response.amountSwapped?.kind === "ok") {
-                if (response.amountSwapped.value.kind === "ok") {
-                    currentStage = "withdraw";
-                } else {
-                    currentStage = "refund";
-                    stages = stages.filter((s) => (s === "withdraw" ? "refund" : s));
-                }
-            } else if (response.notifyDex?.kind == "ok") {
-                currentStage = "swap";
-            } else if (response.transfer?.kind == "ok") {
-                currentStage = "notify";
-            } else if (response.transfer?.kind == "error") {
-                error = true;
-                notifyFinished("insufficientFunds");
-            } else if (response.depositAccount?.kind == "ok") {
-                currentStage = "deposit";
-            } else if (response.depositAccount?.kind == "error") {
-                error = true;
-                notifyFinished("error");
-            }
-        }
-    }
+    let error = $derived(outcome !== undefined && outcome.kind !== "swapped");
 
     function percentFromIndex(idx: number) {
         return (idx / (stages.length - 1)) * 100;
-    }
-
-    function onFinished() {
-        client.refreshAccountBalance(ledgerIn);
-        client.refreshAccountBalance(ledgerOut);
-        closeModalStack();
     }
 
     function closeModalStack() {
@@ -145,16 +76,20 @@
         <Container
             supplementalClass={`permission_slider`}
             mainAxisAlignment={"start"}
-            padding={["zero", "sm"]}>
+            padding={["zero", "sm"]}
+        >
             <Container
                 width={"hug"}
                 {height}
                 direction={"vertical"}
                 overflow={"visible"}
-                padding={["md", "xxl", "md", "zero"]}>
+                padding={["md", "xxl", "md", "zero"]}
+            >
                 <div class="track">
-                    <div class="progress" style={`height: ${percentFromIndex(currentStageIndex)}%`}>
-                    </div>
+                    <div
+                        class="progress"
+                        style={`height: ${percentFromIndex(currentStageIndex)}%`}
+                    ></div>
                     {#each stages as _, i}
                         {@const active = i <= currentStageIndex}
                         {@const current = i === currentStageIndex}
@@ -165,8 +100,8 @@
                                 class:current
                                 class:inerror
                                 class="marker"
-                                class:end={i === 0 || i === stages.length - 1}>
-                            </div>
+                                class:end={i === 0 || i === stages.length - 1}
+                            ></div>
                         </div>
                     {/each}
                 </div>
@@ -176,7 +111,8 @@
                 {height}
                 direction={"vertical"}
                 padding={"zero"}
-                mainAxisAlignment={"spaceBetween"}>
+                mainAxisAlignment={"spaceBetween"}
+            >
                 {#each stages as stage, i}
                     {@const active = i <= currentStageIndex}
                     {@const current = i === currentStageIndex}
@@ -190,9 +126,11 @@
                                     : active
                                       ? "textPrimary"
                                       : "textSecondary"}
-                                width={"hug"}>
+                                width={"hug"}
+                            >
                                 <Translatable
-                                    resourceKey={i18nKey(`${labelPrefix}${stage}`, labelValues)} />
+                                    resourceKey={i18nKey(`${labelPrefix}${stage}`, labelValues)}
+                                />
                             </Body>
                             {#if inerror}
                                 <Close color={ColourVars.validationError} />
@@ -205,26 +143,21 @@
             </Container>
         </Container>
 
-        {#if outcome && outcome !== "success"}
+        {#if outcome !== undefined && outcome.kind !== "swapped"}
             <ErrorMessage>
-                {#if outcome === "error"}
-                    <Translatable resourceKey={i18nKey("Failed to get deposit account")} />
-                {:else if outcome === "insufficientFunds"}
-                    <Translatable resourceKey={i18nKey("Insufficient funds")} />
-                {:else if outcome === "rateChanged"}
-                    <Translatable resourceKey={i18nKey("Rate changed")} />
-                {/if}
+                <Translatable resourceKey={outcome.message} />
             </ErrorMessage>
         {/if}
 
         <Container mainAxisAlignment={"end"}>
             <Button
-                secondary={outcome !== undefined && outcome !== "success"}
-                onClick={outcome ? onFinished : undefined}
-                loading={outcome === undefined}>
+                secondary={error}
+                onClick={outcome ? closeModalStack : undefined}
+                loading={outcome === undefined}
+            >
                 {#if outcome === undefined}
                     <Translatable resourceKey={i18nKey("In progress")} />
-                {:else if outcome === "success"}
+                {:else if outcome.kind === "swapped"}
                     <Translatable resourceKey={i18nKey("Swap complete")} />
                 {:else}
                     <Translatable resourceKey={i18nKey("Unable to complete swap")} />

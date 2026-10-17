@@ -68,6 +68,9 @@ fn handle_event<F: FnOnce() -> TimestampMillis>(
             }
         }
         GroupOrCommunityEvent::EventStoreEvent(event) => state.data.event_store_client.push(event),
+        // No longer sent, but still read until every group and community is on a version which
+        // doesn't send it
+        GroupOrCommunityEvent::UserIdMigrationComplete(_) => {}
         GroupOrCommunityEvent::MessageClassifyRequest(request) => {
             if request.input.is_empty() {
                 // Nothing classifiable (eg. an edit removed the text): dequeue any stale queued

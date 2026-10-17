@@ -6,6 +6,46 @@ This migration does not modify backend sources, upstream backend/Candid workflow
 or deployment scripts. The separately approved current-client security route and
 ownership inventories below preserve historical inventories and advisory decisions.
 
+## October 17 upstream synchronization
+
+Fork `main` integrates the official repository's `master` at
+`11ed95078e3ae8ae76bf2bdc094dd57b47459622` (210 incoming commits since the
+previous common ancestor). The official default branch is named `master`, not
+`main`. The backend tree and root Cargo manifest remain byte-identical to that
+upstream commit; the identity baseline records those exact Git objects. No
+canister deployment or custom backend change is part of this synchronization.
+
+Merge adaptations preserve the fork's model/private-app/authentication paths
+alongside upstream's shared UI components, multi-user client, typed worker
+dispatch and Rust 1.99 toolchain. The DOM-free public `@client/reactiveStores`
+entry point prevents worker/pure modules from initializing browser client state;
+regressions check both that boundary and the original internal store resolution.
+The PR card controller/style hashes remain unchanged, normalizing only the
+relocated shared Spinner import. Model weights and prompts are not changed.
+
+Local verification includes the complete frontend suite (7,224 passed, one
+existing skip), UI/agent/client/shared/worker typechecks, non-mutating lint,
+optimized v1/v2 builds, emitted WebGPU asset verification and fresh-profile
+browser startup checks. Lint retains 55 warnings and the UI typecheck retains
+553 warnings. The build/profile/CI topology regression batch passes 271 tests.
+Native evidence includes 88 Android plugin host tests with complete plugin/SDK
+compilation, Windows native compile checks for both shipping inference profiles
+and the fork WebGPU/private-app profile, 105 combined inference/handoff library
+tests, and a real text-inference smoke test. These are local checks, not a new
+APK/device accuracy test or hosted CI run.
+
+Release acceptance is still separate. Previously deferred source-review
+fingerprints/counts and native-profile/persistence fixtures remain stale, and
+the new upstream lockfile/source composition needs its own inventory review.
+Those offline inventory checks still fail closed; their pins are not refreshed
+or waived by this merge. The pre-existing unfinished inventory edits are kept
+outside the merge. An extra structured-output probe with the tiny TinyStories
+fixture returned prose instead of JSON; that fixture is pinned for the passing
+text smoke only, and this probe is not model-accuracy evidence. Linux native
+compilation was not completed because local GTK development prerequisites were
+absent. No phone/emulator, vision/model-cycle, deployment or publication result
+is claimed here.
+
 ## October 6 runtime-status clarification
 
 The current [local-client checkpoint](unofficial-local-client.md#current-checkpoint--october-6-2026)
@@ -37,7 +77,7 @@ unchanged and is not replaced by frontend tests.
 ## Preserved requirements
 
 The frontend gate still installs the frozen dependency graph without implicit
-audits, runs non-mutating lint, both typechecks and the complete frontend test
+audits, runs non-mutating lint, all frontend package typechecks and the complete frontend test
 suite, builds the normal client and separate immutable-WebGPU candidate, verifies
 emitted bytes, and requires the pinned dfx/public-key prerequisite. Failure of
 either split job or change detection fails the final required gate. Policy tests

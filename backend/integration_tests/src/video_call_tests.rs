@@ -1,5 +1,5 @@
 use crate::env::{ENV, VIDEO_CALL_OPERATOR};
-use crate::utils::{now_millis, tick_many};
+use crate::utils::{now_millis, tick_many, verify_at_env_time};
 use crate::{TestEnv, User, client};
 use constants::HOUR_IN_MS;
 use pocket_ic::PocketIc;
@@ -181,7 +181,7 @@ fn start_direct_call(
         env,
         VIDEO_CALL_OPERATOR,
         callee.canister_id(),
-        &user_canister::start_video_call_v2::Args {
+        &multi_user_canister::start_video_call_v2::Args {
             user_id: callee,
             message_id: random_from_u128(),
             initiator: caller.user_id,
@@ -363,94 +363,6 @@ fn invariants_3_and_4_direct_call_reports_the_kind_it_was_started_as(audio_only:
     }
 }
 
-#[test_case(Some(true), true)]
-#[test_case(None, false)]
-fn invariants_3_and_4_group_call_reports_the_kind_it_was_started_as(audio_only: Option<bool>, expected: bool) {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv {
-        env,
-        canister_ids,
-        controller,
-        ..
-    } = wrapper.env();
-
-    let user1 = client::register_diamond_user(env, canister_ids, *controller);
-    let group = client::user::happy_path::create_group(env, &user1, random_string().as_str(), false, true);
-    let before_call = now_millis(env) - 1;
-
-    assert!(matches!(
-        start_group_call(env, &user1, group, VideoCallType::Default, audio_only),
-        UnitResult::Success
-    ));
-
-    let in_progress = client::group::happy_path::summary(env, user1.principal, group)
-        .video_call_in_progress
-        .unwrap();
-    assert_eq!(in_progress.audio_only, expected);
-    assert_eq!(in_progress.call_type, VideoCallType::Default);
-
-    let event = client::group::happy_path::events_by_index(env, &user1, group, vec![in_progress.event_index])
-        .events
-        .pop()
-        .unwrap()
-        .event;
-    assert_is_video_message(event, |v| v.audio_only == expected && v.call_type == VideoCallType::Default);
-
-    // after first load the website learns of a call from the updates answer, not the summary
-    let updates = client::group::happy_path::summary_updates(env, user1.principal, group, before_call).unwrap();
-    let OptionUpdate::SetToSome(in_progress) = updates.video_call_in_progress else {
-        panic!("expected the call in progress in the updates answer");
-    };
-    assert_eq!(in_progress.audio_only, expected);
-}
-
-#[test_case(Some(true), true)]
-#[test_case(None, false)]
-fn invariants_3_and_4_channel_call_reports_the_kind_it_was_started_as(audio_only: Option<bool>, expected: bool) {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv {
-        env,
-        canister_ids,
-        controller,
-        ..
-    } = wrapper.env();
-
-    let user1 = client::register_diamond_user(env, canister_ids, *controller);
-    let community =
-        client::user::happy_path::create_community(env, &user1, random_string().as_str(), true, vec![random_string()]);
-    let channel = client::community::happy_path::create_channel(env, user1.principal, community, false, random_string());
-
-    let response = client::community::start_video_call_v2(
-        env,
-        VIDEO_CALL_OPERATOR,
-        community.into(),
-        &community_canister::start_video_call_v2::Args {
-            channel_id: channel,
-            message_id: random_from_u128(),
-            initiator: user1.user_id,
-            initiator_username: user1.username(),
-            initiator_display_name: None,
-            max_duration: None,
-            call_type: VideoCallType::Default,
-            audio_only,
-        },
-    );
-    assert!(matches!(response, UnitResult::Success));
-
-    let in_progress = client::community::happy_path::channel_summary(env, &user1, community, channel)
-        .video_call_in_progress
-        .unwrap();
-    assert_eq!(in_progress.audio_only, expected);
-    assert_eq!(in_progress.call_type, VideoCallType::Default);
-
-    let event = client::community::happy_path::events_by_index(env, &user1, community, channel, vec![in_progress.event_index])
-        .events
-        .pop()
-        .unwrap()
-        .event;
-    assert_is_video_message(event, |v| v.audio_only == expected && v.call_type == VideoCallType::Default);
-}
-
 // #9455 invariant 9: only a broadcast can start in a public group or in a public channel of a
 // public community. An audio call is refused there exactly as a video call is.
 #[test_case(None)]
@@ -515,16 +427,13 @@ fn invariant_17_participant_token_names_the_caller_and_chat_under_its_own_claim_
         local_user_index: Option<CanisterId>,
     }
 
-    // A fresh env, since the clock is set to the current time below so that the tokens verify, and a
-    // pooled env's clock may have been moved past it
-    let mut wrapper = ENV.deref().create_new();
+    let mut wrapper = ENV.deref().get();
     let TestEnv {
         env,
         canister_ids,
         controller,
         ..
     } = wrapper.env();
-    env.set_time(std::time::SystemTime::now().into());
 
     let member = client::register_diamond_user(env, canister_ids, *controller);
     let outsider = client::register_user(env, canister_ids);
@@ -541,7 +450,7 @@ fn invariant_17_participant_token_names_the_caller_and_chat_under_its_own_claim_
     let token = client::local_user_index::happy_path::access_token(env, &member, local_user_index, &args);
     let public_key =
         ES256PublicKey::from_pem(&client::user_index::happy_path::public_key(env, canister_ids.user_index)).unwrap();
-    let claims: ParticipantTokenClaims = public_key.verify_token(&token, None).unwrap().custom;
+    let claims: ParticipantTokenClaims = public_key.verify_token(&token, Some(verify_at_env_time(env))).unwrap().custom;
     assert_eq!(claims.claim_type, CLAIM_TYPE_VIDEO_CALL_PARTICIPANT);
     assert_eq!(claims.user_id, member.user_id);
     assert_eq!(claims.chat_id, Chat::Group(group));
@@ -591,11 +500,11 @@ mod mixed_releases {
             message_index: 2.into(),
             max_duration: None,
         });
-        let decoded: user_canister::StartVideoCallArgs = msgpack::deserialize_then_unwrap(&old);
+        let decoded: multi_user_canister::StartVideoCallArgs = msgpack::deserialize_then_unwrap(&old);
         assert!(!decoded.audio_only);
 
         // the caller's canister is on the previous release: it records a video call and nothing fails
-        let new = msgpack::serialize_then_unwrap(user_canister::StartVideoCallArgs {
+        let new = msgpack::serialize_then_unwrap(multi_user_canister::StartVideoCallArgs {
             message_id: 1u64.into(),
             message_index: 2.into(),
             max_duration: None,

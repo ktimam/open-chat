@@ -4,7 +4,7 @@
     import { i18nKey, type UserOrUserGroup, type UserSummary } from "@client";
     import { type Snippet } from "svelte";
     import { _ } from "svelte-i18n";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import MentionPickerLogic from "./MentionPickerLogic.svelte";
     import User from "./User.svelte";
 
@@ -24,7 +24,7 @@
         subtext,
     }: Props = $props();
 
-    let searching = $state(false);
+    const searching = $state(false);
     let searchTerm = $state<string>();
 
     function selectReceiver(userOrGroup: UserOrUserGroup) {

@@ -31,8 +31,6 @@ const CHAT = { fee: 100_000n, decimals: 8, symbol: "CHAT", ledger: "2ouva-viaaa-
 
 const RECIPIENT = "rdmx6-jaaaa-aaaaa-aaadq-cai";
 
-const text: MessageContent = { kind: "text_content", text: "hello" };
-
 const transfer: PendingCryptocurrencyTransfer = {
     kind: "pending",
     ledger: LEDGER,
@@ -51,7 +49,7 @@ const prize: PrizeContentInitial = {
     lifetimeDiamondOnly: false,
     uniquePersonOnly: false,
     streakOnly: 0,
-    minChitEarned: 0,
+    minChitEarned: 5,
     endDate: 1_000n,
     caption: "a prize",
     transfer: { ...transfer, recipient: CANISTER },
@@ -129,7 +127,7 @@ function client(prototype: object, content?: MessageContent): any {
         message_index: 2,
         timestamp: 10n,
         expires_at: undefined,
-        transfer: content === undefined || content === text ? undefined : completed,
+        transfer: content === undefined ? undefined : completed,
     };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -229,7 +227,9 @@ describe.each([
                 kind: "prize_content",
                 prizesRemaining: 2,
                 token: "ICP",
+                ledger: LEDGER,
                 caption: "a prize",
+                minChitEarned: 5,
             },
         });
     });
@@ -248,13 +248,6 @@ describe.each([
                 token0TxnIn: 7n,
             },
         });
-    });
-
-    test("a message holding no transfer comes back as it was sent", async () => {
-        const [resp, message] = await send(text);
-
-        expect(resp).toMatchObject({ kind: "success", eventIndex: 3 });
-        expect(message).toMatchObject({ content: text });
     });
 });
 

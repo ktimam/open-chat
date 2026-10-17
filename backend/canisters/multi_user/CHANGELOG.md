@@ -8,7 +8,105 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Generate Solana deposit addresses through the ckSOL minter, and have it credit SOL sent to them as ckSOL ([#9984](https://github.com/open-chat-labs/open-chat/pull/9984))
+- Have SOL deposits minted to the canister, which forwards them to the user's wallet less a fee of 0.002 SOL for their first and 0.001 SOL after, and tells them via the OpenChat bot ([#9987](https://github.com/open-chat-labs/open-chat/pull/9987))
+- Hold the Alchemy API key set by a platform operator, for checking Solana balances ([#9995](https://github.com/open-chat-labs/open-chat/pull/9995))
+- Check a user's SOL deposit address through Alchemy before paying the ckSOL minter to check it ([#9996](https://github.com/open-chat-labs/open-chat/pull/9996))
+- Take the GroupIndex's group and community deleted events for every user in the canister in one call ([#10010](https://github.com/open-chat-labs/open-chat/pull/10010))
+
+### Changed
+
+- Look up the latest id of a P2P swap's offerer named by their old id in the LocalUserIndex ([#9970](https://github.com/open-chat-labs/open-chat/pull/9970))
+- Stop tracking the async work in progress, since nothing reads it any more ([#9972](https://github.com/open-chat-labs/open-chat/pull/9972))
+- Accept Bitcoin, Ethereum and Solana addresses in the address book, as well as ICRC-1 accounts and ICP account identifiers ([#10008](https://github.com/open-chat-labs/open-chat/pull/10008))
+
+### Removed
+
+- Remove the job which rewrote every direct chat into the new format ([#9968](https://github.com/open-chat-labs/open-chat/pull/9968))
+- Remove the code which read event data from the heap now that it has all moved into stable memory ([#9968](https://github.com/open-chat-labs/open-chat/pull/9968))
+- Remove the jobs which replaced users' old ids, and the mapping of old ids to new, now that every id held is the latest ([#9970](https://github.com/open-chat-labs/open-chat/pull/9970))
+
+## [[2.0.2143](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2143-multi_user)] - 2026-10-14
+
+### Changed
+
+- Replace the ids users had before being migrated with their latest ids in every event ([#9929](https://github.com/open-chat-labs/open-chat/pull/9929))
+- Move each user's chats, blocks and contacts off other users' old ids ([#9933](https://github.com/open-chat-labs/open-chat/pull/9933))
+- Replace the ids of mentioned users and of direct chats replied to with their latest ids ([#9939](https://github.com/open-chat-labs/open-chat/pull/9939))
+- Move everything else users hold outside their chats' events off old user ids ([#9942](https://github.com/open-chat-labs/open-chat/pull/9942))
+- Tell the LocalUserIndex when the jobs replacing migrated users' old ids have completed ([#9949](https://github.com/open-chat-labs/open-chat/pull/9949))
+- Show in the metrics whether the jobs replacing migrated users' old ids were last reported complete ([#9950](https://github.com/open-chat-labs/open-chat/pull/9950))
+- Resolve a User canister's id to the user's latest id when blocking, adding a contact or paying a user in another canister, and refuse one which can't be resolved ([#9953](https://github.com/open-chat-labs/open-chat/pull/9953))
+- Replace old user ids in the mentions in report notes and bot command text ([#9954](https://github.com/open-chat-labs/open-chat/pull/9954))
+- Rewrite every direct chat into the new format ([#9956](https://github.com/open-chat-labs/open-chat/pull/9956))
+
+### Removed
+
+- Remove importing users from User canisters ([#9919](https://github.com/open-chat-labs/open-chat/pull/9919))
+- Remove the `withdraw_btc` and `withdraw_via_one_sec` stubs ([#9921](https://github.com/open-chat-labs/open-chat/pull/9921))
+- Remove what was only needed while users were being migrated, including the `UserIdMigrated` event and reading the heap layouts kept for imported users ([#9922](https://github.com/open-chat-labs/open-chat/pull/9922))
+- Remove the endpoints the website only called for users outside MultiUser canisters: `swap_tokens`, `approve_transfer`, `withdraw_crypto_v2`, `token_swap_status` and `c2c_withdraw_from_icpswap` ([#9924](https://github.com/open-chat-labs/open-chat/pull/9924))
+- Stop reading chat events data held on the heap from before it was moved into stable memory ([#9955](https://github.com/open-chat-labs/open-chat/pull/9955))
+
+### Fixed
+
+- Fix saving an address under a name with multi-byte characters, and renaming one to a name already in use ([#9944](https://github.com/open-chat-labs/open-chat/pull/9944))
+
+## [[2.0.2136](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2136-multi_user)] - 2026-10-12
+
+### Changed
+
+- Pass on the new `tip_messages` permission when creating a group ([#9902](https://github.com/open-chat-labs/open-chat/pull/9902))
+
+### Removed
+
+- Remove the unused `c2c_notify_achievement` endpoint ([#9899](https://github.com/open-chat-labs/open-chat/pull/9899))
+
+## [[2.0.2128](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2128-multi_user)] - 2026-10-11
+
+### Added
+
+- Record the swaps users make straight from their own wallets, so that one left part way through can be finished off ([#9887](https://github.com/open-chat-labs/open-chat/pull/9887))
+
+### Changed
+
+- Check the user's PIN as they start a swap from their wallet ([#9891](https://github.com/open-chat-labs/open-chat/pull/9891))
+
+### Fixed
+
+- Drop events for users who have deleted their account or are bots, rather than retrying them forever ([#9886](https://github.com/open-chat-labs/open-chat/pull/9886))
+
+## [[2.0.2121](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2121-multi_user)] - 2026-10-08
+
+### Changed
+
+- Cancel the job to mark a P2P swap expired, and record the swap as ended, once it has ended ([#9832](https://github.com/open-chat-labs/open-chat/pull/9832))
+
+## [[2.0.2109](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2109-multi_user)] - 2026-10-07
+
+### Added
+
+- Let a user reset a forgotten PIN by signing in again ([#9815](https://github.com/open-chat-labs/open-chat/pull/9815))
+
+### Changed
+
+- Update the OpenChat bot message sent to users after their account is migrated ([#9814](https://github.com/open-chat-labs/open-chat/pull/9814))
+
+### Removed
+
+- Remove the one-off which moved every user's direct chats, groups and communities into stable memory, which has run in prod ([#9813](https://github.com/open-chat-labs/open-chat/pull/9813))
+
+### Fixed
+
+- Accept tips on a migrated user's direct messages sent before their migration ([#9816](https://github.com/open-chat-labs/open-chat/pull/9816))
+
+## [[2.0.2101](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2101-multi_user)] - 2026-10-06
+
+### Added
+
 - Send each migrated user an OpenChat bot message detailing their new wallet address ([#9763](https://github.com/open-chat-labs/open-chat/pull/9763))
+- Add `check_pin_number`, so a payment's PIN can be checked before the user approves it ([#9777](https://github.com/open-chat-labs/open-chat/pull/9777))
+- Schedule the timer jobs a migrated user's canister handed over during migration ([#9779](https://github.com/open-chat-labs/open-chat/pull/9779))
 
 ### Changed
 
@@ -16,6 +114,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Take a User canister missing a method as a sign its user may have been migrated, as the other canisters do ([#9743](https://github.com/open-chat-labs/open-chat/pull/9743))
 - Check the cycles balance as background jobs run, not only as updates are handled ([#9747](https://github.com/open-chat-labs/open-chat/pull/9747))
 - Ask for a top up once the cycles above the freezing threshold fall below 10T, or below twice the threshold ([#9748](https://github.com/open-chat-labs/open-chat/pull/9748))
+- Store each direct chat record in stable memory, keeping only a small entry per chat on the heap ([#9781](https://github.com/open-chat-labs/open-chat/pull/9781))
+- Store each group and community record in stable memory, keeping only a small entry for each on the heap ([#9795](https://github.com/open-chat-labs/open-chat/pull/9795))
+- Instantiate the msgpack (de)serializers of widely shared types once, in `types`, cutting the code by 364KB ([#9804](https://github.com/open-chat-labs/open-chat/pull/9804))
+- Limit how many reminders, saved crypto accounts, favourites, pins and manual wallet tokens a user can have ([#9805](https://github.com/open-chat-labs/open-chat/pull/9805))
+- Bump the rmp-serde fork to one which reads numbers before visiting them, cutting the code by 849KB ([#9808](https://github.com/open-chat-labs/open-chat/pull/9808))
 
 ## [[2.0.2091](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2091-multi_user)] - 2026-10-02
 

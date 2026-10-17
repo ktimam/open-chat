@@ -1,10 +1,8 @@
-use ic_ledger_types::AccountIdentifier;
-use icrc_ledger_types::icrc1::account::Account;
+use constants::MAX_SAVED_CRYPTO_ACCOUNTS;
+use multi_user_canister::NamedAccount;
 use oc_error_codes::OCErrorCode;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 use types::OCResult;
-use user_canister::NamedAccount;
 
 const MAX_NAME_LENGTH: usize = 25;
 
@@ -19,7 +17,10 @@ impl SavedCryptoAccounts {
     // name isn't already used for a different account
     pub fn save(&mut self, mut account: NamedAccount) -> OCResult {
         account.name = account.name.trim().to_string();
-        account.name.truncate(MAX_NAME_LENGTH);
+        // Truncated by characters, since truncating by bytes panics part way through a character
+        if let Some((index, _)) = account.name.char_indices().nth(MAX_NAME_LENGTH) {
+            account.name.truncate(index);
+        }
         account.account = account.account.trim().to_string();
 
         if !is_valid_account(&account.account) {
@@ -27,14 +28,19 @@ impl SavedCryptoAccounts {
         }
 
         let name_lowercase = account.name.to_lowercase();
-        for named_account in self.0.iter_mut() {
-            if named_account.account == account.account {
-                named_account.name = account.name;
-                return Ok(());
-            }
-            if named_account.name.to_lowercase() == name_lowercase {
-                return Err(OCErrorCode::NameTaken.into());
-            }
+        if self
+            .0
+            .iter()
+            .any(|named| named.account != account.account && named.name.to_lowercase() == name_lowercase)
+        {
+            return Err(OCErrorCode::NameTaken.into());
+        }
+        if let Some(named_account) = self.0.iter_mut().find(|named| named.account == account.account) {
+            named_account.name = account.name;
+            return Ok(());
+        }
+        if self.0.len() >= MAX_SAVED_CRYPTO_ACCOUNTS {
+            return Err(OCErrorCode::LimitReached.with_message(MAX_SAVED_CRYPTO_ACCOUNTS));
         }
         self.0.push(account);
         Ok(())
@@ -50,10 +56,10 @@ impl SavedCryptoAccounts {
     }
 }
 
-// Either an ICRC-1 textual account, which covers a bare principal as well as an account with a
-// subaccount such as another user's wallet, or an ICP ledger account identifier.
+// An address on any of the networks the user can send to from their wallet: an ICRC-1 account
+// (which covers a bare principal), an ICP account identifier, or a Bitcoin, EVM or Solana address
 fn is_valid_account(text: &str) -> bool {
-    Account::from_str(text).is_ok() || AccountIdentifier::from_hex(text).is_ok()
+    crypto_address::detect_network(text).is_some()
 }
 
 #[cfg(test)]
@@ -62,32 +68,45 @@ mod tests {
     use candid::Principal;
 
     #[test]
-    fn principal_is_valid() {
-        assert!(is_valid_account("2vxsx-fae"));
-    }
-
-    #[test]
-    fn icrc1_account_with_subaccount_is_valid() {
-        let mut subaccount = [0; 32];
-        subaccount[31] = 7;
-        let account = Account {
-            owner: Principal::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 1, 1]),
-            subaccount: Some(subaccount),
+    fn saved_accounts_are_limited() {
+        let mut accounts = SavedCryptoAccounts::default();
+        let account = |i: usize| NamedAccount {
+            name: format!("account{i}"),
+            account: Principal::from_slice(&(i as u32).to_be_bytes()).to_string(),
         };
-        assert!(account.subaccount.is_some());
-        assert!(is_valid_account(&account.to_string()));
+        for i in 0..MAX_SAVED_CRYPTO_ACCOUNTS {
+            accounts.save(account(i)).unwrap();
+        }
+        let error = accounts.save(account(MAX_SAVED_CRYPTO_ACCOUNTS)).unwrap_err();
+        assert!(error.matches_code(OCErrorCode::LimitReached), "{error:?}");
+        // Renaming an account which is already saved is still allowed
+        accounts
+            .save(NamedAccount {
+                name: "renamed".to_string(),
+                ..account(0)
+            })
+            .unwrap();
+        accounts.delete("renamed");
+        accounts.save(account(MAX_SAVED_CRYPTO_ACCOUNTS)).unwrap();
     }
 
     #[test]
-    fn account_identifier_is_valid() {
-        let account_identifier = AccountIdentifier::new(&Principal::anonymous(), &ic_ledger_types::DEFAULT_SUBACCOUNT);
-        assert!(is_valid_account(&account_identifier.to_hex()));
-    }
-
-    #[test]
-    fn garbage_is_invalid() {
-        assert!(!is_valid_account("not an account"));
-        assert!(!is_valid_account("2vxsx-fae.zz"));
+    fn an_address_on_any_network_can_be_saved() {
+        let mut accounts = SavedCryptoAccounts::default();
+        for (name, account) in [
+            ("icrc", "2vxsx-fae"),
+            ("btc", "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"),
+            ("eth", "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"),
+            ("sol", "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"),
+        ] {
+            accounts
+                .save(NamedAccount {
+                    name: name.to_string(),
+                    account: account.to_string(),
+                })
+                .unwrap();
+        }
+        assert_eq!(accounts.all().len(), 4);
     }
 
     #[test]
@@ -113,6 +132,36 @@ mod tests {
 
         accounts.delete("renamed");
         assert!(accounts.all().is_empty());
+    }
+
+    #[test]
+    fn names_are_truncated_by_characters() {
+        let mut accounts = SavedCryptoAccounts::default();
+        // 30 characters, each two bytes long
+        let name = "ж".repeat(30);
+        accounts
+            .save(NamedAccount {
+                name,
+                account: "2vxsx-fae".to_string(),
+            })
+            .unwrap();
+        assert_eq!(accounts.all()[0].name, "ж".repeat(MAX_NAME_LENGTH));
+    }
+
+    #[test]
+    fn renaming_to_a_later_accounts_name_is_refused() {
+        let mut accounts = SavedCryptoAccounts::default();
+        let named = |name: &str, account: &str| NamedAccount {
+            name: name.to_string(),
+            account: account.to_string(),
+        };
+        let other = Principal::from_slice(&[1]).to_string();
+        accounts.save(named("first", "2vxsx-fae")).unwrap();
+        accounts.save(named("second", &other)).unwrap();
+
+        let error = accounts.save(named("SECOND", "2vxsx-fae")).unwrap_err();
+        assert!(error.matches_code(OCErrorCode::NameTaken), "{error:?}");
+        assert_eq!(accounts.all(), [named("first", "2vxsx-fae"), named("second", &other)]);
     }
 
     #[test]

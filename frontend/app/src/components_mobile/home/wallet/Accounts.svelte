@@ -8,10 +8,10 @@
     } from "@client";
     import { getContext, onMount } from "svelte";
     import ErrorMessage from "../../ErrorMessage.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import RestrictedFeature from "../profile/RestrictedFeature.svelte";
     import WalletToken from "./WalletToken.svelte";
-    import type { ConversionToken } from "./walletState.svelte";
+    import type { ConversionToken } from "@shared_components/home/wallet/walletState.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -21,9 +21,9 @@
 
     let { selectedConversion = $bindable("usd") }: Props = $props();
 
-    let balanceError: string | undefined = $state();
+    const balanceError: string | undefined = $state();
     let actionMode: "none" | "swap" | "restricted" = $state("none");
-    let selectedLedger: string | undefined = $state(undefined);
+    const selectedLedger: string | undefined = $state(undefined);
 
     onMount(() => client.refreshSwappableTokens());
 

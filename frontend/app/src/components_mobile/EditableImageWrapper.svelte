@@ -5,7 +5,7 @@
     import Cropper from "svelte-easy-crop";
     import Crop from "svelte-material-icons/Crop.svelte";
     import { i18nKey } from "../i18n/i18n";
-    import Translatable from "./Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     type OnChoosePhoto = () => void;
 
@@ -59,7 +59,7 @@
             const target = e.currentTarget as HTMLInputElement;
             if (target.files) {
                 const image = target.files[0];
-                let reader = new FileReader();
+                const reader = new FileReader();
                 reader.readAsDataURL(image);
                 reader.onload = (e) => {
                     selectedImage = e?.target?.result as string;

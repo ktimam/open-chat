@@ -77,7 +77,7 @@ import type {
 } from "@shared";
 import {
     CanisterMethodNotFoundError,
-    DestinationInvalidError,
+    isCanisterGoneError,
     MAX_EVENTS,
     MAX_MESSAGES,
     MEMBERS_PAGE_SIZE,
@@ -148,7 +148,6 @@ import {
     CommunitySetAiAppEnabledResponse,
     CommunityEnabledAiAppsArgs,
     CommunityEnabledAiAppsResponse,
-    CommunityRegisterProposalVoteArgs,
     CommunityRegisterProposalVoteV2Args,
     CommunityRegisterWebhookArgs,
     CommunityRegisterWebhookResponse,
@@ -1282,7 +1281,7 @@ export class CommunityClient
             CommunityChannelSummaryArgs,
             CommunityChannelSummaryResponse,
         ).catch((err) => {
-            if (err instanceof DestinationInvalidError) {
+            if (isCanisterGoneError(err)) {
                 return { kind: "canister_not_found" };
             } else {
                 throw err;
@@ -1314,9 +1313,9 @@ export class CommunityClient
             CommunitySummaryArgs,
             TCommunitySummaryResponse,
         ).catch((err) => {
-            // The community canister has been deleted: a stale link or cached reference,
-            // not a defect. channelSummary maps the same rejection the same way.
-            if (err instanceof DestinationInvalidError) {
+            // The community has been deleted: a stale link or cached reference, not a defect.
+            // channelSummary maps the same rejection the same way.
+            if (isCanisterGoneError(err)) {
                 return { kind: "failure" } as CommunitySummaryResponse;
             }
             throw err;
@@ -1428,25 +1427,6 @@ export class CommunityClient
             (resp) => mapResult(resp, (value) => threadPreviewsSuccess(value, chatId)),
             CommunityThreadPreviewsArgs,
             CommunityThreadPreviewsResponse,
-        );
-    }
-
-    registerProposalVote(
-        chatId: ChannelIdentifier,
-        messageIdx: number,
-        adopt: boolean,
-    ): Promise<RegisterProposalVoteResponse> {
-        return this.update(
-            chatId.communityId,
-            "register_proposal_vote",
-            {
-                channel_id: toBigInt32(chatId.channelId),
-                adopt,
-                message_index: messageIdx,
-            },
-            unitResult,
-            CommunityRegisterProposalVoteArgs,
-            UnitResult,
         );
     }
 

@@ -4,7 +4,10 @@
         enhancedCryptoLookup as cryptoLookup,
         isDiamondStore,
         mobileWidth,
+        ONE_DAY,
+        P2P_SWAP_MAX_EXPIRY_DAYS,
         publish,
+        walletApprovalFee,
     } from "@client";
     import { getContext } from "svelte";
     import { _ } from "svelte-i18n";
@@ -18,7 +21,7 @@
     import ModalContent from "../ModalContent.svelte";
     import Overlay from "../Overlay.svelte";
     import TextArea from "../TextArea.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import BalanceWithRefresh from "./BalanceWithRefresh.svelte";
     import CryptoSelector from "./CryptoSelector.svelte";
     import DurationPicker from "./DurationPicker.svelte";
@@ -57,7 +60,12 @@
 
     let fromDetails = $derived($cryptoLookup.get(fromLedger)!);
     let toDetails = $derived($cryptoLookup.get(toLedger)!);
-    let totalFees = $derived(fromDetails.transferFee * BigInt(2));
+    // The offer is deposited in the escrow canister along with the fee for paying it out, so the
+    // deposit costs two fees
+    let depositFees = $derived(fromDetails.transferFee * BigInt(2));
+    // The wallet also pays for the approval it makes before the deposit is pulled from it
+    let approvalFee = $derived(walletApprovalFee(fromDetails.transferFee));
+    let totalFees = $derived(depositFees + approvalFee);
     let remainingBalance = $state(0n);
     $effect(() => {
         remainingBalance =
@@ -195,6 +203,7 @@
         message={i18nKey("p2pSwap.confirmSend", {
             amount: client.formatTokens(fromAmount + totalFees, fromDetails.decimals),
             token: fromDetails.symbol,
+            fees: approvalFee > 0n ? 3 : 2,
         })}
         action={send} />
 {/if}
@@ -263,8 +272,13 @@
                     </div>
                 </div>
                 <div class="duration">
-                    <Legend label={i18nKey("p2pSwap.expiryTime")} />
-                    <DurationPicker bind:valid={durationValid} bind:milliseconds={expiresIn} />
+                    <Legend
+                        label={i18nKey("p2pSwap.expiryTime")}
+                        rules={i18nKey("p2pSwap.maxExpiry", { days: P2P_SWAP_MAX_EXPIRY_DAYS })} />
+                    <DurationPicker
+                        maxMilliseconds={BigInt(P2P_SWAP_MAX_EXPIRY_DAYS * ONE_DAY)}
+                        bind:valid={durationValid}
+                        bind:milliseconds={expiresIn} />
                 </div>
                 <div class="message">
                     <Legend label={i18nKey("tokenTransfer.message")} />
@@ -288,7 +302,7 @@
                         wallet={sourceWallet}
                         ledger={fromLedger}
                         amount={fromAmount}
-                        fees={totalFees}
+                        fees={depositFees}
                         chatId={messageContext.chatId} />
                 {/if}
             </form>

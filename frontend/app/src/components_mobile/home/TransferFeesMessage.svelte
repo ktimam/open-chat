@@ -3,7 +3,7 @@
     import { i18nKey, OpenChat } from "@client";
     import { getContext } from "svelte";
     import Info from "svelte-material-icons/InformationOutline.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -12,9 +12,16 @@
         tokenDecimals: number;
         transferFees: bigint;
         networkFee?: bigint;
+        networkFeeIsEstimate?: boolean;
     }
 
-    let { transferFees, tokenDecimals, symbol, networkFee }: Props = $props();
+    let {
+        transferFees,
+        tokenDecimals,
+        symbol,
+        networkFee,
+        networkFeeIsEstimate = true,
+    }: Props = $props();
 </script>
 
 <Container crossAxisAlignment="center" gap="sm">
@@ -31,7 +38,7 @@
             <BodySmall colour={"validationWarning"}>
                 <Translatable
                     resourceKey={i18nKey("cryptoAccount.networkFee", {
-                        amount: `~${client.formatTokens(networkFee, tokenDecimals)}`,
+                        amount: `${networkFeeIsEstimate ? "~" : ""}${client.formatTokens(networkFee, tokenDecimals)}`,
                         token: symbol,
                     })} />
             </BodySmall>

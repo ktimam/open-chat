@@ -1,16 +1,6 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <script lang="ts">
-    import { trackedEffect } from "@src/utils/effects.svelte";
-    import {
-        Avatar,
-        Body,
-        BodySmall,
-        ColourVars,
-        Column,
-        Row,
-        Search,
-        Subtitle,
-    } from "component-lib";
+    import type { IconComponent } from "@src/utils/iconComponent";
     import type {
         ChatIdentifier,
         ChatSummary,
@@ -30,6 +20,17 @@
         serverDirectChatsStore,
         serverGroupChatsStore,
     } from "@client";
+    import { trackedEffect } from "@src/utils/effects.svelte";
+    import {
+        Avatar,
+        Body,
+        BodySmall,
+        ColourVars,
+        Column,
+        Row,
+        Search,
+        Subtitle,
+    } from "component-lib";
     import { getContext } from "svelte";
     import { _ } from "svelte-i18n";
     import ForumOutline from "svelte-material-icons/ForumOutline.svelte";
@@ -42,7 +43,7 @@
     import NothingToSee from "./home/NothingToSee.svelte";
     import Badges from "./home/profile/Badges.svelte";
     import SlidingPageContent from "./home/SlidingPageContent.svelte";
-    import Translatable from "./Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -148,7 +149,7 @@
         selectedChatId: ChatIdentifier | undefined,
         searchTerm: string,
     ): Promise<ShareTo> {
-        let targets: ShareTo = {
+        const targets: ShareTo = {
             directChats: [],
             groupChats: [],
             favourites: [],
@@ -178,7 +179,9 @@
                 favourites: chatMatchesSearch(favourites, searchTerm),
                 communities: communityMatchesSearch(communities, searchTerm),
             };
-        } catch (err) {}
+        } catch {
+            // a search that throws leaves the targets unfiltered
+        }
         return targets;
     }
 
@@ -203,7 +206,7 @@
 
     async function normaliseChatSummary(now: number, chatSummary: ChatSummary): Promise<ShareChat> {
         switch (chatSummary.kind) {
-            case "direct_chat":
+            case "direct_chat": {
                 const description = await buildDirectChatDescription(chatSummary, now);
                 const them = $allUsersStore.get(chatSummary.them.userId);
                 return {
@@ -219,6 +222,7 @@
                     lastUpdated: chatSummary.lastUpdated,
                     uniquePerson: them?.isUniquePerson ?? false,
                 };
+            }
 
             default:
                 return {
@@ -278,7 +282,7 @@
     }
 </script>
 
-{#snippet generalHeader(Icon: any, title: string)}
+{#snippet generalHeader(Icon: IconComponent, title: string)}
     <Row padding={["sm", "zero"]} gap={"md"} crossAxisAlignment={"center"}>
         <Icon size={"1.5rem"} color={ColourVars.textPrimary} />
         <Subtitle fontWeight={"bold"}>
@@ -316,7 +320,7 @@
             title={interpolate($_, i18nKey("noChatsAvailable"))}
             subtitle={"Looks like you aren't a member of any other chats"} />
     {:else if targets !== undefined}
-        <Column>
+        <Column height={"fill"}>
             {#if targets.directChats.length > 0}
                 <CollapsibleCard
                     open={searchTerm !== ""}

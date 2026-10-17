@@ -7,7 +7,6 @@ use ic_stable_structures::DefaultMemoryImpl;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use std::collections::HashSet;
 use types::{ChannelId, Chat, EventIndex, MessageId, MessageIndex, MultiUserChat, Reaction, TimestampMillis};
-use utils::migrated_user_ids::MigratedUserIds;
 
 #[bench(raw)]
 fn push_simple_text_messages() -> BenchResult {
@@ -102,7 +101,7 @@ fn add_reactions() -> BenchResult {
 
     bench_fn(|| {
         for args in args_vec {
-            let _ = chat_events.add_reaction::<NullEventPusher>(args, &MigratedUserIds::default(), None);
+            let _ = chat_events.add_reaction::<NullEventPusher>(args, None);
         }
     })
 }
@@ -124,7 +123,7 @@ fn import_events() -> BenchResult {
         let Some((last, _)) = batch.last() else {
             break;
         };
-        after = Some(last.clone());
+        after = Some(*last);
         batches.push(batch);
     }
 
@@ -137,20 +136,20 @@ fn import_events() -> BenchResult {
     })
 }
 
-// Moves the metrics of 1000 users into stable memory under a channel's prefix, as happens after a
-// group is imported into a community
+// Writes the metrics of 1000 users and the message event indexes of their messages under a channel's
+// prefixes, as a community does when it finalizes importing a group
 #[bench(raw)]
-fn migrate_imported_user_metrics() -> BenchResult {
+fn import_from_group() -> BenchResult {
     let memory = MemoryManager::init(DefaultMemoryImpl::default());
     stable_memory_map::init_with_small_entries_map(memory.get(MemoryId::new(1)), memory.get(MemoryId::new(2)));
 
     let start = 1700000000000;
     let mut chat_events = group_chat_with_messages(1000, start);
-    chat_events.copy_to_heap_for_export();
+    let export = chat_events.export_for_import_into_community();
     chat_events.set_chat(Chat::Channel(canister_id_from_u64(3).into(), ChannelId::from(1u32)));
 
     bench_fn(|| {
-        chat_events.migrate_to_stable_memory(usize::MAX);
+        chat_events.import_from_group(export);
     })
 }
 

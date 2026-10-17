@@ -44,13 +44,13 @@ pub(crate) fn schedule(refresh: bool, delay: Duration) {
     if let Some(timer_id) = TIMER_ID.take() {
         ic_cdk_timers::clear_timer(timer_id);
     }
-    let timer_id = ic_cdk_timers::set_timer(delay, async move { run(refresh) });
+    let timer_id = ic_cdk_timers::set_timer(delay, run(refresh));
     TIMER_ID.set(Some(timer_id));
 }
 
-fn run(refresh: bool) {
+async fn run(refresh: bool) {
     TIMER_ID.set(None);
-    utils::async_work::spawn_tracked(push(refresh));
+    push(refresh).await;
 }
 
 fn retry_delay(attempt: u32) -> Duration {
@@ -232,14 +232,5 @@ mod tests {
         assert!(settled(&failed(C2CRetryPolicy::DoNotRetry)));
         assert!(!settled(&failed(C2CRetryPolicy::RetryImmediately)));
         assert!(!settled(&failed(C2CRetryPolicy::RetryAfterDelay)));
-    }
-
-    #[test]
-    fn retry_delay_doubles_to_a_ceiling() {
-        assert_eq!(retry_delay(1), Duration::from_secs(120));
-        assert_eq!(retry_delay(2), Duration::from_secs(240));
-        assert_eq!(retry_delay(3), Duration::from_secs(480));
-        assert_eq!(retry_delay(4), MAX_RETRY_DELAY);
-        assert_eq!(retry_delay(MAX_ATTEMPTS), MAX_RETRY_DELAY);
     }
 }

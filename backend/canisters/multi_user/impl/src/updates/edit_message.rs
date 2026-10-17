@@ -4,10 +4,10 @@ use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use chat_events::EditMessageArgs;
 use constants::OPENCHAT_BOT_USER_ID;
+use multi_user_canister::edit_message_v2::*;
+use multi_user_canister::{EditMessageArgs as C2CEditMessageArgs, UserCanisterEvent};
 use oc_error_codes::OCErrorCode;
 use types::{Achievement, EventIndex, OCResult};
-use user_canister::edit_message_v2::*;
-use user_canister::{EditMessageArgs as C2CEditMessageArgs, UserCanisterEvent};
 
 #[update(guard = "caller_is_hosted_user", msgpack = true)]
 #[trace]
@@ -34,11 +34,11 @@ fn edit_message_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         .with_user_mut(my_index, |user| {
             user.verify_not_suspended()?;
 
-            if user.blocked_users.contains(&args.user_id) {
+            if user.has_blocked(args.user_id) {
                 return Err(OCErrorCode::TargetUserBlocked.into());
             }
 
-            let chat = user.direct_chats.get_mut_or_err(&args.user_id.into())?;
+            let mut chat = user.direct_chats.get_mut_or_err(&args.user_id.into())?;
 
             chat.edit_message(
                 EditMessageArgs {
@@ -52,7 +52,6 @@ fn edit_message_impl(args: Args, state: &mut RuntimeState) -> OCResult {
                     finalise_bot_message: false,
                     now,
                 },
-                &state.data.migrated_user_ids,
                 Some(event_pusher),
             )?;
             chat.thread_root_message_id(args.thread_root_message_index)
@@ -73,7 +72,7 @@ fn edit_message_impl(args: Args, state: &mut RuntimeState) -> OCResult {
         })),
     );
 
-    // As in the User canister, which doesn't award it for the chat with the OpenChat bot
+    // Not awarded for the chat with the OpenChat bot
     if args.user_id != OPENCHAT_BOT_USER_ID {
         state.award_achievement_and_notify(my_index, Achievement::EditedMessage, now);
     }

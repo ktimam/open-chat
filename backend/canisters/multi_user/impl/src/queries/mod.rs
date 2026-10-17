@@ -21,8 +21,8 @@ mod messages_by_message_index;
 mod public_profile;
 mod saved_crypto_accounts;
 mod search_messages;
-mod token_swap_status;
 mod token_swaps;
+mod unfinished_token_swaps;
 mod updates;
 
 fn check_replica_up_to_date(latest_known_update: Option<TimestampMillis>, state: &RuntimeState) -> OCResult {

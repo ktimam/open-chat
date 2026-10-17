@@ -1,6 +1,6 @@
 use crate::activity_notifications::handle_activity_notification;
 use crate::jobs::import_groups::{finalize_group_import, mark_import_complete, process_channel_members};
-use crate::updates::c2c_join_channel::join_channel_unchecked;
+use crate::updates::c2c_join_channel::join_channel_unchecked_many;
 use crate::updates::end_video_call::end_video_call_impl;
 use crate::{RuntimeState, can_borrow_state, flush_pending_events, mutate_state, read_state, run_regular_jobs};
 use candid::Principal;
@@ -9,6 +9,7 @@ use chat_events::{ChatEvents, EndPollResult, MessageContentInternal};
 use constants::{DAY_IN_MS, MINUTE_IN_MS, NANOS_PER_MILLISECOND, SECOND_IN_MS};
 use event_store_types::TimestampMillis;
 use group_chat_core::AddResult;
+use group_community_common::PendingPayment;
 use ledger_utils::process_transaction;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
@@ -32,6 +33,7 @@ pub enum TimerJob {
     MarkP2PSwapExpired(MarkP2PSwapExpiredJob),
     MarkVideoCallEnded(MarkVideoCallEndedJob),
     JoinMembersToPublicChannel(JoinMembersToPublicChannelJob),
+    RetryPayment(Box<RetryPaymentJob>),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -103,7 +105,7 @@ pub struct MakeTransferJob {
 pub struct NotifyEscrowCanisterOfDepositJob {
     // The owner of the depositor's wallet, by which the escrow canister knows them. Jobs queued
     // before this was recorded hold the depositor's user id, which is the same principal since
-    // those depositors were all alone in their canisters.
+    // those depositors were then all in their own User canisters.
     #[serde(alias = "user_id")]
     pub principal: Principal,
     pub swap_id: u32,
@@ -192,6 +194,14 @@ pub struct JoinMembersToPublicChannelJob {
     pub members: Vec<UserId>,
 }
 
+// Retries a payment, after a failed attempt to call into its ledger
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RetryPaymentJob {
+    pub payment: PendingPayment,
+    // The number of attempts at the payment which have failed to call into its ledger so far
+    pub failures: u32,
+}
+
 impl Job for TimerJob {
     fn execute(self) {
         let can_borrow_state = can_borrow_state();
@@ -216,6 +226,7 @@ impl Job for TimerJob {
             TimerJob::MarkP2PSwapExpired(job) => job.execute(),
             TimerJob::MarkVideoCallEnded(job) => job.execute(),
             TimerJob::JoinMembersToPublicChannel(job) => job.execute(),
+            TimerJob::RetryPayment(job) => job.execute(),
         }
 
         if can_borrow_state {
@@ -291,7 +302,7 @@ impl Job for HardDeleteMessageContentJob {
 
 impl Job for DeleteFileReferencesJob {
     fn execute(self) {
-        utils::async_work::spawn_tracked(async move {
+        ic_cdk::futures::spawn_migratory(async move {
             let to_retry = storage_bucket_client::delete_files(self.files.clone()).await;
 
             if !to_retry.is_empty() {
@@ -346,7 +357,7 @@ impl Job for FinalizeGroupImportJob {
 
 impl Job for ProcessGroupImportChannelMembersJob {
     fn execute(self) {
-        utils::async_work::spawn_tracked(process_channel_members(self));
+        ic_cdk::futures::spawn_migratory(process_channel_members(self));
     }
 }
 
@@ -380,7 +391,7 @@ impl Job for FinalPrizePaymentsJob {
 impl Job for MakeTransferJob {
     fn execute(self) {
         let pending = self.pending_transaction;
-        utils::async_work::spawn_tracked(make_transfer(pending, self.attempt));
+        ic_cdk::futures::spawn_migratory(make_transfer(pending, self.attempt));
 
         async fn make_transfer(mut pending_transaction: PendingCryptoTransaction, attempt: u32) {
             if let Err(error) = process_transaction(pending_transaction.clone(), None, true).await {
@@ -410,7 +421,7 @@ impl Job for NotifyEscrowCanisterOfDepositJob {
     fn execute(self) {
         let escrow_canister_id = read_state(|state| state.data.escrow_canister_id);
 
-        utils::async_work::spawn_tracked(async move {
+        ic_cdk::futures::spawn_migratory(async move {
             match escrow_canister_c2c_client::notify_deposit(
                 escrow_canister_id,
                 &escrow_canister::notify_deposit::Args {
@@ -473,7 +484,7 @@ impl Job for NotifyEscrowCanisterOfSwapFundedJob {
     fn execute(self) {
         let escrow_canister_id = read_state(|state| state.data.escrow_canister_id);
 
-        utils::async_work::spawn_tracked(async move {
+        ic_cdk::futures::spawn_migratory(async move {
             match escrow_canister_c2c_client::notify_deposit(
                 escrow_canister_id,
                 &escrow_canister::notify_deposit::Args {
@@ -511,7 +522,7 @@ impl Job for CancelP2PSwapInEscrowCanisterJob {
     fn execute(self) {
         let escrow_canister_id = read_state(|state| state.data.escrow_canister_id);
 
-        utils::async_work::spawn_tracked(async move {
+        ic_cdk::futures::spawn_migratory(async move {
             match escrow_canister_c2c_client::cancel_swap(
                 escrow_canister_id,
                 &escrow_canister::cancel_swap::Args { swap_id: self.swap_id },
@@ -579,22 +590,22 @@ impl JoinMembersToPublicChannelJob {
             }
 
             let mut users_added = Vec::new();
-            let mut processed = 0u32;
             let now = state.env.now();
-            while let Some(user_id) = self.members.pop() {
-                // A member queued under an id the community has since been told they've been migrated from
-                let user_id = state.data.migrated_user_ids.latest(user_id);
-                if let Some(member) = state.data.members.get_by_user_id(&user_id) {
-                    match join_channel_unchecked(
-                        user_id,
-                        member.user_type,
-                        channel,
-                        &mut state.data.members,
-                        state.data.is_public.value,
-                        false,
-                        false,
-                        now,
-                    ) {
+            // The members are joined 100 at a time, those added in each batch being written to stable
+            // memory together. Every member counts towards a batch, whether added or not, since each
+            // costs a read from stable memory.
+            while !self.members.is_empty() {
+                let mut users = Vec::new();
+                for user_id in self.members.drain(self.members.len().saturating_sub(100)..).rev() {
+                    if let Some(member) = state.data.members.get_by_user_id(&user_id) {
+                        users.push((user_id, member.user_type));
+                    }
+                }
+
+                for (user_id, result) in
+                    join_channel_unchecked_many(users, channel, &mut state.data.members, state.data.is_public.value, now)
+                {
+                    match result {
                         AddResult::Success(_) => users_added.push(user_id),
                         AddResult::MemberLimitReached(_) => {
                             // The channel is full, so none of the remaining members can be added
@@ -605,10 +616,7 @@ impl JoinMembersToPublicChannelJob {
                     }
                 }
 
-                // Every member counts towards the check, whether added or not, since each costs a
-                // read from stable memory
-                processed += 1;
-                if processed.is_multiple_of(100) && ic_cdk::api::instruction_counter() > 2_000_000_000 {
+                if ic_cdk::api::instruction_counter() > 2_000_000_000 {
                     break;
                 }
             }
@@ -628,5 +636,11 @@ impl JoinMembersToPublicChannelJob {
                     .enqueue_job(TimerJob::JoinMembersToPublicChannel(self), now, now);
             }
         }
+    }
+}
+
+impl Job for RetryPaymentJob {
+    fn execute(self) {
+        crate::jobs::make_pending_payments::retry(self.payment, self.failures);
     }
 }

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { flushSync, mount, tick, unmount } from "svelte";
 import { compile, preprocess } from "svelte/compiler";
-import { writable, type Writable } from "svelte/store";
+import { writable, type Writable } from "@client/utils/stores";
 import sveltePreprocess from "svelte-preprocess";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Harness from "./ActionCardLayout.spec.shell.svelte";
@@ -154,8 +154,12 @@ describe("published PR stylesheet and controller parity", () => {
     it("extracts the original SCSS verbatim, keeping the original controller and markup unchanged", () => {
         // Published PR2 0bf6a357ec45fec3bdeb958c7f224e8780e0d9bf: only the style
         // block is replaced by the shared mixin. The repository formatter leaves
-        // this original controller/template byte-identical (apart from checkout EOLs).
-        const original = source("../components/home/ActionCardContent.svelte");
+        // this original controller/template byte-identical (apart from checkout EOLs
+        // and upstream's relocation of the same Spinner component).
+        const original = source("../components/home/ActionCardContent.svelte").replace(
+            'from "@shared_components/icons/Spinner.svelte"',
+            'from "../icons/Spinner.svelte"',
+        );
         expect(sha(original.slice(0, original.indexOf("</script>") + "</script>".length))).toBe(
             "59dddfe82a7608a935051198776960d2320ae0821839bb51b10ebf3d303ca665",
         );

@@ -26,7 +26,7 @@
     import ButtonGroup from "../../ButtonGroup.svelte";
     import ModalContent from "../../ModalContent.svelte";
     import Overlay from "../../Overlay.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import UserProfileCard from "./UserProfileCard.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -69,23 +69,24 @@
         // card was closed while getUser was in flight
         const id = userId;
         try {
-            rendering = new Promise(async (resolve) => {
-                user = await client.getUser(id);
-                client.getPublicProfile(id).subscribe({
-                    onResult: (result) => {
-                        profile = result;
-                        if (profile === undefined) {
-                            onClose();
-                        } else {
-                            resolve();
-                        }
-                    },
-                });
-            });
-        } catch (e: any) {
+            user = await client.getUser(id);
+        } catch (e) {
             client.logError("Failed to load user profile", e);
             onClose();
+            return;
         }
+        rendering = new Promise((resolve) => {
+            client.getPublicProfile(id).subscribe({
+                onResult: (result) => {
+                    profile = result;
+                    if (profile === undefined) {
+                        onClose();
+                    } else {
+                        resolve();
+                    }
+                },
+            });
+        });
     });
 
     function afterBlock(result: boolean, success: ResourceKey, failure: ResourceKey) {

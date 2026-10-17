@@ -4,10 +4,8 @@
         iconSize,
         localUpdates,
         routeForChatIdentifier,
-        subscribe,
     } from "@client";
     import { navigate } from "@utils/navigation";
-    import { onMount } from "svelte";
     import { _ } from "svelte-i18n";
     import Bug from "svelte-material-icons/Bug.svelte";
     import Close from "svelte-material-icons/Close.svelte";
@@ -16,7 +14,7 @@
     import { i18nKey, interpolate } from "../i18n/i18n";
     import { toastStore } from "../stores/toast";
     import Tooltip from "./tooltip/Tooltip.svelte";
-    import Translatable from "./Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     let reactiveResourceKey = $derived($toastStore?.resourceKey);
 
@@ -39,20 +37,6 @@
             toastStore.hideToast();
         }
     }
-
-    onMount(() => {
-        const unsubs = [
-            subscribe("showFailureToast", ({ resourceKey, err }) =>
-                toastStore.showFailureToast(resourceKey, err),
-            ),
-            subscribe("showSuccessToast", (resourceKey) =>
-                toastStore.showSuccessToast(resourceKey),
-            ),
-        ];
-        return () => {
-            unsubs.forEach((u) => u());
-        };
-    });
 </script>
 
 {#if $toastStore && $reactiveResourceKey}

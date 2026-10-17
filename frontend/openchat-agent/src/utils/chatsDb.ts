@@ -5,7 +5,6 @@ import {
     type IDBPCursorWithValue,
     type IDBPDatabase,
     type IDBPObjectStore,
-    type IDBPTransaction,
     type StoreNames,
     type StoreValue,
 } from "idb";
@@ -22,7 +21,6 @@ import type {
     CurrentUserSummary,
     DataContent,
     DiamondMembershipStatus,
-    DirectChatIdentifier,
     DirectChatSummary,
     EventWrapper,
     EventsResponse,
@@ -36,7 +34,6 @@ import type {
     MessageContent,
     MessageContext,
     P2PSwapContent,
-    PrizeContent,
     PublicProfile,
     ReplyContext,
     SendMessageResponse,
@@ -74,7 +71,8 @@ import {
     type SyncTouched,
 } from "./sync";
 
-const CACHE_VERSION = 153;
+// With no migrations registered, a bump deletes the whole cache
+const CACHE_VERSION = 157;
 const MAX_INDEX = 9999999999;
 
 export type Database = Promise<IDBPDatabase<ChatSchema>>;
@@ -204,28 +202,6 @@ type EventsStore = IDBPObjectStore<
     "readonly"
 >;
 
-// async function createBotsStore(
-//     db: IDBPDatabase<ChatSchema>,
-//     _principal: Principal,
-//     _tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-// ) {
-//     if (db.objectStoreNames.contains("bots")) {
-//         db.deleteObjectStore("bots");
-//     }
-//     db.createObjectStore("bots");
-// }
-//
-// async function createActivityFeed(
-//     db: IDBPDatabase<ChatSchema>,
-//     _principal: Principal,
-//     _tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-// ) {
-//     if (db.objectStoreNames.contains("activityFeed")) {
-//         db.deleteObjectStore("activityFeed");
-//     }
-//     db.createObjectStore("activityFeed");
-// }
-//
 function noteTimestamp(
     timestamps: Map<string, bigint>,
     key: string,
@@ -236,126 +212,6 @@ function noteTimestamp(
     } else {
         timestamps.set(key, timestamp);
     }
-}
-
-async function clearChatsStore(
-    _db: IDBPDatabase<ChatSchema>,
-    tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-) {
-    await tx.objectStore("chats").clear();
-}
-//
-// async function clearGroupDetailsStore(
-//     _db: IDBPDatabase<ChatSchema>,
-//     _principal: Principal,
-//     tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-// ) {
-//     await tx.objectStore("group_details").clear();
-// }
-
-// The cached details of chats and communities are cleared, because:
-// - those brought up to date after being left for over 31 days may be missing updates which the
-//   canister had already pruned. Canisters now return the details in full in that case instead.
-// - those of a large chat or community hold every member, but from now on only those of chats and
-//   communities with no more than a page of members do. Clearing them has only the first page
-//   loaded in their place.
-async function clearDetailsStores(
-    _db: IDBPDatabase<ChatSchema>,
-    tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-) {
-    await tx.objectStore("group_details").clear();
-    await tx.objectStore("community_details").clear();
-}
-
-async function clearCachePrimerStore(
-    _db: IDBPDatabase<ChatSchema>,
-    tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-) {
-    await tx.objectStore("cachePrimer").clear();
-}
-
-async function clearCommunityDetailsStore(
-    _db: IDBPDatabase<ChatSchema>,
-    tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-) {
-    await tx.objectStore("community_details").clear();
-}
-//
-// async function clearEverything(
-//     db: IDBPDatabase<ChatSchema>,
-//     _principal: Principal,
-//     _tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-// ) {
-//     nuke(db);
-// }
-//
-async function clearEvents(
-    _db: IDBPDatabase<ChatSchema>,
-    tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-) {
-    await tx.objectStore("chat_events").clear();
-}
-
-// async function clearChatAndGroups(
-//     _db: IDBPDatabase<ChatSchema>,
-//     _principal: Principal,
-//     tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-// ) {
-//     await clearChatsStore(_db, _principal, tx);
-//     await clearGroupDetailsStore(_db, _principal, tx);
-// }
-//
-// async function clearExternalAchievements(
-//     _db: IDBPDatabase<ChatSchema>,
-//     _principal: Principal,
-//     tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-// ) {
-//     await tx.objectStore("externalAchievements").clear();
-// }
-
-async function clearChatsAndCurrentUser(
-    _db: IDBPDatabase<ChatSchema>,
-    tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-) {
-    await clearChatsStore(_db, tx);
-    await tx.objectStore("currentUser").clear();
-}
-
-async function createPublicProfileStore(
-    db: IDBPDatabase<ChatSchema>,
-    _tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-) {
-    if (db.objectStoreNames.contains("publicProfile")) {
-        db.deleteObjectStore("publicProfile");
-    }
-    db.createObjectStore("publicProfile");
-}
-
-async function createSyncStore(
-    db: IDBPDatabase<ChatSchema>,
-    _tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-) {
-    if (db.objectStoreNames.contains("sync")) {
-        db.deleteObjectStore("sync");
-    }
-    db.createObjectStore("sync");
-}
-
-// The chats move from one record into a row each. The old record is dropped rather than split,
-// so the next load after the upgrade is a full one, as after any other migration that cleared
-// the chats. Its stamps go with it: they carried the per-chat versions the rows now hold.
-async function createChatRowStores(
-    db: IDBPDatabase<ChatSchema>,
-    tx: IDBPTransaction<ChatSchema, StoreNames<ChatSchema>[], "versionchange">,
-) {
-    for (const name of ["chat_rows", "chat_tombstones"] as const) {
-        if (db.objectStoreNames.contains(name)) {
-            db.deleteObjectStore(name);
-        }
-        db.createObjectStore(name).createIndex("version", "version");
-    }
-    await tx.objectStore("chats").clear();
-    await tx.objectStore("sync").delete("stamps");
 }
 
 type SyncStoreReader = { get(key: string): Promise<number | SyncStamps | undefined> };
@@ -415,22 +271,7 @@ export class ChatsDb {
                 { name: "sync" },
             ],
             CACHE_VERSION,
-        )
-            .withMigration(138, clearCommunityDetailsStore)
-            .withMigration(139, clearEvents)
-            .withMigration(140, clearChatsAndCurrentUser)
-            .withMigration(141, createPublicProfileStore)
-            .withMigration(142, clearCommunityDetailsStore)
-            .withMigration(143, clearChatsStore)
-            .withMigration(144, clearChatsStore)
-            .withMigration(145, clearCachePrimerStore)
-            .withMigration(146, clearEvents)
-            .withMigration(147, clearCachePrimerStore)
-            .withMigration(148, clearChatsStore)
-            .withMigration(149, clearChatsStore)
-            .withMigration(150, createSyncStore)
-            .withMigration(151, createChatRowStores)
-            .withMigration(152, clearDetailsStores);
+        );
     }
 
     getDb(): Database {
@@ -498,15 +339,7 @@ export class ChatsDb {
      */
     async setCachedChats(chatState: ChatStateFull, touched: SyncTouched): Promise<number> {
         const tx = (await this.getDb()).transaction(
-            [
-                "chats",
-                "chat_rows",
-                "chat_tombstones",
-                "chat_events",
-                "thread_events",
-                "failed_chat_messages",
-                "sync",
-            ],
+            ["chats", "chat_rows", "chat_tombstones", "chat_events", "thread_events", "sync"],
             "readwrite",
         );
         const chatsStore = tx.objectStore("chats");
@@ -514,7 +347,6 @@ export class ChatsDb {
         const tombstonesStore = tx.objectStore("chat_tombstones");
         const eventsStore = tx.objectStore("chat_events");
         const threadsStore = tx.objectStore("thread_events");
-        const failedChatStore = tx.objectStore("failed_chat_messages");
         const syncStore = tx.objectStore("sync");
 
         const version = (await readSyncHead(syncStore)) + 1;
@@ -523,62 +355,15 @@ export class ChatsDb {
         const cachedKeys = new Set(await rowsStore.getAllKeys());
         const rows = chatRowsToWrite(chatState, touched, cachedKeys, !globalsCached);
 
-        // A move recorded earlier onto a direct chat which this write removes would send a UI which
-        // hasn't yet pulled it to a chat which isn't there, or which is a new chat if one is later
-        // added under that id. So it's pointed on to where that chat has now moved, if it has, and
-        // is otherwise dropped. The tombstone keeps its version, so a UI which has already pulled it
-        // isn't sent it again. Read before this write's own tombstones are.
-        const removedDirectChats = new Set(
-            rows.removed.filter(({ kind }) => kind === "direct_chat").map(({ id }) => id),
-        );
-        const earlierMoveRequests =
-            removedDirectChats.size === 0
-                ? []
-                : (await tombstonesStore.getAll())
-                      .filter(
-                          ({ kind, movedTo }) =>
-                              kind === "direct_chat" &&
-                              movedTo !== undefined &&
-                              removedDirectChats.has(movedTo),
-                      )
-                      .map(({ movedTo, ...tombstone }) => {
-                          const next = touched.movedDirectChats.get(movedTo as string);
-                          return tombstonesStore.put(
-                              next === undefined ? tombstone : { ...tombstone, movedTo: next },
-                              chatRowKey(tombstone.kind, tombstone.id),
-                          );
-                      });
-
         const rowRequests = rows.put.flatMap(({ key, isNew, summary }) => {
             const row = serialisableRow(summary, version);
             const put = rowsStore.put(row, key);
             // a chat that is back no longer needs its tombstone
             return isNew ? [put, tombstonesStore.delete(key)] : [put];
         });
-        const removeRequests = rows.removed.flatMap(({ key, kind, id }) => {
-            const movedTo = kind === "direct_chat" ? touched.movedDirectChats.get(id) : undefined;
-            const tombstone: ChatTombstone =
-                movedTo === undefined ? { kind, id, version } : { kind, id, version, movedTo };
-            return [rowsStore.delete(key), tombstonesStore.put(tombstone, key)];
-        });
-
-        // A moved chat which had no row, eg. one created under the old id and moved before it was
-        // synced, still leaves a tombstone recording the move, so that a UI holding something for
-        // it under the old id, such as a placeholder, hears of the move
-        const tombstoned = new Set(rows.removed.map(({ key }) => key));
-        const movedTombstoneRequests = [...touched.movedDirectChats]
-            .map(([from, to]) => ({ key: chatRowKey("direct_chat", from), from, to }))
-            .filter(({ key }) => !tombstoned.has(key))
-            .map(({ key, from, to }) =>
-                tombstonesStore.put({ kind: "direct_chat", id: from, version, movedTo: to }, key),
-            );
-
-        // What's cached for a moved chat moves with it, in this transaction, so that by the time
-        // a UI hears of the move, the chat's events are under its new id. Direct chats have no
-        // threads, so there are no thread events or failed thread messages to move.
-        const moveRequests = [...touched.movedDirectChats].flatMap(([from, to]) => [
-            moveCachedEvents(eventsStore, from, to),
-            moveFailedMessages(failedChatStore, from, to),
+        const removeRequests = rows.removed.flatMap(({ key, kind, id }) => [
+            rowsStore.delete(key),
+            tombstonesStore.put({ kind, id, version }, key),
         ]);
 
         const updatedEvents = touched.updatedEvents;
@@ -600,10 +385,7 @@ export class ChatsDb {
         const promises: Promise<unknown>[] = [
             chatsStore.put(globalsOf(chatState), this.principalString),
             ...rowRequests,
-            ...earlierMoveRequests,
             ...removeRequests,
-            ...movedTombstoneRequests,
-            ...moveRequests,
             syncStore.put(stamps, "stamps"),
             syncStore.put(version, "head"),
             ...markDirtyRequests,
@@ -967,12 +749,8 @@ export class ChatsDb {
             threadRootMessageIndex !== undefined
                 ? "failed_thread_messages"
                 : "failed_chat_messages";
-        const tx = (await this.getDb()).transaction([store, "chat_tombstones"], "readwrite");
-        const latest = await latestChatId(tx.objectStore("chat_tombstones"), chatId);
-        await tx
-            .objectStore(store)
-            .delete(createFailedCacheKey({ chatId: latest, threadRootMessageIndex }, messageId));
-        await tx.done;
+        const db = await this.getDb();
+        await db.delete(store, createFailedCacheKey({ chatId, threadRootMessageIndex }, messageId));
     }
 
     async recordFailedMessage<T extends Message>(
@@ -988,21 +766,16 @@ export class ChatsDb {
             threadRootMessageIndex !== undefined
                 ? "failed_thread_messages"
                 : "failed_chat_messages";
-        const tx = (await this.getDb()).transaction([store, "chat_tombstones"], "readwrite");
-        // The chat may have moved since the message began being sent
-        const latest = await latestChatId(tx.objectStore("chat_tombstones"), chatId);
-        const key = createFailedCacheKey(
-            { chatId: latest, threadRootMessageIndex },
-            event.event.messageId,
-        );
-        await tx.objectStore(store).put(
+        const key = createFailedCacheKey({ chatId, threadRootMessageIndex }, event.event.messageId);
+        const db = await this.getDb();
+        await db.put(
+            store,
             {
-                ...makeSerialisable<T>(event, latest, false, threadRootMessageIndex),
+                ...makeSerialisable<T>(event, chatId, false, threadRootMessageIndex),
                 messageKey: key,
             },
             key,
         );
-        await tx.done;
     }
 
     async loadFailedMessages(): Promise<MessageContextMap<Record<string, EventWrapper<Message>>>> {
@@ -1162,17 +935,15 @@ export class ChatsDb {
         messageEvent: EventWrapper<Message>,
         threadRootMessageIndex?: number,
     ): Promise<void> {
+        const key = createCacheKey({ chatId, threadRootMessageIndex }, messageEvent.index);
         const store = threadRootMessageIndex !== undefined ? "thread_events" : "chat_events";
-        const tx = (await this.getDb()).transaction([store, "chat_tombstones"], "readwrite", {
+        const tx = (await this.getDb()).transaction([store], "readwrite", {
             durability: "relaxed",
         });
-        // The chat may have moved since the message began being sent
-        const latest = await latestChatId(tx.objectStore("chat_tombstones"), chatId);
-        const key = createCacheKey({ chatId: latest, threadRootMessageIndex }, messageEvent.index);
         const eventStore = tx.objectStore(store);
         if ((await eventStore.count(key)) === 0) {
             await eventStore.add(
-                makeSerialisable<Message>(messageEvent, latest, true, threadRootMessageIndex),
+                makeSerialisable<Message>(messageEvent, chatId, true, threadRootMessageIndex),
                 key,
             );
         }
@@ -1183,19 +954,21 @@ export class ChatsDb {
         return readAll(this.getDb(), "cachePrimer");
     }
 
-    async setCachePrimerEventIndex(
-        chatId: ChatIdentifier,
-        eventIndexLoadedUpTo: number,
-    ): Promise<void> {
-        const key = chatIdentifierToString(chatId);
+    // chatId string -> event index loaded up to, in one transaction per batch the primer completes
+    async setCachePrimerEventIndexes(eventIndexesLoadedUpTo: Map<string, number>): Promise<void> {
         const tx = (await this.getDb()).transaction(["cachePrimer"], "readwrite", {
             durability: "relaxed",
         });
         const store = tx.objectStore("cachePrimer");
-        const existing = await store.get(key);
-        if (existing === undefined || existing < eventIndexLoadedUpTo) {
-            await store.put(eventIndexLoadedUpTo, key);
-        }
+        // Another tab's primer may have got further
+        await Promise.all(
+            [...eventIndexesLoadedUpTo].map(async ([key, eventIndexLoadedUpTo]) => {
+                const existing = await store.get(key);
+                if (existing === undefined || existing < eventIndexLoadedUpTo) {
+                    await store.put(eventIndexLoadedUpTo, key);
+                }
+            }),
+        );
         await tx.done;
     }
 
@@ -1433,102 +1206,6 @@ function padMessageIndex(i: number): string {
 
 type FailedCacheKey = MessageContext & { messageId: bigint };
 
-// The chat which `chatId` is cached under now, which is the one a direct chat was moved onto if the
-// other user has been migrated to a MultiUser canister since, as its tombstone records (a later move
-// of that chat points the tombstone on). For a write which began before the move, such as for a
-// message which was being sent, so that it lands with the rest of the chat rather than under the old
-// id once the chat's cache has moved. Read in the write's own transaction, which takes in the
-// tombstones, so that the write and the move are made one after the other.
-async function latestChatId(
-    tombstones: { get(key: string): Promise<ChatTombstone | undefined> },
-    chatId: ChatIdentifier,
-): Promise<ChatIdentifier> {
-    if (chatId.kind !== "direct_chat") return chatId;
-    const movedTo = (await tombstones.get(chatRowKey("direct_chat", chatId.userId)))?.movedTo;
-    return movedTo === undefined ? chatId : { kind: "direct_chat", userId: movedTo };
-}
-
-// The parts of a store which moving a direct chat's cache uses
-type MovableStore<V> = {
-    getAllKeys(query?: IDBKeyRange): Promise<string[]>;
-    get(key: string): Promise<V | undefined>;
-    put(value: V, key: string): Promise<string>;
-    delete(key: string): Promise<void>;
-};
-
-// Moves the events cached for the direct chat with `from` onto `to`, for a chat moved onto the other
-// user's new id after they were migrated to a MultiUser canister. The move
-// doesn't change the events, the messages keeping the ids they were sent under, so they're rekeyed,
-// along with the chat they're recorded as being in. A reply to a message in the same chat is cached
-// without the chat, so needs nothing. The chat comes back from the User canister in full, which
-// can't say which of its events were updated since it was last synced, so the moved events are
-// marked dirty: they're shown at once, and fetched again when they are. An event already cached
-// under the new id, eg. one another tab loaded, is at least as new, so is kept.
-async function moveCachedEvents(
-    store: MovableStore<EnhancedWrapper<ChatEvent> | ExpiredEventsRange>,
-    from: string,
-    to: string,
-): Promise<void> {
-    const prefix = `${from}_`;
-    const movedKey = (key: string) => `${to}_${key.slice(prefix.length)}`;
-    const chatId: DirectChatIdentifier = { kind: "direct_chat", userId: to };
-    const keys = await store.getAllKeys(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
-    await Promise.all(
-        keys.map(async (key) => {
-            const value = await store.get(key);
-            const target = movedKey(key);
-            if (value !== undefined && (await store.get(target)) === undefined) {
-                const moved =
-                    value.kind === "event"
-                        ? {
-                              ...value,
-                              chatId,
-                              messageKey: value.messageKey?.startsWith(prefix)
-                                  ? movedKey(value.messageKey)
-                                  : value.messageKey,
-                              dirty: true,
-                          }
-                        : value;
-                await store.put(moved, target);
-            }
-            await store.delete(key);
-        }),
-    );
-}
-
-// Moves the failed messages held for the direct chat with `from` onto `to`, as for its events in
-// `moveCachedEvents`, so that they can still be retried
-async function moveFailedMessages(
-    store: MovableStore<EnhancedWrapper<Message>>,
-    from: string,
-    to: string,
-): Promise<void> {
-    const chatId: DirectChatIdentifier = { kind: "direct_chat", userId: to };
-    const keys = await store.getAllKeys();
-    await Promise.all(
-        keys.map(async (key) => {
-            const parsed = parseFailedCacheKey(key);
-            if (parsed?.chatId.kind !== "direct_chat" || parsed.chatId.userId !== from) return;
-            const value = await store.get(key);
-            if (value !== undefined) {
-                const movedKey = createFailedCacheKey({ chatId }, value.event.messageId);
-                if ((await store.get(movedKey)) === undefined) {
-                    await store.put({ ...value, chatId, messageKey: movedKey }, movedKey);
-                }
-            }
-            await store.delete(key);
-        }),
-    );
-}
-
-function parseFailedCacheKey(key: string): FailedCacheKey | undefined {
-    try {
-        return JSON.parse(key) as FailedCacheKey;
-    } catch {
-        return undefined;
-    }
-}
-
 export function createFailedCacheKey(context: MessageContext, messageId: bigint): string {
     return JSON.stringify({
         ...context,
@@ -1686,6 +1363,7 @@ function messageToEvent(
                     winnerCount: 0,
                     userIsWinner: false,
                     token: message.content.transfer.token,
+                    ledger: message.content.transfer.ledger,
                     endDate: message.content.endDate,
                     caption: message.content.caption,
                     diamondOnly: message.content.diamondOnly,
@@ -1693,7 +1371,8 @@ function messageToEvent(
                     uniquePersonOnly: message.content.uniquePersonOnly,
                     streakOnly: message.content.streakOnly,
                     requiresCaptcha: message.content.requiresCaptcha,
-                } as PrizeContent;
+                    minChitEarned: message.content.minChitEarned,
+                };
                 break;
             case "p2p_swap_content_initial":
                 content = {

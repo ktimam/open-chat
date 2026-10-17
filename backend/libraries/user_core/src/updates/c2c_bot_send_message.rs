@@ -4,15 +4,14 @@ use chat_events::{
     ValidateNewMessageContentResult,
 };
 use constants::OPENCHAT_BOT_USER_ID;
+use multi_user_canister::c2c_bot_send_message::Args;
+use multi_user_canister::send_message_v2::{self, SuccessResult};
 use oc_error_codes::OCErrorCode;
 use types::{
     BlobReference, BotCaller, BotMessageContext, BotPermissions, DirectChatUserNotificationPayload, DirectMessageNotification,
     EventIndex, EventWrapper, Message, MessageContent, MessageId, MessageIndex, OCResult, OgPreview, SenderContext,
     TimestampMillis, UserId, UserType,
 };
-use user_canister::c2c_bot_send_message::Args;
-use user_canister::send_message_v2::{self, SuccessResult};
-use utils::migrated_user_ids::MigratedUserIds;
 
 // A message from a bot to the user, checked and validated
 pub struct BotMessage {
@@ -116,7 +115,7 @@ pub fn send<P: EventPusher>(
     let bot_id = message.bot_caller.bot;
     let chat_id = bot_id.into();
 
-    if let Some(chat) = user.direct_chats.get_mut(&chat_id)
+    if let Some(mut chat) = user.direct_chats.get_mut(&chat_id)
         && let Some((existing, _)) = chat.message_internal(message.thread_root_message_index, message.message_id.into())
     {
         let bot_caller = &message.bot_caller;
@@ -134,7 +133,6 @@ pub fn send<P: EventPusher>(
         let EditMessageSuccess {
             message_index, event, ..
         } = chat
-            // Bots are never migrated to a MultiUser canister, so have no earlier ids
             .edit_message::<P>(
                 EditMessageArgs {
                     sender: bot_id,
@@ -147,7 +145,6 @@ pub fn send<P: EventPusher>(
                     finalise_bot_message: message.finalised,
                     now,
                 },
-                &MigratedUserIds::default(),
                 None,
             )
             // Shouldn't happen
@@ -177,7 +174,7 @@ pub fn send<P: EventPusher>(
         });
     }
 
-    let chat = user
+    let mut chat = user
         .direct_chats
         .get_or_create(my_user_id, bot_id, UserType::BotV2, anonymized_chat_id, now);
 

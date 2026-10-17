@@ -1,4 +1,5 @@
 use crate::model::moderation;
+use crate::model::pending_payments_queue::PendingPayment;
 use crate::model::reported_messages::build_restoration_message_to_sender;
 use crate::updates::c2c_report_message::process_report;
 use crate::updates::pay_for_diamond_membership::pay_for_diamond_membership_impl;
@@ -25,23 +26,7 @@ pub enum TimerJob {
     SetUserSuspendedInCommunity(SetUserSuspendedInCommunity),
     UnsuspendUser(UnsuspendUser),
     ProcessReportClassification(ProcessReportClassification),
-}
-
-impl TimerJob {
-    // Moves a job for a user onto the new id they were given when migrated to a MultiUser canister
-    pub fn migrate_user_id(&mut self, old_user_id: UserId, new_user_id: UserId) {
-        let user_id = match self {
-            TimerJob::RecurringDiamondMembershipPayment(job) => &mut job.user_id,
-            TimerJob::SetUserSuspended(job) => &mut job.user_id,
-            TimerJob::SetUserSuspendedInGroup(job) => &mut job.user_id,
-            TimerJob::SetUserSuspendedInCommunity(job) => &mut job.user_id,
-            TimerJob::UnsuspendUser(job) => &mut job.user_id,
-            TimerJob::ProcessReportClassification(_) => return,
-        };
-        if *user_id == old_user_id {
-            *user_id = new_user_id;
-        }
-    }
+    RetryPayment(Box<RetryPaymentJob>),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -110,6 +95,14 @@ pub struct ProcessReportClassification {
     pub report_index: u64,
 }
 
+// Retries a payment, after a failed attempt to call into its ledger
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RetryPaymentJob {
+    pub payment: PendingPayment,
+    // The number of attempts at the payment which have failed to call into its ledger so far
+    pub failures: u32,
+}
+
 impl Job for TimerJob {
     fn execute(self) {
         match self {
@@ -119,13 +112,14 @@ impl Job for TimerJob {
             TimerJob::SetUserSuspendedInCommunity(job) => job.execute(),
             TimerJob::UnsuspendUser(job) => job.execute(),
             TimerJob::ProcessReportClassification(job) => job.execute(),
+            TimerJob::RetryPayment(job) => job.execute(),
         }
     }
 }
 
 impl Job for ProcessReportClassification {
     fn execute(self) {
-        utils::async_work::spawn_tracked(process_report(self.report_index));
+        ic_cdk::futures::spawn_migratory(process_report(self.report_index));
     }
 }
 
@@ -146,7 +140,7 @@ impl Job for RecurringDiamondMembershipPayment {
                         .map(|duration| (duration, d.pay_in_chat(), fees))
                 })
         }) {
-            utils::async_work::spawn_tracked(pay_for_diamond_membership(self.user_id, duration, fees, pay_in_chat));
+            ic_cdk::futures::spawn_migratory(pay_for_diamond_membership(self.user_id, duration, fees, pay_in_chat));
         }
 
         async fn pay_for_diamond_membership(
@@ -240,7 +234,7 @@ If you would like to extend your Diamond membership you will need to approve the
 
 impl Job for SetUserSuspended {
     fn execute(self) {
-        utils::async_work::spawn_tracked(suspend_user(self));
+        ic_cdk::futures::spawn_migratory(suspend_user(self));
 
         // A suspension which silently fails to apply (eg. the user canister is stopped mid
         // upgrade) leaves a sanctioned user active, so retry rather than dropping it
@@ -277,7 +271,7 @@ impl Job for SetUserSuspended {
 
 impl Job for SetUserSuspendedInGroup {
     fn execute(self) {
-        utils::async_work::spawn_tracked(set_user_suspended_in_group(
+        ic_cdk::futures::spawn_migratory(set_user_suspended_in_group(
             self.user_id,
             self.group,
             self.suspended,
@@ -311,7 +305,7 @@ impl Job for SetUserSuspendedInGroup {
 
 impl Job for SetUserSuspendedInCommunity {
     fn execute(self) {
-        utils::async_work::spawn_tracked(set_user_suspended_in_community(
+        ic_cdk::futures::spawn_migratory(set_user_suspended_in_community(
             self.user_id,
             self.community,
             self.suspended,
@@ -371,7 +365,7 @@ impl Job for UnsuspendUser {
             return;
         }
 
-        utils::async_work::spawn_tracked(unsuspend_user(self));
+        ic_cdk::futures::spawn_migratory(unsuspend_user(self));
 
         async fn unsuspend_user(job: UnsuspendUser) {
             match unsuspend_user_impl(job.user_id).await {
@@ -418,28 +412,8 @@ impl Job for UnsuspendUser {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use candid::Principal;
-
-    #[test]
-    fn only_jobs_for_the_migrated_user_are_moved_onto_their_new_id() {
-        let old_user_id: UserId = Principal::from_slice(&[1]).into();
-        let other_user_id: UserId = Principal::from_slice(&[2]).into();
-        let new_user_id: UserId = Principal::from_slice(&[3]).into();
-        let job = |user_id| TimerJob::RecurringDiamondMembershipPayment(RecurringDiamondMembershipPayment { user_id });
-        let user_id = |job: &TimerJob| match job {
-            TimerJob::RecurringDiamondMembershipPayment(j) => j.user_id,
-            _ => unreachable!(),
-        };
-
-        let mut migrated = job(old_user_id);
-        let mut other = job(other_user_id);
-        migrated.migrate_user_id(old_user_id, new_user_id);
-        other.migrate_user_id(old_user_id, new_user_id);
-
-        assert_eq!(user_id(&migrated), new_user_id);
-        assert_eq!(user_id(&other), other_user_id);
+impl Job for RetryPaymentJob {
+    fn execute(self) {
+        crate::jobs::make_pending_payments::retry(self.payment, self.failures);
     }
 }

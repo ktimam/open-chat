@@ -27,7 +27,6 @@ use types::{
     VersionedRules, VideoCall, VideoCallPresence, VoteOperation, WebhookDetails,
 };
 use utils::document::validate_avatar;
-use utils::migrated_user_ids::MigratedUserIds;
 use utils::text_validation::{
     StringLengthValidationError, validate_channel_name, validate_description, validate_group_name, validate_rules,
 };
@@ -483,7 +482,6 @@ impl GroupChatCore {
         user: UserIdAndPrincipal,
         thread_root_message_index: Option<MessageIndex>,
         message_id: MessageId,
-        migrated_user_ids: &MigratedUserIds,
     ) -> OCResult<MessageContent> {
         let user_id = user.user_id;
         if let Some(member) = self.members.get(&user_id) {
@@ -501,9 +499,8 @@ impl GroupChatCore {
                         // Quarantined: suspected CSAM removed by moderation is viewable by no
                         // one here - designated reviewers access it via the evidence vault
                         Err(OCErrorCode::MessageHardDeleted.into())
-                    } else if migrated_user_ids.is_same_user(user_id, message.sender)
-                        || (!migrated_user_ids.is_same_user(deleted_by.deleted_by, message.sender)
-                            && member.role().can_delete_messages(&self.permissions))
+                    } else if user_id == message.sender
+                        || (deleted_by.deleted_by != message.sender && member.role().can_delete_messages(&self.permissions))
                     {
                         Ok(message.content.hydrate(Some(user)))
                     } else {
@@ -584,7 +581,6 @@ impl GroupChatCore {
         event_pusher: P,
         finalised: bool,
         og_previews: Vec<OgPreview>,
-        migrated_user_ids: &MigratedUserIds,
         now: TimestampMillis,
     ) -> OCResult<SendMessageSuccess> {
         // If there is an existing message with the same message id then this is invalid unless
@@ -612,7 +608,6 @@ impl GroupChatCore {
                     suppressed,
                     block_level_markdown,
                     og_previews,
-                    migrated_user_ids,
                     now,
                 );
             }
@@ -671,7 +666,6 @@ impl GroupChatCore {
                 mentioned,
                 everyone_mentioned,
                 suppressed,
-                migrated_user_ids,
                 now,
             )
         };
@@ -741,7 +735,6 @@ impl GroupChatCore {
         suppressed: bool,
         block_level_markdown: bool,
         og_previews: Vec<OgPreview>,
-        migrated_user_ids: &MigratedUserIds,
         now: TimestampMillis,
     ) -> OCResult<SendMessageSuccess> {
         let PrepareSendMessageSuccess {
@@ -761,11 +754,7 @@ impl GroupChatCore {
             now,
         };
 
-        let result = self
-            .events
-            // Bots are never migrated to a MultiUser canister, so have no earlier ids
-            .edit_message::<NullEventPusher>(edit_message_args, &MigratedUserIds::default(), None)
-            .ok();
+        let result = self.events.edit_message::<NullEventPusher>(edit_message_args, None).ok();
 
         let reader = self
             .events
@@ -785,7 +774,6 @@ impl GroupChatCore {
                 mentioned,
                 everyone_mentioned,
                 suppressed,
-                migrated_user_ids,
                 now,
             )
         } else {
@@ -809,7 +797,6 @@ impl GroupChatCore {
         mentioned: &[UserId],
         everyone_mentioned: bool,
         suppressed: bool,
-        migrated_user_ids: &MigratedUserIds,
         now: TimestampMillis,
     ) -> Vec<UserId> {
         let message = &message_event.event;
@@ -820,12 +807,9 @@ impl GroupChatCore {
             .unwrap_or(message.sender);
         let message_id = message.message_id;
 
-        // Events refer to users by the ids they had at the time, so these are mapped to the latest ids
-        // of any users since migrated to a MultiUser canister, since that is what they are members as
         let user_being_replied_to = replies_to
             .as_ref()
-            .and_then(|r| self.get_user_being_replied_to(r, min_visible_event_index, thread_root_message_index))
-            .map(|u| migrated_user_ids.latest(u));
+            .and_then(|r| self.get_user_being_replied_to(r, min_visible_event_index, thread_root_message_index));
 
         let mentions: HashSet<_> = mentioned.iter().copied().chain(user_being_replied_to).collect();
 
@@ -837,44 +821,35 @@ impl GroupChatCore {
                     .events
                     .visible_main_events_reader(min_visible_event_index)
                     .message_internal(root_message_index.into())
-                    .and_then(|m| m.thread_summary.map(|s| (migrated_user_ids.latest(m.sender), s)))
+                    .and_then(|m| m.thread_summary.map(|s| (m.sender, s)))
                 {
                     let is_first_reply = message_index == MessageIndex::default();
-                    let followers: HashSet<_> = thread_summary
-                        .followers
-                        .into_iter()
-                        .map(|f| migrated_user_ids.latest(f))
-                        .collect();
-                    for follower in followers {
-                        self.members.update_member(&follower, |m| {
-                            // Bump the thread timestamp for all followers
-                            m.followed_threads.insert(root_message_index, now);
+                    let followers: HashSet<_> = thread_summary.followers.into_iter().collect();
+                    self.members.update_many(followers, |m| {
+                        // Bump the thread timestamp for all followers
+                        m.followed_threads.insert(root_message_index, now);
 
-                            let user_id = m.user_id();
-                            if user_id != initiator {
-                                let mentioned =
-                                    mentions.contains(&user_id) || (is_first_reply && user_id == root_message_sender);
+                        let user_id = m.user_id();
+                        if user_id != initiator {
+                            let mentioned = mentions.contains(&user_id) || (is_first_reply && user_id == root_message_sender);
 
-                                if mentioned {
-                                    m.mentions.add(thread_root_message_index, message_index, message_id, now);
-                                }
-
-                                if mentioned || !m.notifications_muted().value {
-                                    users_to_notify.insert(user_id);
-                                }
+                            if mentioned {
+                                m.mentions.add(thread_root_message_index, message_index, message_id, now);
                             }
-                            true
-                        });
-                    }
-                }
-            } else {
-                for mentioned in mentions {
-                    self.members.update_member(&mentioned, |m| {
-                        m.mentions.add(thread_root_message_index, message_index, message_id, now);
+
+                            if mentioned || !m.notifications_muted().value {
+                                users_to_notify.insert(user_id);
+                            }
+                        }
                         true
                     });
-                    users_to_notify.insert(mentioned);
                 }
+            } else {
+                self.members.update_many(mentions.iter().copied(), |m| {
+                    m.mentions.add(thread_root_message_index, message_index, message_id, now);
+                    true
+                });
+                users_to_notify.extend(mentions);
 
                 // Notify everyone who has not muted @everyone mentions
                 if everyone_mentioned {
@@ -970,7 +945,6 @@ impl GroupChatCore {
         message_id: MessageId,
         reaction: Reaction,
         now: TimestampMillis,
-        migrated_user_ids: &MigratedUserIds,
         event_pusher: P,
     ) -> OCResult<UpdateMessageSuccess<MessageInternal>> {
         if matches!(caller, Caller::Webhook(_) | Caller::Bot(_)) {
@@ -998,7 +972,6 @@ impl GroupChatCore {
                 reaction,
                 now,
             },
-            migrated_user_ids,
             Some(event_pusher),
         )
     }
@@ -1010,7 +983,6 @@ impl GroupChatCore {
         message_id: MessageId,
         reaction: Reaction,
         now: TimestampMillis,
-        migrated_user_ids: &MigratedUserIds,
     ) -> OCResult<UpdateMessageSuccess> {
         let member = self.members.get_verified_member(user_id)?;
 
@@ -1020,17 +992,14 @@ impl GroupChatCore {
 
         let min_visible_event_index = member.min_visible_event_index();
 
-        self.events.remove_reaction(
-            AddRemoveReactionArgs {
-                user_id,
-                min_visible_event_index,
-                thread_root_message_index,
-                message_id,
-                reaction,
-                now,
-            },
-            migrated_user_ids,
-        )
+        self.events.remove_reaction(AddRemoveReactionArgs {
+            user_id,
+            min_visible_event_index,
+            thread_root_message_index,
+            message_id,
+            reaction,
+            now,
+        })
     }
 
     // Checks `user_id` could tip the message now, without tipping it, returning the message's sender,
@@ -1040,11 +1009,10 @@ impl GroupChatCore {
         user_id: UserId,
         thread_root_message_index: Option<MessageIndex>,
         message_id: MessageId,
-        migrated_user_ids: &MigratedUserIds,
     ) -> OCResult<UserId> {
         let member = self.members.get_verified_member(user_id)?;
 
-        if !member.role().can_react_to_messages(&self.permissions) {
+        if !member.role().can_tip_messages(&self.permissions) {
             return Err(OCErrorCode::InitiatorNotAuthorized.into());
         }
 
@@ -1053,29 +1021,19 @@ impl GroupChatCore {
             .message_internal(member.min_visible_event_index(), thread_root_message_index, message_id.into())
             .ok_or(OCErrorCode::MessageNotFound)?;
 
-        if migrated_user_ids.is_same_user(message.sender, user_id) {
-            Err(OCErrorCode::CannotTipSelf.into())
-        } else {
-            Ok(message.sender)
-        }
+        if message.sender == user_id { Err(OCErrorCode::CannotTipSelf.into()) } else { Ok(message.sender) }
     }
 
-    pub fn tip_message<P: EventPusher>(
-        &mut self,
-        args: TipMessageArgs,
-        migrated_user_ids: &MigratedUserIds,
-        event_pusher: P,
-    ) -> OCResult<UpdateMessageSuccess> {
+    pub fn tip_message<P: EventPusher>(&mut self, args: TipMessageArgs, event_pusher: P) -> OCResult<UpdateMessageSuccess> {
         let member = self.members.get_verified_member(args.user_id)?;
 
-        if !member.role().can_react_to_messages(&self.permissions) {
+        if !member.role().can_tip_messages(&self.permissions) {
             return Err(OCErrorCode::InitiatorNotAuthorized.into());
         }
 
         let min_visible_event_index = member.min_visible_event_index();
 
-        self.events
-            .tip_message(args, min_visible_event_index, migrated_user_ids, Some(event_pusher))
+        self.events.tip_message(args, min_visible_event_index, Some(event_pusher))
     }
 
     pub fn delete_messages(
@@ -1085,7 +1043,6 @@ impl GroupChatCore {
         message_ids: Vec<MessageId>,
         as_platform_moderator: bool,
         now: TimestampMillis,
-        migrated_user_ids: &MigratedUserIds,
     ) -> OCResult<Vec<(MessageId, OCResult<DeleteMessageSuccess>)>> {
         let initiator = caller.initiator();
 
@@ -1110,17 +1067,14 @@ impl GroupChatCore {
             _ => (true, EventIndex::default()),
         };
 
-        let results = self.events.delete_messages(
-            DeleteUndeleteMessagesArgs {
-                caller: caller.agent(),
-                is_admin,
-                min_visible_event_index,
-                thread_root_message_index,
-                message_ids,
-                now,
-            },
-            migrated_user_ids,
-        );
+        let results = self.events.delete_messages(DeleteUndeleteMessagesArgs {
+            caller: caller.agent(),
+            is_admin,
+            min_visible_event_index,
+            thread_root_message_index,
+            message_ids,
+            now,
+        });
 
         if thread_root_message_index.is_none() {
             for message_id in results
@@ -1158,24 +1112,20 @@ impl GroupChatCore {
         thread_root_message_index: Option<MessageIndex>,
         message_ids: Vec<MessageId>,
         now: TimestampMillis,
-        migrated_user_ids: &MigratedUserIds,
     ) -> OCResult<Vec<UndeleteMessageSuccess>> {
         let user_id = user.user_id;
         let member = self.members.get_verified_member(user_id)?;
 
         let min_visible_event_index = member.min_visible_event_index();
 
-        let results = self.events.undelete_messages(
-            DeleteUndeleteMessagesArgs {
-                caller: user_id,
-                is_admin: member.role().can_delete_messages(&self.permissions),
-                min_visible_event_index,
-                thread_root_message_index,
-                message_ids,
-                now,
-            },
-            migrated_user_ids,
-        );
+        let results = self.events.undelete_messages(DeleteUndeleteMessagesArgs {
+            caller: user_id,
+            is_admin: member.role().can_delete_messages(&self.permissions),
+            min_visible_event_index,
+            thread_root_message_index,
+            message_ids,
+            now,
+        });
 
         let events_reader = self
             .events
@@ -1478,16 +1428,6 @@ impl GroupChatCore {
             member: removed,
             bot_notification: result.bot_notification,
         })
-    }
-
-    // Moves the membership, block, invitation and metrics of a user migrated to a MultiUser canister
-    // onto their new id. Events which refer to the user by their old id are left as they are. Returns
-    // whether anything changed.
-    pub fn migrate_user_id(&mut self, old_user_id: UserId, new_user_id: UserId, now: TimestampMillis) -> bool {
-        let members_updated = self.members.migrate_user_id(old_user_id, new_user_id, now);
-        let invitations_updated = self.invited_users.migrate_user_id(old_user_id, new_user_id, now);
-        let metrics_updated = self.events.migrate_user_metrics(old_user_id, new_user_id);
-        members_updated || invitations_updated || metrics_updated
     }
 
     pub fn remove_member(
@@ -1849,17 +1789,11 @@ impl GroupChatCore {
         user_id: UserId,
         thread_root_message_index: MessageIndex,
         now: TimestampMillis,
-        migrated_user_ids: &MigratedUserIds,
     ) -> OCResult {
         let member = self.members.get_verified_member(user_id)?;
 
-        self.events.follow_thread(
-            thread_root_message_index,
-            user_id,
-            member.min_visible_event_index(),
-            now,
-            migrated_user_ids,
-        )?;
+        self.events
+            .follow_thread(thread_root_message_index, user_id, member.min_visible_event_index(), now)?;
 
         self.members.update_member(&user_id, |m| {
             m.followed_threads.insert(thread_root_message_index, now);
@@ -1874,17 +1808,11 @@ impl GroupChatCore {
         user_id: UserId,
         thread_root_message_index: MessageIndex,
         now: TimestampMillis,
-        migrated_user_ids: &MigratedUserIds,
     ) -> OCResult {
         let member = self.members.get_verified_member(user_id)?;
 
-        self.events.unfollow_thread(
-            thread_root_message_index,
-            user_id,
-            member.min_visible_event_index(),
-            now,
-            migrated_user_ids,
-        )?;
+        self.events
+            .unfollow_thread(thread_root_message_index, user_id, member.min_visible_event_index(), now)?;
 
         self.members.update_member(&user_id, |m| {
             m.followed_threads.remove(thread_root_message_index);
@@ -1902,23 +1830,19 @@ impl GroupChatCore {
         option_index: u32,
         operation: VoteOperation,
         now: TimestampMillis,
-        migrated_user_ids: &MigratedUserIds,
     ) -> OCResult<UpdateMessageSuccess<RegisterPollVoteSuccess>> {
         let member = self.members.get_verified_member(user_id)?;
         let min_visible_event_index = member.min_visible_event_index();
 
-        self.events.register_poll_vote(
-            RegisterPollVoteArgs {
-                user_id,
-                min_visible_event_index,
-                thread_root_message_index,
-                message_index,
-                option_index,
-                operation,
-                now,
-            },
-            migrated_user_ids,
-        )
+        self.events.register_poll_vote(RegisterPollVoteArgs {
+            user_id,
+            min_visible_event_index,
+            thread_root_message_index,
+            message_index,
+            option_index,
+            operation,
+            now,
+        })
     }
 
     pub fn reserve_prize(
@@ -1932,7 +1856,6 @@ impl GroupChatCore {
         streak: u16,
         streak_ends: TimestampMillis,
         user_reauthenticated: bool,
-        migrated_user_ids: &MigratedUserIds,
     ) -> OCResult<ReservePrizeSuccess> {
         let member = self.members.get_verified_member(user_id)?;
         let min_visible_event_index = member.min_visible_event_index();
@@ -1948,7 +1871,6 @@ impl GroupChatCore {
             streak,
             streak_ends,
             user_reauthenticated,
-            migrated_user_ids,
         )
     }
 
@@ -1979,11 +1901,10 @@ impl GroupChatCore {
         thread_root_message_index: Option<MessageIndex>,
         message_id: MessageId,
         now: TimestampMillis,
-        migrated_user_ids: &MigratedUserIds,
     ) -> OCResult<UpdateMessageSuccess<u32>> {
         if self.members.contains(&user_id) {
             self.events
-                .cancel_p2p_swap(user_id, thread_root_message_index, message_id, now, migrated_user_ids)
+                .cancel_p2p_swap(user_id, thread_root_message_index, message_id, now)
         } else {
             Err(OCErrorCode::InitiatorNotInChat.into())
         }
@@ -2025,12 +1946,25 @@ impl GroupChatCore {
     }
 
     fn unfollow_removed_threads(&mut self, threads: &[ExpiredThread]) {
+        // Each follower is updated once for all of the threads they followed, and the followers
+        // updated are written back together
+        let mut threads_by_follower: BTreeMap<UserId, Vec<MessageIndex>> = BTreeMap::new();
         for thread in threads.iter() {
             for user_id in thread.followers.iter() {
-                self.members
-                    .update_member(user_id, |m| m.followed_threads.remove(thread.root_message_index).is_some());
+                threads_by_follower
+                    .entry(*user_id)
+                    .or_default()
+                    .push(thread.root_message_index);
             }
         }
+        let user_ids: Vec<_> = threads_by_follower.keys().copied().collect();
+        self.members.update_many(user_ids, |m| {
+            let mut updated = false;
+            for root_message_index in threads_by_follower[&m.user_id()].iter() {
+                updated |= m.followed_threads.remove(*root_message_index).is_some();
+            }
+            updated
+        });
     }
 
     pub fn most_recent_mentions(&self, member: &GroupMemberInternal, since: Option<TimestampMillis>) -> Vec<HydratedMention> {
@@ -2145,6 +2079,7 @@ impl GroupChatCore {
             add_members: new.add_members.unwrap_or(old.add_members),
             invite_users: new.invite_users.unwrap_or(old.invite_users),
             react_to_messages: new.react_to_messages.unwrap_or(old.react_to_messages),
+            tip_messages: new.tip_messages.unwrap_or(old.tip_messages),
             mention_all_members: new.mention_all_members.unwrap_or(old.mention_all_members),
             start_video_call: new.start_video_call.unwrap_or(old.start_video_call),
             message_permissions,
@@ -2464,7 +2399,6 @@ mod tests {
                 vec![1u64.into()],
                 false,
                 40,
-                &MigratedUserIds::default(),
             )
             .unwrap();
         assert!(results.iter().all(|(_, result)| result.is_ok()));
@@ -2475,6 +2409,109 @@ mod tests {
             .selected_group_updates(30, chat.details_last_updated(), Some(owner))
             .unwrap();
         assert_eq!(updates.pinned_messages_removed, vec![MessageIndex::default()]);
+    }
+
+    #[test]
+    fn a_thread_reply_updates_every_follower() {
+        let (mut chat, owner, muted_member) = setup();
+        // Of different lengths, so that their order differs from that of their keys
+        let [member1, member2] = [&[9, 9][..], &[4]].map(|bytes| UserId::from(Principal::from_slice(bytes)));
+        for user_id in [member1, member2] {
+            chat.members.add(
+                user_id,
+                None,
+                1,
+                EventIndex::default(),
+                MessageIndex::default(),
+                false,
+                UserType::User,
+            );
+        }
+
+        // The first reply makes its sender, those it mentions and the root message's sender followers
+        let root = MessageIndex::default();
+        send_as(&mut chat, owner, None, 1, &[], 10);
+        send_as(&mut chat, member1, Some(root), 2, &[member2], 20);
+        let result = send_as(&mut chat, muted_member, Some(root), 3, &[], 30);
+
+        for user_id in [owner, member1, member2, muted_member] {
+            let member = chat.members.get(&user_id).unwrap();
+            assert_eq!(member.followed_threads.get(&root), Some(30));
+            let mentioned = member.mentions.iter_most_recent(None).count();
+            assert_eq!(mentioned, if user_id == owner || user_id == member2 { 1 } else { 0 });
+        }
+        assert_eq!(sorted(result.users_to_notify), sorted(vec![owner, member1, member2]));
+    }
+
+    #[test]
+    fn unfollowing_removed_threads_matches_unfollowing_each_in_turn() {
+        let removed_threads = |owner, member| {
+            [
+                ExpiredThread {
+                    root_message_index: 0.into(),
+                    followers: [owner, member].into_iter().collect(),
+                },
+                ExpiredThread {
+                    root_message_index: 1.into(),
+                    followers: [member].into_iter().collect(),
+                },
+            ]
+        };
+        // Each member follows 3 threads, of which 2 are removed, and the owner 1 of them
+        let setup_following = || {
+            let (mut chat, owner, member) = setup();
+            for (root_message_index, user_id) in [(0, owner), (0, member), (1, member), (2, member)] {
+                chat.members.update_member(&user_id, |m| {
+                    m.followed_threads.insert(root_message_index.into(), 5);
+                    true
+                });
+            }
+            (chat, owner, member)
+        };
+
+        let (mut one_at_a_time, owner, member) = setup_following();
+        for thread in removed_threads(owner, member) {
+            for user_id in thread.followers.iter() {
+                one_at_a_time
+                    .members
+                    .update_member(user_id, |m| m.followed_threads.remove(thread.root_message_index).is_some());
+            }
+        }
+        let expected = one_at_a_time.members.stored_entries();
+
+        let (mut together, owner, member) = setup_following();
+        together.unfollow_removed_threads(&removed_threads(owner, member));
+
+        assert_eq!(together.members.stored_entries(), expected);
+        let followed = |user_id| together.members.get(&user_id).unwrap().followed_threads.len();
+        assert_eq!((followed(owner), followed(member)), (0, 1));
+    }
+
+    fn send_as(
+        chat: &mut GroupChatCore,
+        sender: UserId,
+        thread_root_message_index: Option<MessageIndex>,
+        message_id: u64,
+        mentioned: &[UserId],
+        now: TimestampMillis,
+    ) -> SendMessageSuccess {
+        chat.send_message(
+            &Caller::User(UserIdAndPrincipal::new(sender, sender.as_principal())),
+            thread_root_message_index,
+            message_id.into(),
+            text_content("hello"),
+            None,
+            mentioned,
+            false,
+            None,
+            false,
+            false,
+            NullEventPusher,
+            true,
+            Vec::new(),
+            now,
+        )
+        .unwrap()
     }
 
     // Sends an unfinalised bot message, then finalises it with the given text
@@ -2517,7 +2554,6 @@ mod tests {
             NullEventPusher,
             finalised,
             Vec::new(),
-            &MigratedUserIds::default(),
             now,
         )
         .unwrap()

@@ -15,7 +15,7 @@
     import { navigate } from "@utils/navigation";
     import { getContext, onMount } from "svelte";
     import { i18nKey } from "../../../i18n/i18n";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import ChannelCard from "./ChannelCard.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -30,7 +30,7 @@
     let selectedCommunityId = $derived(community.id);
     let searching = $state(false);
     let pageIndex = 0;
-    let pageSize = 100;
+    const pageSize = 100;
     let searchResults: ChannelMatch[] = $state([]);
     let total = $state(0);
     let matchedCommunityId: CommunityIdentifier | undefined = undefined;

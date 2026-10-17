@@ -31,15 +31,16 @@ const calls = vi.hoisted(() => ({
     scrollIntoView: vi.fn<(options?: ScrollIntoViewOptions) => void>(),
 }));
 vi.mock("@client", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return {
+        ...(await import("@client/utils/stores")),
         currentUserIdStore: writable("synthetic-account"),
         identityStateStore: writable({ kind: "logged_in" }),
     };
 });
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
 vi.mock("../theme/themes", async () => ({
-    currentTheme: (await import("svelte/store")).writable({ mode: "light" }),
+    currentTheme: (await import("@client/utils/stores")).writable({ mode: "light" }),
 }));
 vi.mock("@utils/navigation", () => ({ navigate: calls.navigate }));
 vi.mock("../utils/urls", () => ({ openExternalUrl: calls.openExternal }));
@@ -67,10 +68,10 @@ vi.mock("../utils/localAppDraftPersistence", async (importOriginal) => ({
 vi.mock("../utils/localAppRelayDelivery", async () => ({
     deliverLocalAppViaRelay: calls.deliver,
     cancelLocalAppHandoffs: calls.cancel,
-    localAppDeliveryStatus: (await import("svelte/store")).writable(undefined),
+    localAppDeliveryStatus: (await import("@client/utils/stores")).writable(undefined),
 }));
 vi.mock("../utils/nativeAppDelivery", async () => ({
-    nativeAppPairing: (await import("svelte/store")).writable(undefined),
+    nativeAppPairing: (await import("@client/utils/stores")).writable(undefined),
     nativeAppDelivery: {
         deliver: calls.nativeDeliver,
         cancelAll: vi.fn(),

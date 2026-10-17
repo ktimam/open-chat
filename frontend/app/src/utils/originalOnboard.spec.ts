@@ -8,8 +8,9 @@ import MobileOnboard from "../components_mobile/onboard/OnboardModal.svelte";
 
 const calls = vi.hoisted(() => ({ navigate: vi.fn(), stopVersionChecker: vi.fn() }));
 vi.mock("@client", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return {
+        ...(await import("@client/utils/stores")),
         OpenChat: class {},
         AuthProvider: {
             PASSKEY: "Passkey",
@@ -26,7 +27,8 @@ vi.mock("@client", async () => {
         selectedAuthProviderStore: writable(undefined),
     };
 });
-vi.mock("@shared", () => ({
+vi.mock("@shared", async () => ({
+    ...(await import("@shared/utils/configKeys")),
     ErrorCode: { AlreadyRegistered: 1, LinkingCodeNotFound: 2, MaxLinkedIdentitiesLimitReached: 3 },
 }));
 vi.mock("@utils/navigation", () => ({ navigate: calls.navigate }));
@@ -38,7 +40,7 @@ vi.mock("@src/i18n/i18n", () => ({
     supportedLanguages: [{ code: "en", name: "English" }],
 }));
 vi.mock("svelte-i18n", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return { locale: writable("en"), _: writable((key: string) => key) };
 });
 vi.mock("@src/utils/version.svelte", () => ({
@@ -48,10 +50,12 @@ vi.mock("@src/utils/version.svelte", () => ({
     },
 }));
 vi.mock("@src/utils/signin", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return {
         EmailSigninHandler: class {
-            subscribe = writable(false).subscribe;
+            #state = writable(false);
+            subscribe = (run: (value: boolean) => void, invalidate?: () => void) =>
+                this.#state.subscribe(run, invalidate);
         },
     };
 });
@@ -77,13 +81,13 @@ vi.mock("../components/ButtonGroup.svelte", async () => ({
 vi.mock("../components/Input.svelte", async () => ({
     default: (await import("./originalOnboard.spec.shell.svelte")).default,
 }));
-vi.mock("../components/Translatable.svelte", async () => ({
+vi.mock("@shared_components/Translatable.svelte", async () => ({
     default: (await import("./originalOnboard.spec.shell.svelte")).default,
 }));
 vi.mock("../components/ErrorMessage.svelte", async () => ({
     default: (await import("./originalOnboard.spec.shell.svelte")).default,
 }));
-vi.mock("../components/home/EmailSigninFeedback.svelte", async () => ({
+vi.mock("@shared_components/home/EmailSigninFeedback.svelte", async () => ({
     default: (await import("./originalOnboard.spec.shell.svelte")).default,
 }));
 vi.mock("../components/home/profile/OnBoardOptionLogo.svelte", async () => ({
@@ -93,9 +97,6 @@ vi.mock("../components/home/profile/SignInOption.svelte", async () => ({
     default: (await import("./originalOnboard.spec.shell.svelte")).default,
 }));
 vi.mock("../components/onboard/SignUp.svelte", async () => ({
-    default: (await import("./originalOnboard.spec.shell.svelte")).default,
-}));
-vi.mock("../components_mobile/Translatable.svelte", async () => ({
     default: (await import("./originalOnboard.spec.shell.svelte")).default,
 }));
 vi.mock("../components_mobile/ErrorMessage.svelte", async () => ({

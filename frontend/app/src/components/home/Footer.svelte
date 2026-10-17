@@ -28,7 +28,7 @@
     import HoverIcon from "../HoverIcon.svelte";
     import ModalContent from "../ModalContent.svelte";
     import Progress from "../Progress.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import DraftMediaMessage from "./DraftMediaMessage.svelte";
     import EmojiPicker from "./EmojiPickerWrapper.svelte";
     import MessageEntry from "./MessageEntry.svelte";
@@ -98,7 +98,6 @@
 
     let ephemeralMessageEvent = $state<EphemeralMessageEvent>();
     let messageAction: MessageAction = $state(undefined);
-    //@ts-ignore
     let messageEntry: MessageEntry;
 
     onMount(() => {
@@ -126,7 +125,7 @@
             client
                 .messageContentFromFile(file, context)
                 .then((content) => {
-                    let permission = client.contentTypeToPermission(content.kind);
+                    const permission = client.contentTypeToPermission(content.kind);
                     if (client.canSendMessage(context.chatId, mode, permission)) {
                         onFileSelected(content, context);
                     } else {

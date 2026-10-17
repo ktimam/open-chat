@@ -20,7 +20,7 @@
     import Refresh from "svelte-material-icons/Refresh.svelte";
     import { now500 } from "../../stores/time";
     import { toastStore } from "../../stores/toast";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AiAppSurfaceDestination from "../../components/home/AiAppSurfaceDestination.svelte";
 
     const client = getContext<OpenChat>("client");

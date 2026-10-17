@@ -12,7 +12,7 @@
     import Overlay from "../Overlay.svelte";
     import Select from "../Select.svelte";
     import TextArea from "../TextArea.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     interface Props {
         chatId: ChatIdentifier;
@@ -28,7 +28,7 @@
     let busy = $state(false);
     let note: string = $state("");
     let selectedIntervalIndex = $state(0);
-    let intervals = [
+    const intervals = [
         {
             label: i18nKey("reminders.twentyMinutes"),
             index: 0,

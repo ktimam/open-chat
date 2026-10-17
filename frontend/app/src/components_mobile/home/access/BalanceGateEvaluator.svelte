@@ -1,6 +1,6 @@
 <script lang="ts">
     import MulticolourText from "@src/components_mobile/MulticolourText.svelte";
-    import { accessApprovalState } from "@src/utils/preview.svelte";
+    import type { GateEvaluation } from "@shared_components/home/access/gateEvaluation.svelte";
     import {
         Avatar,
         Body,
@@ -18,20 +18,21 @@
     import Chart from "svelte-material-icons/ChartBoxOutline.svelte";
     import QrCode from "svelte-material-icons/Qrcode.svelte";
     import { i18nKey, interpolate } from "../../../i18n/i18n";
-    import Translatable from "../../Translatable.svelte";
-    import { TokenState } from "../wallet/walletState.svelte";
-    import AccessGateExpiry from "./AccessGateExpiry.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
+    import { TokenState } from "@shared_components/home/wallet/walletState.svelte";
+    import AccessGateExpiry from "@shared_components/home/access/AccessGateExpiry.svelte";
 
     interface Props {
         gate: TokenBalanceGate & { expiry: bigint | undefined };
+        evaluation: GateEvaluation;
         onClose: () => void;
     }
 
-    let { gate, onClose }: Props = $props();
+    let { gate, evaluation, onClose }: Props = $props();
 
     let tokenState = $derived(new TokenState($enhancedCryptoLookup.get(gate.ledgerCanister)));
     let cryptoBalance = $derived(
-        accessApprovalState.balanceAfterCurrentCommitments(
+        evaluation.balanceAfterCurrentCommitments(
             tokenState.ledger,
             tokenState.cryptoBalance,
         ),

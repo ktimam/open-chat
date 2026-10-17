@@ -36,15 +36,15 @@
     import Pound from "svelte-material-icons/Pound.svelte";
     import Share from "svelte-material-icons/ShareVariantOutline.svelte";
     import Edit from "svelte-material-icons/SquareEditOutline.svelte";
-    import Translatable from "../../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AccessGateSummary from "../../AccessGateSummary.svelte";
-    import { updateGroupState } from "../../createOrUpdateGroup/group.svelte";
+    import { updateGroupState } from "@shared_components/home/createOrUpdateGroup/group.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
     import BotsSummary from "../../membership/BotsSummary.svelte";
     import MembersSummary from "../../membership/MembersSummary.svelte";
     import Separator from "../../Separator.svelte";
     import Stats from "../../Stats.svelte";
-    import { updateCommunityState } from "../createOrUpdate/community.svelte";
+    import { updateCommunityState } from "@shared_components/home/communities/createOrUpdate/community.svelte";
     import { CommunityState } from "./communityState.svelte";
     import PermissionsSummary from "./PermissionsSummary.svelte";
     import UserGroupSummary from "./UserGroupSummary.svelte";
@@ -57,8 +57,8 @@
 
     let { community }: Props = $props();
 
-    let communityState = new CommunityState(client, community);
-    let busy = $state(false);
+    const communityState = new CommunityState(client, community);
+    const busy = $state(false);
     let ownerMember = $derived(
         [...$selectedCommunityMembersStore.values()].find((m) => m.role === ROLE_OWNER),
     );

@@ -32,7 +32,7 @@
     } from "../../../stores/video";
     import Avatar from "../../Avatar.svelte";
     import FancyLoader from "../../icons/FancyLoader.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -66,13 +66,14 @@
             const chat = client.lookupChatSummary(chatId);
             if (chat) {
                 switch (chat.kind) {
-                    case "direct_chat":
+                    case "direct_chat": {
                         const them = $allUsersStore.get(chat.them.userId);
                         return {
                             name: client.displayName(them),
                             avatarUrl: client.userAvatarUrl(them),
                             userId: chat.them,
                         };
+                    }
                     case "group_chat":
                         return {
                             name: chat.name,

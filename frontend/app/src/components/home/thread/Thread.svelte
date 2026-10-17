@@ -65,11 +65,11 @@
     let { rootEvent, chat, onCloseThread }: Props = $props();
 
     let chatEventList: ChatEventList | undefined = $state();
-    //@ts-ignore
+    // @ts-expect-error bind:this sets it after mount
     let pollBuilder: PollBuilder = $state();
-    //@ts-ignore
+    // @ts-expect-error bind:this sets it after mount
     let giphySelector: GiphySelector = $state();
-    //@ts-ignore
+    // @ts-expect-error bind:this sets it after mount
     let memeBuilder: MemeBuilder = $state();
     let creatingPoll = $state(false);
     let creatingCryptoTransfer: { ledger: string; amount: bigint } | undefined = $state(undefined);
@@ -94,6 +94,7 @@
     let editingEvent = $derived($selectedThreadDraftMessageStore?.editingEvent);
     let canSendAny = $derived(client.canSendMessage(chat.id, "thread"));
     let canReact = $derived(client.canReactToMessages(chat.id));
+    let canTipMessages = $derived(client.canTipMessages(chat.id));
     let atRoot = $derived($threadEventsStore.length === 0 || $threadEventsStore[0]?.index === 0);
     let events = $derived(
         atRoot && rootEvent !== undefined ? [rootEvent, ...$threadEventsStore] : $threadEventsStore,
@@ -174,7 +175,7 @@
 
     function onSendMessage(detail: [string | undefined, User[], boolean]) {
         if (!canSendAny) return;
-        let [text, mentioned, blockLevelMarkdown] = detail;
+        const [text, mentioned, blockLevelMarkdown] = detail;
         if (editingEvent !== undefined) {
             client
                 .editMessageWithAttachment(
@@ -421,6 +422,7 @@
                         editing={editingEvent === evt}
                         canSendAny
                         {canReact}
+                        {canTipMessages}
                         canInvite={false}
                         canReplyInThread={false}
                         collapsed={false}

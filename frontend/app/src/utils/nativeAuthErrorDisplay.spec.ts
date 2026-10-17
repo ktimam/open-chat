@@ -6,7 +6,7 @@ import { flushSync } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 import { addMessages, init, locale } from "svelte-i18n";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import Translatable from "../components_mobile/Translatable.svelte";
+import Translatable from "@shared_components/Translatable.svelte";
 import arabic from "../i18n/ar.json";
 import english from "../i18n/en.json";
 import { i18nKey } from "../i18n/i18n";
@@ -15,8 +15,8 @@ import { nativeAuthErrorKey } from "./nativeAuthErrorKey";
 // Translation edit-mode styling is unrelated to auth display; the actual
 // Translatable component, action, formatter and message catalogs remain real.
 vi.mock("../theme/themes", async () => {
-    const { readable } = await import("svelte/store");
-    return { currentTheme: readable({ accent: "#22a7f2" }) };
+    const { readable } = await import("@client/utils/stores");
+    return { currentTheme: readable({ accent: "#22a7f2" }, () => undefined) };
 });
 
 const filename = resolve(process.cwd(), "app/src/components_mobile/onboard/OnboardModal.svelte");

@@ -1,9 +1,11 @@
-import DRange from "drange";
 import {
     ChatMap,
     CommunityMap,
     emptyChatMetrics,
     emptyRules,
+    LEDGER_CANISTER_CKBTC,
+    LEDGER_CANISTER_CKETH,
+    LEDGER_CANISTER_ICP,
     nullMembership,
     ROLE_ADMIN,
     ROLE_MEMBER,
@@ -15,6 +17,7 @@ import {
     type CommunityIdentifier,
     type CommunityPermissions,
     type CommunitySummary,
+    type CryptocurrencyDetails,
     type EventWrapper,
     type GroupChatIdentifier,
     type GroupChatSummary,
@@ -38,11 +41,23 @@ import {
     routeStore,
     selectedCommunityIdStore,
 } from "../path/stores";
+import { FilteredProposals } from "../filteredProposals.svelte";
+import {
+    currentChatVisit,
+    expandDeletedMessages,
+    filteredProposalsStore,
+    selectedChatExpandedDeletedMessageStore,
+    selectedChatFor,
+    selectedServerChatStore,
+    serverEventsStore,
+    startChatVisit,
+} from "../selectedChat";
 import { suspendedUsersStore } from "../users/stores";
 import { addToWritableMap } from "../utils";
 import {
     allChatsStore,
     cryptoBalanceStore,
+    cryptoLookup,
     allServerChatsStore,
     chatListScopeStore,
     chatSummariesListStore,
@@ -51,23 +66,21 @@ import {
     directChatBotsStore,
     eventsStore,
     globalUnreadCountStore,
-    expiredServerEventRanges,
+    getConvertedBalances,
     messageFiltersStore,
     pinnedChatsStore,
-    selectedChatExpandedDeletedMessageStore,
     selectedChatIdStore,
     selectedChatBlockedOrSuspendedUsersStore,
     selectedChatMembersStore,
-    selectedChatUserIdsStore,
+    selectedChatRulesStore,
     selectedCommunityBlockedUsersStore,
     selectedCommunityMembersStore,
-    selectedServerChatStore,
     selectedServerCommunityStore,
     serverCommunitiesStore,
-    serverEventsStore,
     serverGroupChatsStore,
     serverPinnedChatsStore,
     translationsStore,
+    walletTokenBySymbol,
 } from "./stores";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -86,11 +99,9 @@ const mockContext: PageJS.Context = {
     params: {},
 };
 
+// A new visit to the selected chat, which starts with no events
 function setSelectedChat() {
-    serverEventsStore.set([]);
-    expiredServerEventRanges.set(new DRange());
-    selectedChatUserIdsStore.set(new Set());
-    selectedChatExpandedDeletedMessageStore.set(new Set());
+    startChatVisit(selectedChatIdStore.value);
 }
 
 function setRouteParams(ctx: PageJS.Context, p: RouteParams) {
@@ -165,7 +176,7 @@ describe("app state", () => {
 
         function setChatDetails(chatId: ChatIdentifier) {
             setSelectedChat();
-            selectedServerChatStore.set(
+            currentChatVisit()?.setDetails(
                 new ChatDetailsState(
                     chatId,
                     BigInt(0),
@@ -189,9 +200,10 @@ describe("app state", () => {
                     emptyRules(),
                 ),
             );
-            serverEventsStore.update(() => {
-                return [chatMessage()];
-            });
+            const selected = selectedChatIdStore.value;
+            if (selected !== undefined) {
+                selectedChatFor(selected)?.updateEvents(() => [chatMessage()]);
+            }
         }
 
         describe("setting chat details", () => {
@@ -207,10 +219,41 @@ describe("app state", () => {
             });
 
             test("make sure that all state is overwritten if the chatId *does* change", () => {
-                selectedChatExpandedDeletedMessageStore.set(new Set([1, 2, 3]));
+                expandDeletedMessages(new Set([1, 2, 3]));
+                currentChatVisit()?.setFilteredProposals(new FilteredProposals("aaaaa-aa"));
                 expect(selectedChatExpandedDeletedMessageStore.value.has(3)).toBe(true);
+                expect(filteredProposalsStore.value).toBeDefined();
                 setChatDetails({ ...chatId, channelId: 654321 }); // reset the server state for a different chatId
                 expect(selectedChatExpandedDeletedMessageStore.value.has(3)).toBe(false);
+                expect(filteredProposalsStore.value).toBeUndefined();
+            });
+
+            test("the details are cleared when a different chat is selected", () => {
+                expect(selectedChatRulesStore.value).toBeDefined();
+                setRouteParams(mockContext, {
+                    kind: "selected_channel_route",
+                    chatId: { ...chatId, channelId: 654321 },
+                    communityId,
+                    messageIndex: 0,
+                    open: false,
+                    scope: { kind: "community", id: communityId },
+                });
+                expect(selectedServerChatStore.value).toBeUndefined();
+                expect(selectedChatRulesStore.value).toBeUndefined();
+                expect(selectedChatMembersStore.value.size).toBe(0);
+            });
+
+            test("the details are kept when the route changes within the chat", () => {
+                setRouteParams(mockContext, {
+                    kind: "selected_channel_route",
+                    chatId,
+                    communityId,
+                    messageIndex: 5,
+                    open: false,
+                    scope: { kind: "community", id: communityId },
+                });
+                expect(selectedServerChatStore.value?.chatId).toEqual(chatId);
+                expect(selectedChatMembersStore.value.has("user_one")).toBe(true);
             });
         });
 
@@ -366,12 +409,16 @@ describe("app state", () => {
                         groupId,
                         undefined,
                         undefined,
-                        { changeRoles: ROLE_OWNER },
+                        {
+                            changeRoles: ROLE_OWNER,
+                            messagePermissions: undefined,
+                            threadPermissions: undefined,
+                        },
                         { gate: { kind: "diamond_gate" }, expiry: undefined },
                     );
                     const client = get(allChatsStore).get(groupId);
                     if (client?.kind !== "group_chat" || server?.kind !== "group_chat") {
-                        fail("expected group chats");
+                        throw new Error("expected group chats");
                     }
                     expect(client.permissions.changeRoles).toEqual(ROLE_OWNER);
                     expect(server.permissions.changeRoles).toEqual(ROLE_ADMIN);
@@ -830,6 +877,7 @@ function groupChat(groupId: string, lastMessage?: EventWrapper<Message>): GroupC
             addMembers: ROLE_ADMIN,
             mentionAllMembers: ROLE_MEMBER,
             reactToMessages: ROLE_MEMBER,
+            tipMessages: ROLE_MEMBER,
             startVideoCall: ROLE_MEMBER,
             messagePermissions: {
                 default: ROLE_MEMBER,
@@ -870,7 +918,7 @@ function groupChatExpectation(id: GroupChatIdentifier, fn: (g: GroupChatSummary)
     if (g && g.kind === "group_chat") {
         fn(g);
     } else {
-        fail("Could not find expected group chat");
+        throw new Error("Could not find expected group chat");
     }
 }
 
@@ -922,6 +970,123 @@ describe("cryptoBalanceStore", () => {
         expect(cryptoBalanceStore.value.get("ledger1")).toBe(200n);
         expect(cryptoBalanceStore.valueIfUpdatedRecently("ledger1")).toBe(200n);
         unsub();
+    });
+});
+
+describe("getConvertedBalances", () => {
+    // Two tokens in the registry with the symbol TENDY
+    const TENDY_LEDGER = "kylwo-viaaa-aaaaq-aae7a-cai";
+    const OTHER_TENDY_LEDGER = "iozql-7iaaa-aaaah-advvq-cai";
+    const xr = new Map([
+        [LEDGER_CANISTER_ICP, { toUSD: 4 }],
+        [LEDGER_CANISTER_CKBTC, { toUSD: 80_000 }],
+        [LEDGER_CANISTER_CKETH, { toUSD: 2_000 }],
+        [TENDY_LEDGER, { toUSD: 0.08 }],
+        [OTHER_TENDY_LEDGER, { toUSD: 0.3 }],
+    ]);
+    // 40,000 tokens with 8 decimals
+    const balance = 4_000_000_000_000n;
+
+    test("values a balance at its own ledger's rate, not that of a token with the same symbol", () => {
+        expect(getConvertedBalances(xr, balance, 8, TENDY_LEDGER).dollarBalance).toBeCloseTo(3_200);
+        expect(getConvertedBalances(xr, balance, 8, OTHER_TENDY_LEDGER).dollarBalance).toBeCloseTo(
+            12_000,
+        );
+    });
+
+    test("converts to ICP, BTC and ETH at the rates of the ICP, ckBTC and ckETH ledgers", () => {
+        const converted = getConvertedBalances(xr, balance, 8, TENDY_LEDGER);
+
+        expect(converted.icpBalance).toBeCloseTo(800);
+        expect(converted.btcBalance).toBeCloseTo(0.04);
+        expect(converted.ethBalance).toBeCloseTo(1.6);
+    });
+
+    test("has no value in a currency without a rate", () => {
+        const withoutCkETH = new Map(xr);
+        withoutCkETH.delete(LEDGER_CANISTER_CKETH);
+        const converted = getConvertedBalances(withoutCkETH, balance, 8, TENDY_LEDGER);
+
+        expect(converted.ethBalance).toBeUndefined();
+        expect(converted.btcBalance).toBeCloseTo(0.04);
+    });
+
+    test("has no values for a ledger without a rate", () => {
+        expect(getConvertedBalances(xr, balance, 8, "2ouva-viaaa-aaaaq-aaamq-cai")).toEqual({
+            dollarBalance: undefined,
+            icpBalance: undefined,
+            btcBalance: undefined,
+            ethBalance: undefined,
+        });
+    });
+});
+
+describe("walletTokenBySymbol", () => {
+    // Two tokens in the registry with the symbol TENDY
+    const TENDY_LEDGER = "kylwo-viaaa-aaaaq-aae7a-cai";
+    const OTHER_TENDY_LEDGER = "iozql-7iaaa-aaaah-advvq-cai";
+
+    function token(ledger: string, enabled: boolean): CryptocurrencyDetails {
+        return {
+            name: "Tendy",
+            symbol: "TENDY",
+            ledger,
+            index: undefined,
+            decimals: 8,
+            transferFee: 10_000n,
+            logo: "",
+            infoUrl: "",
+            transactionUrlFormat: "",
+            supportedStandards: [],
+            added: 0n,
+            enabled,
+            oneSecEnabled: false,
+            evmContractAddresses: [],
+            lastUpdated: 0n,
+        };
+    }
+
+    function registry(...tokens: CryptocurrencyDetails[]) {
+        cryptoLookup.set(new Map(tokens.map((t) => [t.ledger, t])));
+    }
+
+    afterEach(() => {
+        cryptoLookup.set(new Map());
+        cryptoBalanceStore.setBalance(TENDY_LEDGER, 0n);
+        cryptoBalanceStore.setBalance(OTHER_TENDY_LEDGER, 0n);
+    });
+
+    test("prefers the one the user holds", () => {
+        registry(token(TENDY_LEDGER, true), token(OTHER_TENDY_LEDGER, true));
+        cryptoBalanceStore.setBalance(OTHER_TENDY_LEDGER, 100n);
+
+        expect(walletTokenBySymbol("TENDY")?.ledger).toBe(OTHER_TENDY_LEDGER);
+    });
+
+    test("prefers an enabled one over a disabled one the user holds", () => {
+        registry(token(TENDY_LEDGER, true), token(OTHER_TENDY_LEDGER, false));
+        cryptoBalanceStore.setBalance(OTHER_TENDY_LEDGER, 100n);
+
+        expect(walletTokenBySymbol("TENDY")?.ledger).toBe(TENDY_LEDGER);
+    });
+
+    test("takes a disabled one the user holds when none is enabled", () => {
+        registry(token(TENDY_LEDGER, false), token(OTHER_TENDY_LEDGER, false));
+        cryptoBalanceStore.setBalance(OTHER_TENDY_LEDGER, 100n);
+
+        expect(walletTokenBySymbol("TENDY")?.ledger).toBe(OTHER_TENDY_LEDGER);
+    });
+
+    test("skips a disabled one the user holds none of", () => {
+        registry(token(TENDY_LEDGER, false));
+
+        expect(walletTokenBySymbol("TENDY")).toBeUndefined();
+    });
+
+    test("matches the symbol regardless of case", () => {
+        registry(token(TENDY_LEDGER, true));
+
+        expect(walletTokenBySymbol("tendy")?.ledger).toBe(TENDY_LEDGER);
     });
 });
 

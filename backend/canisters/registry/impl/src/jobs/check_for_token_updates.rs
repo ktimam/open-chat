@@ -6,7 +6,7 @@ use icrc_ledger_types::icrc::generic_metadata_value::MetadataValue;
 use std::time::Duration;
 use tracing::{error, info};
 use types::{C2CError, CanisterId};
-use utils::canister::is_target_canister_uninstalled_or_deleted;
+use utils::canister::{canister_info, is_out_of_cycles_error, is_target_canister_uninstalled_or_deleted};
 use utils::canister_timers::run_now_then_interval;
 
 pub fn start_job() {
@@ -14,7 +14,7 @@ pub fn start_job() {
 }
 
 fn run() {
-    utils::async_work::spawn_tracked(run_async());
+    ic_cdk::futures::spawn_migratory(run_async());
 }
 
 async fn run_async() {
@@ -69,6 +69,11 @@ async fn check_for_token_updates(ledger_canister_id: CanisterId) -> Result<(), C
                 args.fee = Some(fee);
             }
 
+            let burn_fee = metadata_helper.burn_fee();
+            if burn_fee != token.burn_fee {
+                args.burn_fee = Some(burn_fee);
+            }
+
             if args.has_updates() {
                 state.data.tokens.update(args, state.env.now());
             }
@@ -91,12 +96,24 @@ async fn get_metadata(ledger_canister_id: CanisterId) -> Result<Vec<(String, Met
     match icrc_ledger_canister_c2c_client::icrc1_metadata(ledger_canister_id).await {
         Ok(metadata) => Ok(metadata),
         Err(error) => {
-            if is_target_canister_uninstalled_or_deleted(error.reject_code(), error.message()) {
+            if is_ledger_uninstalled_or_deleted(ledger_canister_id, &error).await {
                 mutate_state(|state| {
                     state.data.tokens.mark_uninstalled(ledger_canister_id, state.env.now());
                 });
             }
             Err(error)
         }
+    }
+}
+
+// The IC uninstalls a ledger once it runs out of cycles, after which calls to it fail as being out of
+// cycles rather than as it having no Wasm module, so in that case ask the IC whether it still has one
+async fn is_ledger_uninstalled_or_deleted(ledger_canister_id: CanisterId, error: &C2CError) -> bool {
+    if is_target_canister_uninstalled_or_deleted(error.reject_code(), error.message()) {
+        true
+    } else if is_out_of_cycles_error(error.reject_code(), error.message()) {
+        matches!(canister_info(ledger_canister_id).await, Ok(info) if info.module_hash.is_none())
+    } else {
+        false
     }
 }

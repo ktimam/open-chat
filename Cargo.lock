@@ -458,9 +458,9 @@ checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 
 [[package]]
 name = "async-trait"
-version = "0.1.91"
+version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae36dc4177970ef04fde5178d3e2429882def40e57a451f919c098f72baa6cec"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -567,9 +567,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.17.3"
+version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00bdb5da18dac48ca2cc7cd4a98e533e8635a58e2361d13a1a4ee3888e0d72f1"
+checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
 dependencies = [
  "aws-lc-sys",
  "zeroize",
@@ -577,9 +577,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.43.0"
+version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43103168cc76fe62678a375e722fc9cb3a0146159ac5828bc4f0dfd755c2224c"
+checksum = "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27"
 dependencies = [
  "cc",
  "cmake",
@@ -806,7 +806,7 @@ dependencies = [
  "hyper-util",
  "pin-project-lite",
  "rustls 0.21.12",
- "rustls 0.23.42",
+ "rustls 0.23.45",
  "rustls-native-certs",
  "rustls-pki-types",
  "tokio",
@@ -1108,6 +1108,9 @@ dependencies = [
  "event_store_types",
  "ic-cdk 0.20.3",
  "ic-stable-structures",
+ "msgpack",
+ "serde",
+ "stable_memory",
  "stable_memory_map",
  "types",
  "utils",
@@ -1907,6 +1910,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cksol_minter_canister"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "icrc-ledger-types",
+ "serde",
+]
+
+[[package]]
+name = "cksol_minter_canister_c2c_client"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "canister_client",
+ "cksol_minter_canister",
+ "ic-cdk 0.20.3",
+ "types",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2105,7 +2128,6 @@ dependencies = [
  "candid",
  "chat_events",
  "ic_principal",
- "msgpack",
  "oc_error_codes",
  "serde",
  "serde_bytes",
@@ -2171,6 +2193,8 @@ dependencies = [
  "local_user_index_canister",
  "local_user_index_canister_c2c_client",
  "msgpack",
+ "multi_user_canister",
+ "multi_user_canister_c2c_client",
  "oc_error_codes",
  "principal_to_user_id_map",
  "proptest",
@@ -2188,8 +2212,6 @@ dependencies = [
  "tracing",
  "types",
  "url",
- "user_canister",
- "user_canister_c2c_client",
  "user_index_canister",
  "user_index_canister_c2c_client",
  "utils",
@@ -2497,6 +2519,18 @@ checksum = "3633a51a39c69ebbaa4feaa694bd83d241e4093901c84a0963b19d9bb3f0cf8f"
 dependencies = [
  "crypto-bigint 0.7.5",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "crypto_address"
+version = "0.1.0"
+dependencies = [
+ "bs58",
+ "candid",
+ "ic-ledger-types",
+ "icrc-ledger-types",
+ "sha256",
+ "sha3 0.12.0",
 ]
 
 [[package]]
@@ -3136,6 +3170,7 @@ version = "0.1.0"
 dependencies = [
  "candid",
  "chat_events",
+ "constants",
  "ic-stable-structures",
  "ic_principal",
  "msgpack",
@@ -4185,7 +4220,7 @@ dependencies = [
  "hyper-rustls 0.27.9",
  "hyper-util",
  "ring",
- "rustls 0.23.42",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -4596,6 +4631,8 @@ dependencies = [
  "local_user_index_canister",
  "local_user_index_canister_c2c_client",
  "msgpack",
+ "multi_user_canister",
+ "multi_user_canister_c2c_client",
  "oc_error_codes",
  "principal_to_user_id_map",
  "rand 0.10.2",
@@ -4607,8 +4644,6 @@ dependencies = [
  "timer_job_queues",
  "tracing",
  "types",
- "user_canister",
- "user_canister_c2c_client",
  "user_index_canister",
  "user_index_canister_c2c_client",
  "utils",
@@ -4653,13 +4688,14 @@ dependencies = [
  "icrc-ledger-types",
  "ledger_utils",
  "local_user_index_canister_c2c_client",
+ "msgpack",
+ "multi_user_canister",
  "oc_error_codes",
  "serde",
  "serde_json",
  "serde_repr",
  "tracing",
  "types",
- "user_canister",
  "utils",
 ]
 
@@ -4732,16 +4768,18 @@ dependencies = [
  "local_user_index_canister",
  "local_user_index_canister_c2c_client",
  "msgpack",
+ "multi_user_canister",
+ "multi_user_canister_c2c_client",
  "oc_error_codes",
  "rand 0.10.2",
  "search",
  "serde",
  "stable_memory",
+ "storage_index_canister",
+ "storage_index_canister_c2c_client",
  "timer_job_queues",
  "tracing",
  "types",
- "user_canister",
- "user_canister_c2c_client",
  "user_index_canister",
  "user_index_canister_c2c_client",
  "utils",
@@ -5174,7 +5212,7 @@ dependencies = [
  "http 1.4.2",
  "hyper 1.11.0",
  "hyper-util",
- "rustls 0.23.42",
+ "rustls 0.23.45",
  "rustls-native-certs",
  "tokio",
  "tokio-rustls 0.26.4",
@@ -6311,7 +6349,6 @@ dependencies = [
  "translations_canister",
  "types",
  "unruly",
- "user_canister",
  "user_index_canister",
  "utils",
  "wat",
@@ -6733,9 +6770,9 @@ dependencies = [
 name = "legacy_bot_api"
 version = "0.1.0"
 dependencies = [
+ "multi_user_canister",
  "serde",
  "types",
- "user_canister",
 ]
 
 [[package]]
@@ -6912,6 +6949,7 @@ dependencies = [
  "event_store_types",
  "group_canister",
  "ic-ledger-types",
+ "multi_user_canister",
  "notifications_index_canister",
  "oc_error_codes",
  "serde",
@@ -6919,7 +6957,6 @@ dependencies = [
  "ts-rs",
  "ts_export",
  "types",
- "user_canister",
 ]
 
 [[package]]
@@ -6983,7 +7020,6 @@ dependencies = [
  "ic-cdk-timers",
  "ic-stable-structures",
  "icrc-ledger-types",
- "itertools 0.15.0",
  "json",
  "jwt",
  "ledger_utils",
@@ -6993,8 +7029,6 @@ dependencies = [
  "multi_user_canister_c2c_client",
  "notifications_index_canister",
  "oc_error_codes",
- "online_users_canister",
- "online_users_canister_c2c_client",
  "p256_key_pair",
  "per_round_timer",
  "principal_to_user_id_map",
@@ -7011,8 +7045,6 @@ dependencies = [
  "timer_job_queues",
  "tracing",
  "types",
- "user_canister",
- "user_canister_c2c_client",
  "user_ids_set",
  "user_index_canister",
  "user_index_canister_c2c_client",
@@ -7372,8 +7404,17 @@ name = "multi_user_canister"
 version = "0.1.0"
 dependencies = [
  "candid",
+ "chat_events",
+ "constants",
+ "ic-ledger-types",
+ "ic_principal",
+ "icrc-ledger-types",
+ "msgpack",
  "oc_error_codes",
  "serde",
+ "serde_bytes",
+ "ts-rs",
+ "ts_export",
  "types",
 ]
 
@@ -7401,6 +7442,8 @@ dependencies = [
  "canister_timer_jobs",
  "canister_tracing_macros",
  "chat_events",
+ "cksol_minter_canister",
+ "cksol_minter_canister_c2c_client",
  "community_canister",
  "community_canister_c2c_client",
  "constants",
@@ -7425,6 +7468,7 @@ dependencies = [
  "local_user_index_canister_c2c_client",
  "msgpack",
  "multi_user_canister",
+ "multi_user_canister_c2c_client",
  "oc_error_codes",
  "rand 0.10.2",
  "serde",
@@ -7436,8 +7480,6 @@ dependencies = [
  "timer_job_queues",
  "tracing",
  "types",
- "user_canister",
- "user_canister_c2c_client",
  "user_core",
  "user_index_canister",
  "user_index_canister_c2c_client",
@@ -7674,7 +7716,7 @@ dependencies = [
  "openssl",
  "prometheus",
  "reqwest 0.13.4",
- "rustls 0.23.42",
+ "rustls 0.23.45",
  "serde",
  "serde_json",
  "tokio",
@@ -8961,6 +9003,7 @@ dependencies = [
 name = "principal_to_user_id_map"
 version = "0.1.0"
 dependencies = [
+ "ic-stable-structures",
  "ic_principal",
  "serde",
  "stable_memory_map",
@@ -9255,7 +9298,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash",
- "rustls 0.23.42",
+ "rustls 0.23.45",
  "socket2 0.6.5",
  "thiserror 2.0.18",
  "tokio",
@@ -9277,7 +9320,7 @@ dependencies = [
  "rand_pcg",
  "ring",
  "rustc-hash",
- "rustls 0.23.42",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "slab",
  "thiserror 2.0.18",
@@ -9711,7 +9754,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.42",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -9757,7 +9800,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.42",
+ "rustls 0.23.45",
  "rustls-pki-types",
  "rustls-platform-verifier",
  "serde",
@@ -9823,20 +9866,17 @@ dependencies = [
 
 [[package]]
 name = "rmp"
-version = "0.8.14"
-source = "git+https://github.com/hpeebles/msgpack-rust?rev=832a3f48e67eea56c869715ae6e1045583dd011b#832a3f48e67eea56c869715ae6e1045583dd011b"
+version = "0.8.15"
+source = "git+https://github.com/hpeebles/msgpack-rust?rev=ce6041181a85f926edf87b8c037b7b1295d024dd#ce6041181a85f926edf87b8c037b7b1295d024dd"
 dependencies = [
- "byteorder",
  "num-traits",
- "paste",
 ]
 
 [[package]]
 name = "rmp-serde"
-version = "1.3.0"
-source = "git+https://github.com/hpeebles/msgpack-rust?rev=832a3f48e67eea56c869715ae6e1045583dd011b#832a3f48e67eea56c869715ae6e1045583dd011b"
+version = "1.3.1"
+source = "git+https://github.com/hpeebles/msgpack-rust?rev=ce6041181a85f926edf87b8c037b7b1295d024dd#ce6041181a85f926edf87b8c037b7b1295d024dd"
 dependencies = [
- "byteorder",
  "rmp",
  "serde",
 ]
@@ -9944,16 +9984,16 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.42"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c54fcab019b409d04215d3a17cb438fd7fbf192ee61461f20f4fe18704bc138"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "aws-lc-rs",
  "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.13",
+ "rustls-webpki 0.103.15",
  "subtle",
  "zeroize",
 ]
@@ -9991,10 +10031,10 @@ dependencies = [
  "jni 0.22.4",
  "log",
  "once_cell",
- "rustls 0.23.42",
+ "rustls 0.23.45",
  "rustls-native-certs",
  "rustls-platform-verifier-android",
- "rustls-webpki 0.103.13",
+ "rustls-webpki 0.103.15",
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
@@ -10019,9 +10059,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -11989,7 +12029,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -12278,7 +12318,7 @@ version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
- "rustls 0.23.42",
+ "rustls 0.23.45",
  "tokio",
 ]
 
@@ -12721,6 +12761,7 @@ dependencies = [
  "canister_api_macros",
  "canister_logger",
  "canister_state_macros",
+ "canister_timer_jobs",
  "canister_tracing_macros",
  "constants",
  "fire_and_forget_handler",
@@ -13020,123 +13061,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "user_canister"
-version = "0.1.0"
-dependencies = [
- "candid",
- "chat_events",
- "constants",
- "ic-ledger-types",
- "ic_principal",
- "icrc-ledger-types",
- "msgpack",
- "oc_error_codes",
- "serde",
- "serde_bytes",
- "sha256",
- "ts-rs",
- "ts_export",
- "types",
-]
-
-[[package]]
-name = "user_canister_c2c_client"
-version = "0.1.0"
-dependencies = [
- "candid",
- "canister_client",
- "ic-cdk 0.20.3",
- "msgpack",
- "tracing",
- "types",
- "user_canister",
-]
-
-[[package]]
-name = "user_canister_client"
-version = "0.1.0"
-dependencies = [
- "canister_client",
- "ic-agent",
- "ic_principal",
- "msgpack",
- "types",
- "user_canister",
-]
-
-[[package]]
-name = "user_canister_impl"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "candid",
- "canister_api_macros",
- "canister_logger",
- "canister_state_macros",
- "canister_timer_jobs",
- "canister_tracing_macros",
- "chat_events",
- "ckbtc_minter_canister",
- "ckbtc_minter_canister_c2c_client",
- "community_canister",
- "community_canister_c2c_client",
- "constants",
- "direct_chat",
- "escrow_canister",
- "escrow_canister_c2c_client",
- "event_store_types",
- "fire_and_forget_handler",
- "futures",
- "git_commit_id",
- "governance_clients",
- "group_canister",
- "group_canister_c2c_client",
- "group_index_canister",
- "group_index_canister_c2c_client",
- "http_request",
- "ic-cdk 0.20.3",
- "ic-cdk-timers",
- "ic-ledger-types",
- "ic-stable-structures",
- "ic_principal",
- "icpswap_swap_pool_canister",
- "icpswap_swap_pool_canister_c2c_client",
- "icrc-ledger-types",
- "icrc_ledger_canister",
- "icrc_ledger_canister_c2c_client",
- "installed_bots",
- "itertools 0.15.0",
- "ledger_utils",
- "legacy_bot_api",
- "legacy_bot_c2c_client",
- "local_user_index_canister",
- "local_user_index_canister_c2c_client",
- "msgpack",
- "oc_error_codes",
- "one_sec_minter_canister",
- "one_sec_minter_canister_c2c_client",
- "rand 0.10.2",
- "serde",
- "serde_bytes",
- "sha256",
- "stable_memory",
- "stable_memory_map",
- "storage_bucket_client",
- "taco_exchange_canister",
- "taco_exchange_canister_c2c_client",
- "test-case",
- "timer_job_queues",
- "tracing",
- "types",
- "user_canister",
- "user_canister_c2c_client",
- "user_core",
- "user_index_canister",
- "user_index_canister_c2c_client",
- "utils",
-]
-
-[[package]]
 name = "user_core"
 version = "0.1.0"
 dependencies = [
@@ -13144,12 +13068,16 @@ dependencies = [
  "chat_events",
  "ckbtc_minter_canister",
  "ckbtc_minter_canister_c2c_client",
+ "cksol_minter_canister",
+ "cksol_minter_canister_c2c_client",
  "constants",
+ "crypto_address",
  "direct_chat",
  "escrow_canister",
  "escrow_canister_c2c_client",
  "group_index_canister",
  "ic-cdk 0.20.3",
+ "ic-cdk-management-canister",
  "ic-ledger-types",
  "ic-stable-structures",
  "icrc-ledger-types",
@@ -13160,16 +13088,18 @@ dependencies = [
  "local_user_index_canister",
  "local_user_index_canister_c2c_client",
  "msgpack",
+ "multi_user_canister",
  "oc_error_codes",
  "one_sec_minter_canister",
  "one_sec_minter_canister_c2c_client",
  "rand 0.10.2",
  "serde",
+ "serde_json",
  "stable_memory_map",
  "tracing",
  "types",
- "user_canister",
  "user_index_canister",
+ "user_index_canister_c2c_client",
  "utils",
 ]
 
@@ -13177,7 +13107,6 @@ dependencies = [
 name = "user_ids_set"
 version = "0.1.0"
 dependencies = [
- "ic-stable-structures",
  "ic_principal",
  "serde",
  "stable_memory_map",
@@ -13233,7 +13162,6 @@ version = "0.1.0"
 dependencies = [
  "candid",
  "canister_api_macros",
- "canister_client",
  "canister_logger",
  "canister_state_macros",
  "canister_time",
@@ -13275,8 +13203,6 @@ dependencies = [
  "msgpack",
  "multi_user_canister",
  "multi_user_canister_c2c_client",
- "notifications_index_canister",
- "notifications_index_canister_c2c_client",
  "oc_error_codes",
  "online_users_canister",
  "online_users_canister_c2c_client",
@@ -13299,8 +13225,6 @@ dependencies = [
  "tracing",
  "types",
  "url",
- "user_canister",
- "user_canister_c2c_client",
  "user_ids_set",
  "user_index_canister",
  "utils",

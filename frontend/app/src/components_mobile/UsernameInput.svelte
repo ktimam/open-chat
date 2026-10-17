@@ -4,7 +4,7 @@
     import { onMount, untrack } from "svelte";
     import { _ } from "svelte-i18n";
     import { i18nKey, interpolate } from "../i18n/i18n";
-    import Translatable from "./Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     const MIN_EXTANT_USERNAME_LENGTH = 3;
     const MAX_USERNAME_LENGTH = 20;
@@ -72,7 +72,7 @@
     $effect(() => {
         if (typeof username !== "string") return;
 
-        let u = username;
+        const u = username;
 
         untrack(() => {
             usernameValid = client.isUsernameValid(u);

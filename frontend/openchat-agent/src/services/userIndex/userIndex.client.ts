@@ -8,9 +8,6 @@ import type {
     CheckUsernameResponse,
     CreateMultiUserCanisterResponse,
     ChitLeaderboardResponse,
-    MigrateUsersResponse,
-    UserMigrationResponse,
-    UsersToMigrate,
     CurrentUserResponse,
     DiamondMembershipDuration,
     DiamondMembershipFees,
@@ -34,7 +31,6 @@ import type {
     NcaReporterContact,
     AuthorityReportTokenResponse,
     SetUsernameResponse,
-    SetUserUpgradeConcurrencyResponse,
     SubmitProofOfUniquePersonhoodResponse,
     SuspendUserResponse,
     UnsuspendUserResponse,
@@ -48,6 +44,7 @@ import type {
 } from "@shared";
 import {
     ErrorCode,
+    isPrincipalValid,
     mergeUserSummaryWithUpdates,
     offline,
     Stream,
@@ -117,16 +114,9 @@ import {
     UserIndexClearAuthorityReportAttemptArgs,
     UserIndexCreateMultiUserCanisterArgs,
     UserIndexCreateMultiUserCanisterResponse,
-    UserIndexSetMultiUserCanistersEnabledArgs,
-    UserIndexMigrateUsersArgs,
-    UserIndexMigrateUsersResponse,
-    UserIndexSetUserMigrationConcurrencyArgs,
-    UserIndexUserMigrationArgs,
-    UserIndexUserMigrationResponse,
-    UserIndexCancelUserMigrationArgs,
-    UserIndexCancelUserMigrationResponse,
     UserIndexModerationConfigResponse,
     UserIndexCallPushEnabledResponse,
+    UserIndexSetAlchemyApiKeyArgs,
     UserIndexSetCallPushEnabledArgs,
     UserIndexRecordAuthorityReportFiledArgs,
     UserIndexSetModerationReferralConfigArgs,
@@ -139,7 +129,6 @@ import {
     UserIndexSetPremiumItemCostArgs,
     UserIndexSetUsernameArgs,
     UserIndexSetUsernameResponse,
-    UserIndexSetUserUpgradeConcurrencyArgs,
     UserIndexSubmitProofOfUniquePersonhoodArgs,
     UserIndexSubmitProofOfUniquePersonhoodResponse,
     UserIndexSuspendUserArgs,
@@ -154,7 +143,7 @@ import {
     UserIndexUsersResponse,
 } from "../../typebox";
 import type { UserIndexProposeProtectedActionProtectedAction } from "../../typebox";
-import { addressToIcrcAccount, mapResult, unitResult } from "../common/chatMappersV2";
+import { addressToIcrcAccount, unitResult } from "../common/chatMappersV2";
 import type { ChatsDb } from "../../utils/chatsDb";
 import { groupBy } from "../../utils/list";
 import {
@@ -198,7 +187,6 @@ import {
     submitProofOfUniquePersonhoodResponse,
     suspendUserResponse,
     unsuspendUserResponse,
-    userMigrationResponse,
     userRegistrationCanisterResponse,
     usersApiResponse,
     userSearchResponse,
@@ -240,16 +228,6 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
                         Empty,
                         UserIndexCurrentUserResponse,
                     );
-                    if (
-                        liveUser.kind === "created_user" &&
-                        cachedUser !== undefined &&
-                        (await this.isEarlierUserId(liveUser.userId))
-                    ) {
-                        // From a replica which is behind, so it still has the user under an id
-                        // they've since been migrated from. The cached user is more up to date.
-                        resolve(cachedUser, true);
-                        return;
-                    }
                     if (liveUser.kind === "created_user") {
                         // A terms acceptance recorded while this query was in flight must not
                         // be clobbered by the (older) response - that would re-open the
@@ -268,12 +246,17 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
                                 console.error("Failed to save the current user to the cache", err),
                             );
                         if (cachedUser !== undefined && cachedUser.userId !== liveUser.userId) {
-                            // The user has been migrated to a MultiUser canister. The client
-                            // restarts the session under their new id, so everything it needs
-                            // must be cached first.
+                            // A new account on the same principal, the cached one having been
+                            // deleted. The client restarts the session under the new id, so the
+                            // new user must be cached first, and the cached chat state, which is
+                            // the old account's, dropped, so that the chats are loaded in full.
                             await Promise.all([
                                 cachingUser,
-                                this.currentUserMigrated(cachedUser.userId, liveUser.userId),
+                                this.chatsDb
+                                    .forgetCachedChatState()
+                                    .catch((err) =>
+                                        console.error("Failed to clear the cached chat state", err),
+                                    ),
                             ]);
                         }
                     }
@@ -510,6 +493,17 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
         );
     }
 
+    // A platform operator only. The user index passes the key on to every MultiUser canister.
+    setAlchemyApiKey(apiKey: string | undefined): Promise<Success | OCError> {
+        return this.update(
+            "set_alchemy_api_key",
+            { api_key: apiKey },
+            unitResult,
+            UserIndexSetAlchemyApiKeyArgs,
+            UnitResult,
+        );
+    }
+
     setCallPushEnabled(enabled: boolean): Promise<Success | OCError> {
         return this.update(
             "set_call_push_enabled",
@@ -681,12 +675,7 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
         // not take the whole batch down in Principal.fromText: there is no such user, so the
         // caller sees exactly what it would for an unknown id
         users = dropInvalidUserIds(users);
-        const requested = users.userGroups.flatMap((g) => g.users);
-
-        // Users who've been migrated to a MultiUser canister are cached, and requested, under
-        // their latest id
-        const knownMigrations = await this.userDb.getLatestUserIds(requested);
-        const allUsers = [...new Set(requested.map((u) => knownMigrations.get(u) ?? u))];
+        const allUsers = [...new Set(users.userGroups.flatMap((g) => g.users))];
 
         const fromCache = await this.userDb.getCachedUsers(allUsers);
         const suspendedUsersSyncedTo = await this.userDb.getSuspendedUsersSyncedUpTo();
@@ -697,35 +686,11 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
 
         const requestedFromServer = new Set<string>([...args.userGroups.flatMap((g) => g.users)]);
 
-        const apiResponse = await this.withoutStaleCurrentUser(
-            await this.getUsersFromBackend(args, suspendedUsersSyncedTo),
-        );
+        const apiResponse = await this.getUsersFromBackend(args, suspendedUsersSyncedTo);
 
-        const newMigrations = migrationsFromResponse(apiResponse);
-        let currentUserMigratedFrom: string | undefined = undefined;
-        if (apiResponse.currentUser !== undefined) {
-            // The current user comes back under their latest id, but the one we've got cached is
-            // the id they had when the session started. The server only returns them under a
-            // different id when we asked for that one, and if it's been deleted, this is a new
-            // account on the same principal rather than a migration.
-            const cachedCurrentUserId = (await this.chatsDb.getCachedCurrentUser())?.userId;
-            if (
-                cachedCurrentUserId !== undefined &&
-                cachedCurrentUserId !== apiResponse.currentUser.userId &&
-                requestedFromServer.has(cachedCurrentUserId) &&
-                !apiResponse.deletedUserIds.has(cachedCurrentUserId)
-            ) {
-                currentUserMigratedFrom = cachedCurrentUserId;
-                newMigrations.set(cachedCurrentUserId, apiResponse.currentUser.userId);
-            }
-            // getCurrentUser may have recorded the current user's migration while this request
-            // was in flight, in which case the cached current user already has their new id
-            for (const [previous, latest] of await this.userDb.getLatestUserIds(allUsers)) {
-                if (!newMigrations.has(previous)) {
-                    newMigrations.set(previous, latest);
-                }
-            }
-        }
+        // A user requested by an id from before they were migrated to a MultiUser canister, eg.
+        // from an old link, is returned under their latest id
+        const migratedUserIds = migrationsFromResponse(apiResponse);
 
         // We return the fully hydrated users so that it is not possible for the Svelte store to miss any updates
         const mergedResponse = this.mergeGetUsersResponse(
@@ -733,48 +698,25 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             requestedFromServer,
             apiResponse,
             fromCache,
-            newMigrations,
+            migratedUserIds,
         );
 
-        const migratedUserIds = new Map(newMigrations);
-        for (const userId of requested) {
-            const known = knownMigrations.get(userId) ?? userId;
-            const latest = newMigrations.get(known) ?? known;
-            if (latest !== userId) {
-                migratedUserIds.set(userId, latest);
-            }
-            // The server only knows of the id we asked for, which may itself be an earlier id
-            if (apiResponse.deletedUserIds.has(known)) {
-                mergedResponse.deletedUserIds.add(userId);
-            }
-        }
         if (migratedUserIds.size > 0) {
             mergedResponse.migratedUserIds = migratedUserIds;
         }
 
         this.userDb.setCachedDeletedUserIds(mergedResponse.deletedUserIds);
 
-        const cachingUsers = this.userDb
+        this.userDb
             .setCachedUsers(mergedResponse.users)
             .catch((err) => console.error("Failed to save users to the cache", err));
 
-        const cachingMigrations = this.userDb
-            .setMigratedUserIds(newMigrations)
-            .catch((err) => console.error("Failed to save migrated user ids to the cache", err));
-
         if (mergedResponse.currentUser) {
-            // Awaited so that, if the current user's id has changed, everything is cached before
-            // the client restarts the session under the new id
-            await Promise.all([
-                this.chatsDb
-                    .mergeCachedCurrentUser(mergedResponse.currentUser)
-                    .catch((err) =>
-                        console.error("Failed to save the current user to the cache", err),
-                    ),
-                currentUserMigratedFrom !== undefined
-                    ? Promise.all([cachingUsers, cachingMigrations, this.forgetCachedChatState()])
-                    : undefined,
-            ]);
+            // Awaited so that, if the current user's id has changed, the new one is cached before
+            // the client restarts the session under it
+            await this.chatsDb
+                .mergeCachedCurrentUser(mergedResponse.currentUser)
+                .catch((err) => console.error("Failed to save the current user to the cache", err));
         }
 
         if (mergedResponse.serverTimestamp !== undefined) {
@@ -789,16 +731,16 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
     }
 
     async populateUserCache(userIds: string[]): Promise<void> {
-        const knownMigrations = await this.userDb.getLatestUserIds(userIds);
-        const latestUserIds = [...new Set(userIds.map((u) => knownMigrations.get(u) ?? u))];
+        // Mentions are parsed out of message text, so `@UserId(n)` typed into a message gives "n",
+        // which would take the whole batch down in Principal.fromText, as in getUsers
+        userIds = userIds.filter(isPrincipalValid);
+        const fromCache = await this.userDb.getCachedUsers(userIds);
 
-        const fromCache = await this.userDb.getCachedUsers(latestUserIds);
-
-        if (fromCache.length === latestUserIds.length) {
+        if (fromCache.length === userIds.length) {
             return;
         }
 
-        const args = this.buildGetUsersArgs(latestUserIds, fromCache, true);
+        const args = this.buildGetUsersArgs(userIds, fromCache, true);
         const apiResponse = await this.getUsersFromBackend(args, undefined);
 
         const users: UserSummary[] = [];
@@ -817,51 +759,7 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
         this.userDb
             .setCachedUsers(users)
             .catch((err) => console.error("Failed to save users to the cache", err));
-        this.userDb
-            .setMigratedUserIds(migrationsFromResponse(apiResponse))
-            .catch((err) => console.error("Failed to save migrated user ids to the cache", err));
-        // The server only knows of the ids we asked for, which may themselves be earlier ids
-        const deletedUserIds = new Set(apiResponse.deletedUserIds);
-        for (const [previous, latest] of knownMigrations) {
-            if (deletedUserIds.has(latest)) {
-                deletedUserIds.add(previous);
-            }
-        }
-        this.userDb.setCachedDeletedUserIds(deletedUserIds);
-    }
-
-    // The current user has been migrated to a MultiUser canister, so has a new id and a new
-    // canister. The cached chat state came from their old canister, so is dropped, and the chats
-    // are loaded in full from the new one.
-    private async currentUserMigrated(previousUserId: string, latestUserId: string): Promise<void> {
-        await Promise.all([
-            this.userDb
-                .setMigratedUserIds(new Map([[previousUserId, latestUserId]]))
-                .catch((err) =>
-                    console.error("Failed to save migrated user ids to the cache", err),
-                ),
-            this.forgetCachedChatState(),
-        ]);
-    }
-
-    // A replica which is behind can return the current user under an id they've since been migrated
-    // from. That's out of date, rather than a migration back to the earlier id, so it's dropped.
-    private async withoutStaleCurrentUser(response: UsersApiResponse): Promise<UsersApiResponse> {
-        return response.currentUser !== undefined &&
-            (await this.isEarlierUserId(response.currentUser.userId))
-            ? { ...response, currentUser: undefined }
-            : response;
-    }
-
-    // Whether `userId` is known to be an id from before a user was migrated to a MultiUser canister
-    private async isEarlierUserId(userId: string): Promise<boolean> {
-        return (await this.userDb.getLatestUserIds([userId])).size > 0;
-    }
-
-    private forgetCachedChatState(): Promise<void> {
-        return this.chatsDb
-            .forgetCachedChatState()
-            .catch((err) => console.error("Failed to clear the cached chat state", err));
+        this.userDb.setCachedDeletedUserIds(apiResponse.deletedUserIds);
     }
 
     private getUsersFromBackend(
@@ -958,8 +856,6 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             if (added.has(userId) || userId === currentUserId) continue;
             added.add(userId);
 
-            // Anything cached under an earlier id is replaced by what the server returns, which is
-            // the user in full under their latest id
             const cached = fromCacheMap.get(userId);
             const fromServer = apiResponseMap.get(userId);
 
@@ -1133,16 +1029,6 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
         });
     }
 
-    setUserUpgradeConcurrency(value: number): Promise<SetUserUpgradeConcurrencyResponse> {
-        return this.update(
-            "set_user_upgrade_concurrency",
-            { value },
-            () => "success",
-            UserIndexSetUserUpgradeConcurrencyArgs,
-            SuccessOnly,
-        );
-    }
-
     createMultiUserCanister(
         localUserIndexCanisterId: string,
     ): Promise<CreateMultiUserCanisterResponse> {
@@ -1160,68 +1046,6 @@ export class UserIndexClient extends SingleCanisterMsgpackAgent {
             },
             UserIndexCreateMultiUserCanisterArgs,
             UserIndexCreateMultiUserCanisterResponse,
-        );
-    }
-
-    setMultiUserCanistersEnabled(enabled: boolean): Promise<boolean> {
-        return this.update(
-            "set_multi_user_canisters_enabled",
-            { enabled },
-            () => true,
-            UserIndexSetMultiUserCanistersEnabledArgs,
-            SuccessOnly,
-        );
-    }
-
-    migrateUsers(users: UsersToMigrate): Promise<MigrateUsersResponse> {
-        return this.update(
-            "migrate_users",
-            {
-                users:
-                    users.kind === "longest_offline"
-                        ? { LongestOffline: users.count }
-                        : { Specific: users.userIds.map(principalStringToBytes) },
-            },
-            (resp): MigrateUsersResponse =>
-                mapResult(resp, (result) => ({
-                    kind: "success",
-                    queued: result.queued.map(principalBytesToString),
-                })),
-            UserIndexMigrateUsersArgs,
-            UserIndexMigrateUsersResponse,
-        );
-    }
-
-    setUserMigrationConcurrency(value: number): Promise<boolean> {
-        return this.update(
-            "set_user_migration_concurrency",
-            { value },
-            () => true,
-            UserIndexSetUserMigrationConcurrencyArgs,
-            SuccessOnly,
-        );
-    }
-
-    userMigration(userId: string): Promise<UserMigrationResponse> {
-        return this.query(
-            "user_migration",
-            { user_id: principalStringToBytes(userId) },
-            userMigrationResponse,
-            UserIndexUserMigrationArgs,
-            UserIndexUserMigrationResponse,
-        );
-    }
-
-    cancelUserMigration(userId: string, multiUserCanisterId: string): Promise<Success | OCError> {
-        return this.update(
-            "cancel_user_migration",
-            {
-                user_id: principalStringToBytes(userId),
-                multi_user_canister_id: principalStringToBytes(multiUserCanisterId),
-            },
-            unitResult,
-            UserIndexCancelUserMigrationArgs,
-            UserIndexCancelUserMigrationResponse,
         );
     }
 

@@ -1,7 +1,7 @@
-import { configKeys } from "../utils/config";
-import { createLocalStorageStore } from "../utils/store";
+import { configKeys } from "@shared";
+import { LocalStorageStore } from "@client/reactiveStores";
 
 // The user's currently selected on-device model ("" = none selected). Downloaded-model metadata is read
 // from the native model store at runtime (listLocalModels) and the catalog is fetched, so neither is
 // persisted here — only the user's selection is.
-export const selectedModelId = createLocalStorageStore(configKeys.selectedModelId, "");
+export const selectedModelId = new LocalStorageStore(configKeys.selectedModelId, "");

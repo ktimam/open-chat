@@ -24,7 +24,7 @@
     import Button from "../Button.svelte";
     import HoverIcon from "../HoverIcon.svelte";
     import WithVerifiedBadge from "../icons/WithVerifiedBadge.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AccessGateIcon from "./access/AccessGateIcon.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
     import Footer from "./upgrade/Footer.svelte";
@@ -51,10 +51,7 @@
     }
 
     function joinGroup(group: GroupChatSummary) {
-        publish("joinGroup", {
-            group,
-            select: false,
-        });
+        publish("joinGroup", group);
     }
     function leaveGroup(group: GroupChatSummary) {
         publish("leaveGroup", { kind: "leave", chatId: group.id, level: "group" });

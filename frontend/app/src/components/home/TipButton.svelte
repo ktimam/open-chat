@@ -1,7 +1,7 @@
 <script lang="ts">
     import { spring } from "svelte/motion";
     import type { ResourceKey } from "@client";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     interface Props {
         disabled?: boolean;
@@ -11,7 +11,7 @@
 
     let { disabled = false, label, onClick }: Props = $props();
 
-    let buttonScale = spring(1);
+    const buttonScale = spring(1);
 
     function mouseDown() {
         buttonScale.set(1.1);

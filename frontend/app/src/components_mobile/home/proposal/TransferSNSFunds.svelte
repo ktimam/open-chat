@@ -10,7 +10,7 @@
     import { _ } from "svelte-i18n";
     import { i18nKey, interpolate } from "../../../i18n/i18n";
     import Legend from "../../Legend.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     interface Props {
         nervousSystem: NervousSystemDetails;
@@ -20,7 +20,7 @@
     let { nervousSystem, valid = $bindable() }: Props = $props();
 
     let treasury: Treasury = $state("SNS");
-    let busy = $state(false);
+    const busy = $state(false);
     let recipientOwner = $state("");
     let recipientSubaccount = $state("");
     let amountText = $state("");

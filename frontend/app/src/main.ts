@@ -8,12 +8,17 @@ import "./web-components/customEmoji";
 import "./web-components/profileLink";
 import "./web-components/spoiler";
 
-import { mobileWidth } from "@client";
-import { prepareServiceWorkerBeforeApplicationStart } from "@client/utils/updateSw";
+import { isTauriApp, mobileWidth, prepareServiceWorkerBeforeApplicationStart } from "@client";
 import "svelte";
 import { mount } from "svelte";
 import StartupFailure from "./components_shared/StartupFailure.svelte";
-import { clearStartupBackground, setNativeTheme, writeNativeCssVariables } from "./theme/themes";
+import {
+    clearStartupBackground,
+    setNativeTheme,
+    writeLayoutCssVariables,
+    writeNativeCssVariables,
+} from "./theme/themes";
+import { linkFonts } from "./utils/fonts";
 import { selectLayout } from "./utils/layout";
 import { isNativeClient, usesWebInferenceRuntime } from "./utils/onDeviceInference";
 import { ensureWebModelRestored } from "./utils/webInference";
@@ -54,10 +59,20 @@ async function startApplication() {
     // Router.svelte, and the listeners-before-svelteReady sequencing. The v1 App
     // (components) only renders on >=768px viewports (desktop web, large tablets)
     // and intentionally does not implement that native cold-start routing.
-    const layout = selectLayout(import.meta.env.OC_MOBILE_LAYOUT, mobileWidth.value);
+    // The upstream v3 web tree remains build-time opt-in and is never selected for native apps.
+    const layout = selectLayout(
+        import.meta.env.OC_MOBILE_LAYOUT,
+        import.meta.env.OC_WEB_LAYOUT,
+        mobileWidth.value,
+        isTauriApp(),
+    );
+
+    linkFonts(layout === "v3" ? import.meta.env.OC_WEB_FONTS_URL : import.meta.env.OC_APP_FONTS_URL);
 
     if (layout === "v2") {
         setNativeTheme();
+    } else if (layout === "v3") {
+        writeLayoutCssVariables();
     } else {
         writeNativeCssVariables();
     }
@@ -66,7 +81,9 @@ async function startApplication() {
     // remain queued until the mounted mobile app signals svelteReady.
     const { default: App } = await (layout === "v2"
         ? import("./components_mobile/App.svelte")
-        : import("./components/App.svelte"));
+        : import.meta.env.OC_WEB_LAYOUT === "v3" && layout === "v3"
+          ? import("./web/App.svelte")
+          : import("./components/App.svelte"));
     const mounted = mount(App, { target: document.body });
     clearStartupBackground();
     return mounted;

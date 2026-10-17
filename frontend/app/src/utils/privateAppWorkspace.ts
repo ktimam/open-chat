@@ -1,4 +1,4 @@
-import { get, writable } from "svelte/store";
+import { get, writable } from "@client/reactiveStores";
 import { currentUserIdStore, type OpenChat, type MessageContent } from "@client";
 import { ANON_USER_ID } from "@shared";
 import {

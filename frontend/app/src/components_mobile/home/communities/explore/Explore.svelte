@@ -53,15 +53,15 @@
         SearchState,
     } from "../../../../stores/search.svelte";
     import FancyLoader from "../../../icons/FancyLoader.svelte";
-    import Translatable from "../../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AnonFooter from "../../AnonFooter.svelte";
     import NothingToSee from "../../NothingToSee.svelte";
-    import { updateCommunityState } from "../createOrUpdate/community.svelte";
     import type { SurfaceOpening } from "@utils/aiAppSurfaces";
     import AiAppLinkSheet from "../../AiAppLinkSheet.svelte";
     import AiAppSurfaceSheet from "../../AiAppSurfaceSheet.svelte";
     import AiAppCard from "./AiAppCard.svelte";
     import AiAppSheet from "./AiAppSheet.svelte";
+    import { openCommunityCreation } from "../createOrUpdate/createCommunity";
     import BotCard from "./BotCard.svelte";
     import BotFilters from "./BotFilters.svelte";
     import CommunityCard from "./CommunityCard.svelte";
@@ -100,7 +100,7 @@
     }
 
     function createCommunity() {
-        updateCommunityState.createCommunity(client);
+        openCommunityCreation(client);
     }
 
     function registerBot() {
@@ -297,7 +297,7 @@
     );
 
     $effect(() => {
-        $routeStore;
+        void $routeStore;
         if (isMainAppsRoute(location.search))
             untrack(() => {
                 view = "aiApps";

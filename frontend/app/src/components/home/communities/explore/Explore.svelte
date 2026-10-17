@@ -3,12 +3,10 @@
     import { isMainAppsRoute } from "@utils/mainAppsNavigation";
     import type { AiAppRegistration, OpenChat } from "@client";
     import {
-        anonUserStore,
         exploreCommunitiesFiltersStore,
         iconSize,
         identityStateStore,
         ipadWidth,
-        isDiamondStore,
         mobileWidth,
         offlineStore,
         publish,
@@ -27,6 +25,7 @@
     import { i18nKey } from "../../../../i18n/i18n";
     import { aiAppSearchState, communitySearchState } from "../../../../stores/search.svelte";
     import type { SurfaceOpening } from "../../../../utils/aiAppSurfaces";
+    import { startCommunityCreation } from "@shared_components/home/communities/createOrUpdate/community.svelte";
     import Search from "../../..//Search.svelte";
     import Button from "../../../Button.svelte";
     import Fab from "../../../Fab.svelte";
@@ -35,7 +34,7 @@
     import AiAppSurfaceModal from "../../AiAppSurfaceModal.svelte";
     import HoverIcon from "../../../HoverIcon.svelte";
     import FancyLoader from "../../../icons/FancyLoader.svelte";
-    import Translatable from "../../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AiAppCard from "./AiAppCard.svelte";
     import CommunityCard from "./CommunityCard.svelte";
     import CommunityCardLink from "./CommunityCardLink.svelte";
@@ -126,17 +125,15 @@
     }
 
     function createCommunity() {
-        if ($anonUserStore) {
-            client.updateIdentityState({
-                kind: "logging_in",
-                postLogin: { kind: "create_community" },
-            });
-            return;
-        }
-        if (!$isDiamondStore) {
-            publish("upgrade");
-        } else {
-            publish("createCommunity");
+        switch (startCommunityCreation(client)) {
+            case "logging_in":
+                break;
+            case "needs_diamond":
+                publish("upgrade");
+                break;
+            case "ready":
+                publish("createCommunity");
+                break;
         }
     }
 
@@ -222,7 +219,7 @@
     );
 
     $effect(() => {
-        $routeStore;
+        void $routeStore;
         if (isMainAppsRoute(location.search)) untrack(() => setView("aiApps"));
     });
 

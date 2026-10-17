@@ -13,7 +13,7 @@
     import Webhook from "svelte-material-icons/Webhook.svelte";
     import BotMember from "../../bots/BotMember.svelte";
     import WebhookMember from "../../bots/WebhookMember.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Separator from "../Separator.svelte";
     import { MemberManagement } from "./membersState.svelte";
 
@@ -24,7 +24,7 @@
     let { collection }: Props = $props();
 
     let title = $derived(collection.kind === "community" ? "Bots" : "Bots & Webhooks");
-    let membersState = new MemberManagement(getContext<OpenChat>("client"), collection);
+    const membersState = new MemberManagement(getContext<OpenChat>("client"), collection);
     let canManageBots = $derived(membersState.canManageBots());
     let canRegisterWebhook = $derived(membersState.canRegisterWebhook());
     let botCount = $derived(membersState.bots.size + membersState.webhooks.size);

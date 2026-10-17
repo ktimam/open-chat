@@ -18,8 +18,17 @@ vi.hoisted(() => {
         }) as unknown as MediaQueryList) as typeof window.matchMedia;
 });
 
+import { configKeys } from "@shared";
+import type { Readable } from "svelte/store";
 import { STARTUP_DARK_BACKGROUND } from "../../rollup.extras.mjs";
-import { clearStartupBackground, currentTheme, themes, themeType } from "./themes";
+import { currentTheme, currentThemeMode, themes, themeType } from "./themes";
+
+// themes.ts holds svelte/store stores, which the custom stores' `get` can't read
+function get<T>(store: Readable<T>): T {
+    let value!: T;
+    store.subscribe((v) => (value = v))();
+    return value;
+}
 
 // What index.html's startup script reads to decide whether to paint the page dark
 const STARTUP_THEME_MODE_KEY = "openchat_startup_theme_mode";
@@ -43,19 +52,6 @@ describe("the theme mode remembered for the next page load", () => {
         unsubscribe();
     });
 
-    test("follows the mobile layout's theme", async () => {
-        // its own copy of the themes, as switching to the mobile layout's is for good
-        vi.resetModules();
-        const { setNativeTheme } = await import("./themes");
-        const { themeV2Appearance } = await import("./themeV2");
-
-        setNativeTheme();
-        expect(localStorage.getItem(STARTUP_THEME_MODE_KEY)).toBe("dark");
-
-        themeV2Appearance.set("light");
-        expect(localStorage.getItem(STARTUP_THEME_MODE_KEY)).toBe("light");
-    });
-
     test("is not needed for the theme to apply when storage is unavailable", () => {
         vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
             throw new Error("denied");
@@ -67,26 +63,90 @@ describe("the theme mode remembered for the next page load", () => {
     });
 });
 
+// Rollbar #32044 / #32045: a stored theme name with no theme behind it left `currentTheme`
+// undefined, and App.svelte crashed reading it on every load
+describe("a stored theme name we don't have", () => {
+    afterEach(() => {
+        localStorage.clear();
+    });
+
+    async function themeWhenStored(key: string, name: string, type: string) {
+        localStorage.setItem(key, name);
+        localStorage.setItem(configKeys.theme, type);
+        vi.resetModules();
+        const fresh = await import("./themes");
+        return {
+            theme: get(fresh.currentTheme),
+            preferredDark: get(fresh.preferredDarkTheme),
+            preferredLight: get(fresh.preferredLightTheme),
+            themes: fresh.themes,
+        };
+    }
+
+    test("falls back to the default dark theme", async () => {
+        const { theme, preferredDark, themes } = await themeWhenStored(
+            "openchat_dark_theme",
+            "gone",
+            "dark",
+        );
+        expect(theme).toBe(themes.dark);
+        expect(preferredDark).toBe(themes.dark);
+    });
+
+    test("falls back to the default light theme", async () => {
+        const { theme, preferredLight, themes } = await themeWhenStored(
+            "openchat_light_theme",
+            "gone",
+            "light",
+        );
+        expect(theme).toBe(themes.white);
+        expect(preferredLight).toBe(themes.white);
+    });
+
+    test("still maps the old light theme's name to its new one", async () => {
+        const { theme, preferredLight, themes } = await themeWhenStored(
+            "openchat_light_theme",
+            "light",
+            "light",
+        );
+        expect(theme).toBe(themes.blue);
+        expect(preferredLight).toBe(themes.blue);
+    });
+});
+
 describe("the background painted by index.html", () => {
     test("is the default dark theme's", () => {
         expect(STARTUP_DARK_BACKGROUND).toBe(themes.dark.bg.toLowerCase());
     });
+});
 
+describe("the theme mode on its own", () => {
     afterEach(() => {
-        vi.useRealTimers();
+        themeType.set("system");
+        localStorage.clear();
         document.documentElement.removeAttribute("style");
     });
 
-    // Invariant: it outlasts the body's 300ms background fade, then goes.
-    test("is cleared once the app's own background has faded in", () => {
-        vi.useFakeTimers();
-        document.documentElement.style.backgroundColor = "#1b1c21";
+    test("follows the theme in use, and is remembered for the next page load", () => {
+        const unsubscribe = currentThemeMode.subscribe(() => {});
 
-        clearStartupBackground();
-        vi.advanceTimersByTime(300);
-        expect(document.documentElement.style.backgroundColor).not.toBe("");
+        themeType.set("dark");
+        expect(get(currentThemeMode)).toBe("dark");
+        expect(localStorage.getItem(STARTUP_THEME_MODE_KEY)).toBe("dark");
 
-        vi.advanceTimersByTime(700);
-        expect(document.documentElement.style.backgroundColor).toBe("");
+        themeType.set("light");
+        expect(get(currentThemeMode)).toBe("light");
+        expect(localStorage.getItem(STARTUP_THEME_MODE_KEY)).toBe("light");
+
+        unsubscribe();
+    });
+
+    test("leaves the v1 theme's variables off <html>, where they would override the new tokens", () => {
+        const unsubscribe = currentThemeMode.subscribe(() => {});
+        themeType.set("dark");
+        themeType.set("light");
+        expect(document.documentElement.style.getPropertyValue("--accent")).toBe("");
+        expect(document.documentElement.style.getPropertyValue("--bg")).toBe("");
+        unsubscribe();
     });
 });

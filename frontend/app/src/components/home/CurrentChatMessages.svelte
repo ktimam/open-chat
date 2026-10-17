@@ -61,6 +61,7 @@
         canDelete: boolean;
         canSendAny: boolean;
         canReact: boolean;
+        canTipMessages: boolean;
         canInvite: boolean;
         footer: boolean;
         canReplyInThread: boolean;
@@ -80,6 +81,7 @@
         canDelete,
         canSendAny,
         canReact,
+        canTipMessages,
         canInvite,
         footer,
         canReplyInThread,
@@ -347,6 +349,7 @@
                     {canDelete}
                     {canSendAny}
                     {canReact}
+                    {canTipMessages}
                     {canInvite}
                     {canReplyInThread}
                     collapsed={isCollapsed(evt, filteredProposals)}

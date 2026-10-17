@@ -540,8 +540,13 @@ for (const [label, mutate] of [
 test("current-client checks script coverage, non-mutating lint, runner failures and public-key prerequisite", () => {
   for (const [name, value] of [
     ["check:ci", "npm run test"],
+    [
+      "check:ci",
+      "npm run lint:check && node ./build-ci.mjs typecheck typecheck:agent test",
+    ],
     ["lint:check", "eslint . --fix"],
     ["typecheck:agent", "true"],
+    ["typecheck:packages", "true"],
     ["test", "vitest"],
     ["build:prod", "true"],
   ]) {

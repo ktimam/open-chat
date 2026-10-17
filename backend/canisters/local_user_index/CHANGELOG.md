@@ -6,6 +6,95 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+## [[2.0.2152](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2152-local_user_index)] - 2026-10-16
+
+### Added
+
+- Add `c2c_previous_user_ids`, for groups and communities checking a member's gate again ([#9970](https://github.com/open-chat-labs/open-chat/pull/9970))
+- Pass the Alchemy API key set on the UserIndex on to every MultiUser canister, including any created later ([#9995](https://github.com/open-chat-labs/open-chat/pull/9995))
+
+### Changed
+
+- Pass on the referrer of a user joining a community by their latest id ([#9970](https://github.com/open-chat-labs/open-chat/pull/9970))
+- Await work inside timers rather than spawning a task from them ([#9971](https://github.com/open-chat-labs/open-chat/pull/9971))
+- Stop tracking the async work in progress, since nothing reads it any more ([#9972](https://github.com/open-chat-labs/open-chat/pull/9972))
+
+### Removed
+
+- Remove the one-offs which replaced old user ids in the bots and dropped the User canister's wasm, now that they have run ([#9965](https://github.com/open-chat-labs/open-chat/pull/9965))
+- Remove the `user_id_migrations_complete` metric, which nothing reports to any more ([#9970](https://github.com/open-chat-labs/open-chat/pull/9970))
+
+## [[2.0.2139](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2139-local_user_index)] - 2026-10-14
+
+### Added
+
+- Count in the metrics how many Group, Community and MultiUser canisters have finished replacing migrated users' old ids ([#9949](https://github.com/open-chat-labs/open-chat/pull/9949))
+- List up to 50 of the canisters yet to finish replacing migrated users' old ids ([#9950](https://github.com/open-chat-labs/open-chat/pull/9950))
+
+### Removed
+
+- Remove the User canister, along with creating, upgrading and migrating User canisters ([#9919](https://github.com/open-chat-labs/open-chat/pull/9919))
+- Remove mapping user ids sent by the UserIndex and NotificationsIndex onto their latest ids, which they already are ([#9922](https://github.com/open-chat-labs/open-chat/pull/9922))
+- Remove `events_for_remote_users`, which has held the same undelivered events since October 2024, and its `/remote_user_events` route ([#9923](https://github.com/open-chat-labs/open-chat/pull/9923))
+- Remove `withdraw_from_icpswap`, since users swap straight from their own wallets ([#9924](https://github.com/open-chat-labs/open-chat/pull/9924))
+
+### Fixed
+
+- Leave a ledger's burn fee behind when moving funds from old canisters ([#9935](https://github.com/open-chat-labs/open-chat/pull/9935))
+- Only move amounts which exceed the fee from old canisters, as some ledgers require ([#9936](https://github.com/open-chat-labs/open-chat/pull/9936))
+- Replace migrated users' old ids with their latest in the bots' owners and permitted install locations ([#9941](https://github.com/open-chat-labs/open-chat/pull/9941))
+
+## [[2.0.2130](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2130-local_user_index)] - 2026-10-12
+
+### Added
+
+- Return the new `tip_messages` permission in chat summaries ([#9900](https://github.com/open-chat-labs/open-chat/pull/9900))
+
+### Fixed
+
+- During account deletion, skip retrying canisters that don't expose the method for saying which groups and communities they're in ([#9903](https://github.com/open-chat-labs/open-chat/pull/9903))
+
+## [[2.0.2126](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2126-local_user_index)] - 2026-10-09
+
+### Removed
+
+- Remove the one-offs which moved the subscriptions and daily puzzle data of the users migrated so far and recomputed the `web_push_subscriptions` metric, now that they have run ([#9871](https://github.com/open-chat-labs/open-chat/pull/9871))
+
+### Fixed
+
+- Save the solved grid on a daily puzzle solve, so other devices show the finished board ([#9865](https://github.com/open-chat-labs/open-chat/pull/9865))
+
+## [[2.0.2116](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2116-local_user_index)] - 2026-10-08
+
+### Fixed
+
+- Move a migrated user's daily puzzle streak and games onto their new id ([#9841](https://github.com/open-chat-labs/open-chat/pull/9841))
+- Move a migrated user's web push subscriptions and FCM tokens onto their new id, including, once, those of the users migrated so far ([#9842](https://github.com/open-chat-labs/open-chat/pull/9842))
+- Only increase the `web_push_subscriptions` metric when a subscription is added, and recompute it on upgrade ([#9844](https://github.com/open-chat-labs/open-chat/pull/9844))
+
+## [[2.0.2108](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2108-local_user_index)] - 2026-10-07
+
+### Added
+
+- Send bots the notifications the UserIndex asks it to, eg. that one is installed in a migrated user's direct chats under their new id ([#9819](https://github.com/open-chat-labs/open-chat/pull/9819))
+
+### Changed
+
+- Uninstall a deleted group's or community's canister straight away, and keep it rather than deleting it ([#9812](https://github.com/open-chat-labs/open-chat/pull/9812))
+- Verify a sign in for a MultiUser canister acting for one of its users ([#9815](https://github.com/open-chat-labs/open-chat/pull/9815))
+
+### Removed
+
+- Remove the reclaiming of the canisters which only the old LocalGroupIndexes controlled, which has completed in prod ([#9813](https://github.com/open-chat-labs/open-chat/pull/9813))
+
+### Fixed
+
+- Stop sending and retrying events to deleted groups and communities ([#9812](https://github.com/open-chat-labs/open-chat/pull/9812))
+- Send bot calls and access token checks naming a migrated user's direct chat by their old id to their new canister, or say they've moved if it's on another subnet ([#9818](https://github.com/open-chat-labs/open-chat/pull/9818))
+- Let a migrated user install a private bot they own, or which is permitted in their direct chats, by their new id ([#9819](https://github.com/open-chat-labs/open-chat/pull/9819))
+
+## [[2.0.2098](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2098-local_user_index)] - 2026-10-06
+
 ### Added
 
 - Reclaim the canisters which only the old LocalGroupIndex still controls and put them into the pool, then move its ICP to the CyclesDispenser and refund its own cycles ([#9773](https://github.com/open-chat-labs/open-chat/pull/9773))
@@ -13,6 +102,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - Run the repeating jobs on `PerRoundTimer` rather than `set_timer_interval` ([#9772](https://github.com/open-chat-labs/open-chat/pull/9772))
+- Instantiate the msgpack (de)serializers of widely shared types once, in `types`, cutting the code by 1.8MB ([#9804](https://github.com/open-chat-labs/open-chat/pull/9804))
+- Bump the rmp-serde fork to one which reads numbers before visiting them, cutting the code by 933KB ([#9808](https://github.com/open-chat-labs/open-chat/pull/9808))
 
 ### Removed
 

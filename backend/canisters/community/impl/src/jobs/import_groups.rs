@@ -1,14 +1,15 @@
 use crate::activity_notifications::extract_activity;
-use crate::jobs::{migrate_chat_events_to_stable_memory, unlapse_members};
+use crate::jobs::unlapse_members;
 use crate::model::channels::Channel;
 use crate::model::events::{CommunityEventInternal, GroupImportedInternal};
 use crate::model::groups_being_imported::{GroupToImport, GroupToImportAction};
-use crate::model::members::AddResult;
+use crate::model::members::{AddResult, MembersToAdd};
 use crate::timer_job_types::{
-    FinalizeGroupImportJob, JoinMembersToPublicChannelJob, ProcessGroupImportChannelMembersJob, TimerJob,
+    FinalizeGroupImportJob, JoinMembersToPublicChannelJob, MarkGroupImportCompleteJob, ProcessGroupImportChannelMembersJob,
+    TimerJob,
 };
-use crate::{RuntimeState, mutate_state, read_state, run_regular_jobs};
-use chat_events::ChatEvents;
+use crate::{Data, RuntimeState, mutate_state, read_state, run_regular_jobs};
+use chat_events::{ChatEvents, ChatEventsExport};
 use constants::{OPENCHAT_BOT_USER_ID, SECOND_IN_MS};
 use group_canister::c2c_export_group::{Args, ExportExtras, Response};
 use group_chat_core::{GroupChatCore, GroupMembers};
@@ -16,7 +17,7 @@ use ic_cdk::call::RejectCode;
 use ic_cdk_timers::TimerId;
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
-use std::ops::Bound;
+use std::ops::{Bound, Deref};
 use std::time::Duration;
 use tracing::{error, info, trace};
 use types::{
@@ -29,7 +30,6 @@ const PAGE_SIZE: u32 = 19 * 102 * 1024; // Roughly 1.9MB (1.9 * 1024 * 1024)
 // (in test mode, few enough that a test's group needs several batches)
 const IMPORT_MEMBERS_BATCH_SIZE: usize = 1000;
 const IMPORT_MEMBERS_BATCH_SIZE_TEST_MODE: usize = 2;
-const MAX_INSTRUCTIONS_PER_MEMBERS_BATCH: u64 = 2_000_000_000;
 // Each retry of a batch whose members' principals couldn't be got waits this much longer than the last
 const IMPORT_MEMBERS_RETRY_INTERVAL: Milliseconds = 10 * SECOND_IN_MS;
 
@@ -39,7 +39,7 @@ thread_local! {
 
 pub(crate) fn start_job_if_required(state: &RuntimeState) -> bool {
     if TIMER_ID.get().is_none() && !state.data.groups_being_imported.is_empty() {
-        let timer_id = ic_cdk_timers::set_timer(Duration::ZERO, async { run() });
+        let timer_id = ic_cdk_timers::set_timer(Duration::ZERO, run());
         TIMER_ID.set(Some(timer_id));
         true
     } else {
@@ -47,14 +47,14 @@ pub(crate) fn start_job_if_required(state: &RuntimeState) -> bool {
     }
 }
 
-fn run() {
+async fn run() {
     trace!("'import_groups' job running");
     TIMER_ID.set(None);
     run_regular_jobs();
 
     let batch = mutate_state(next_batch);
     if !batch.is_empty() {
-        utils::async_work::spawn_tracked(import_groups(batch));
+        import_groups(batch).await;
     }
 }
 
@@ -129,10 +129,7 @@ async fn import_group(group: GroupToImport) {
                 Ok(group_canister::c2c_export_group_events::Response::Success(result)) => {
                     mutate_state(|state| {
                         if let Some((up_to, _)) = result.events.last() {
-                            state
-                                .data
-                                .groups_being_imported
-                                .mark_events_batch_complete(&group_id, up_to.clone());
+                            state.data.groups_being_imported.mark_events_batch_complete(&group_id, *up_to);
                         }
                         if result.finished {
                             state.data.groups_being_imported.mark_events_import_complete(&group_id);
@@ -201,33 +198,23 @@ pub(crate) fn finalize_group_import(group_id: ChatId) {
 
             let mut bytes = group.bytes();
             let mut chat: GroupChatCore = msgpack::deserialize(&mut bytes).unwrap();
-            // Groups on earlier versions export their `GroupChatCore` alone. The extras are not
-            // essential to the import, and this also runs in `post_upgrade`, so failing to
-            // deserialize them must not trap.
-            let extras: ExportExtras = if bytes.is_empty() {
+            // The extras carry the users' metrics and message event indexes, without which lookups by
+            // message index would fail. This also runs in `post_upgrade`, so failing to deserialize
+            // them mustn't trap.
+            let extras: ExportExtras = msgpack::deserialize(bytes).unwrap_or_else(|error| {
+                error!(%group_id, ?error, "Failed to deserialize the group's export extras");
                 ExportExtras::default()
-            } else {
-                msgpack::deserialize(bytes).unwrap_or_else(|error| {
-                    error!(%group_id, ?error, "Failed to deserialize the group's export extras");
-                    ExportExtras::default()
-                })
-            };
-            // The channel's events refer to the group's former members, so they are recorded as the
-            // community's former members too
-            state.data.members.add_former_members(extras.former_members);
-            for (old_user_id, new_user_id) in extras.migrated_user_ids {
-                state.data.migrated_user_ids.insert(old_user_id, new_user_id);
-            }
+            });
 
             chat.events.set_chat(Chat::Channel(community_id, channel_id));
             chat.members.set_chat(MultiUserChat::Channel(community_id, channel_id));
-            // The message ids and expiring events were written to stable memory as the events were
-            // imported. The imported messages were also added to the search index, but any messages
-            // still in the group's legacy search index on the heap are left there to be re-indexed
-            // under the channel's prefix by `migrate_chat_events_to_stable_memory`, in case some
-            // events were imported by a version of this canister which didn't index them.
-            chat.events.discard_message_ids_on_heap();
-            chat.events.discard_expiring_events_on_heap();
+            // The message ids, expiring events and search index were written to stable memory as the
+            // events were imported, and the users' metrics and message event indexes, which the group
+            // exported alongside its chat, are written under the channel's prefixes now
+            chat.events.import_from_group(ChatEventsExport {
+                user_metrics: extras.user_metrics,
+                message_event_index_chunks: extras.message_event_index_chunks,
+            });
 
             let blocked: Vec<_> = chat.members.blocked();
             if !blocked.is_empty() {
@@ -259,11 +246,11 @@ pub(crate) fn finalize_group_import(group_id: ChatId) {
                 date_imported: None, // This is only set once everything is complete
             });
 
-            // Moves the imported group's data which is still on the heap (eg. its users' metrics)
-            // into stable memory under the channel's prefixes
-            migrate_chat_events_to_stable_memory::start_job_if_required(state);
             // The group may have been unlapsing its members when it was exported
             unlapse_members::start_job_if_required(state);
+            // The channel can't be deleted until its members have been added to the community (see
+            // `is_importing_into_channel`)
+            state.data.channels_importing_members.insert(channel_id);
 
             state.data.timer_jobs.enqueue_job(
                 TimerJob::ProcessGroupImportChannelMembers(ProcessGroupImportChannelMembersJob {
@@ -285,11 +272,9 @@ pub(crate) fn finalize_group_import(group_id: ChatId) {
 
 // The channel's members are processed a batch at a time, in order of user id:
 // 1. For channel members already in the community, add the new channel to their set of channels.
-// 2. For channel members who are not yet community members, lookup their latest ids and principals,
-// then join them to the community, add the new channel to their set of channels, and add them to the
-// community's other public channels (via `JoinMembersToPublicChannelJob`). A member the group held by
-// an id they've since been migrated from is moved onto their latest id, as when the community is told
-// of a migration, which the group, being deleted once imported, won't be.
+// 2. For channel members who are not yet community members, look up their principals, then join them
+// to the community, add the new channel to their set of channels, and add them to the
+// community's other public channels (via `JoinMembersToPublicChannelJob`).
 // Once every batch has been processed, if the channel is public, the community members not in it
 // are added to it.
 pub(crate) async fn process_channel_members(mut job: ProcessGroupImportChannelMembersJob) {
@@ -313,53 +298,31 @@ pub(crate) async fn process_channel_members(mut job: ProcessGroupImportChannelMe
         let now = state.env.now();
 
         if let Ok(local_user_index_canister::c2c_user_principals_v2::Response::Success(users)) = response {
-            // In order of user id, so that the next batch can start after the last processed
+            // In order of user id
             let users: BTreeMap<_, _> = users.into_iter().collect();
 
-            let mut added = Vec::new();
-            // Where the next run carries on from: after the last member looked at, unless this run
-            // stops before it has processed them all
-            let mut processed_to = scanned_to;
-            let mut last_processed = job.after;
-            let mut migrated = Vec::new();
-            for (index, (user_id, latest)) in users.into_iter().enumerate() {
-                // Each is written to stable memory, so if the instructions for this run are used up,
-                // the rest are left for the next run
-                if index > 0
-                    && index.is_multiple_of(100)
-                    && ic_cdk::api::instruction_counter() > MAX_INSTRUCTIONS_PER_MEMBERS_BATCH
-                {
-                    processed_to = last_processed;
-                    break;
+            // Added together, so that they're written to stable memory together
+            let mut to_add = MembersToAdd::default();
+            for (user_id, user) in users {
+                // Every group holds its members by their latest ids, so a member found under another
+                // id, ie. one they've since been migrated from, is never expected
+                if user.user_id != user_id {
+                    error!(%group_id, %user_id, latest = %user.user_id, "Imported member found under another id");
+                    continue;
                 }
-                last_processed = Some(user_id);
-
-                let principal = latest.principal;
-                if latest.user_id != user_id {
-                    // The group held the member by an id they've since been migrated from. They're added
-                    // under it, as the channel holds them, then moved onto their latest id below. If
-                    // they're already a member under it, only the channel is moved. If they've been
-                    // blocked under it, they're removed from the channel as when blocked under the old.
-                    migrated.push((user_id, latest));
-                    if state.data.members.is_blocked(&latest.user_id) {
-                        let channel = state.data.channels.get_mut(&channel_id).unwrap();
-                        let _ = channel
-                            .chat
-                            .remove_member(Caller::OCBot(OPENCHAT_BOT_USER_ID), user_id, false, now);
-                        continue;
-                    }
-                    if state.data.members.contains(&latest.user_id) {
-                        continue;
-                    }
-                }
-
-                match state.data.members.add(
+                to_add.push(
                     user_id,
-                    principal,
+                    user.principal,
                     batch.get(&user_id).copied().unwrap_or_default(),
                     None,
-                    now,
-                ) {
+                );
+            }
+            // Those blocked from the community, who are removed from the channel
+            let mut to_remove = Vec::new();
+
+            let mut added = Vec::new();
+            for (user_id, result) in state.data.members.add_many(to_add, now) {
+                match result {
                     AddResult::Success(_) => {
                         state.data.invited_users.remove(&user_id, now);
                         state.data.members.mark_member_joined_channel(user_id, channel_id);
@@ -368,32 +331,21 @@ pub(crate) async fn process_channel_members(mut job: ProcessGroupImportChannelMe
                     AddResult::AlreadyInCommunity => {
                         state.data.members.mark_member_joined_channel(user_id, channel_id);
                     }
-                    AddResult::Blocked => {
-                        let channel = state.data.channels.get_mut(&channel_id).unwrap();
-                        let _ = channel
-                            .chat
-                            .remove_member(Caller::OCBot(OPENCHAT_BOT_USER_ID), user_id, false, now);
-                    }
+                    AddResult::Blocked => to_remove.push(user_id),
                 }
             }
 
-            for (old_user_id, latest) in migrated {
-                state
-                    .data
-                    .migrate_user_ids(&[old_user_id], latest.user_id, Some(latest.principal), now);
-                if state.data.members.contains(&latest.user_id) {
-                    state.data.invited_users.remove(&latest.user_id, now);
-                    if state
-                        .data
-                        .channels
-                        .get(&channel_id)
-                        .is_some_and(|c| c.chat.members.contains(&latest.user_id))
-                    {
-                        state.data.members.mark_member_joined_channel(latest.user_id, channel_id);
-                    }
-                }
-                if let Some(added) = added.iter_mut().find(|u| **u == old_user_id) {
-                    *added = latest.user_id;
+            // The channel may have been deleted while its members were being imported, in which case
+            // the import carries on to the end, so that the community stops waiting for it
+            if !to_remove.is_empty()
+                && let Some(channel) = state.data.channels.get_mut(&channel_id)
+            {
+                // In order of user id, as they were looked at, so that the events are pushed in that order
+                to_remove.sort_unstable();
+                for user_id in to_remove {
+                    let _ = channel
+                        .chat
+                        .remove_member(Caller::OCBot(OPENCHAT_BOT_USER_ID), user_id, false, now);
                 }
             }
 
@@ -414,7 +366,7 @@ pub(crate) async fn process_channel_members(mut job: ProcessGroupImportChannelMe
                 job.members_added.extend(added);
             }
 
-            job.after = processed_to;
+            job.after = scanned_to;
             job.attempt = 0;
         } else if job.attempt < 30 {
             job.attempt += 1;
@@ -451,6 +403,8 @@ fn next_batch_of_channel_members(
     let batch_size = if data.test_mode { IMPORT_MEMBERS_BATCH_SIZE_TEST_MODE } else { IMPORT_MEMBERS_BATCH_SIZE };
     let mut batch = BTreeMap::new();
     let mut scanned_to = job.after;
+    // Already recorded when the import was finalized, unless that was by an earlier version
+    data.channels_importing_members.insert(job.channel_id);
 
     if let Some(channel) = data.channels.get(&job.channel_id) {
         let bots = channel.chat.members.bots();
@@ -477,22 +431,22 @@ fn complete_processing_channel_members(group_id: ChatId, channel_id: ChannelId, 
         // Add community members to the channel if it is public
         add_community_members_to_channel_if_public(channel_id, state);
 
-        // By their latest ids, in case the community has been told of any of their migrations since
-        // they were added
-        let members_added = members_added
-            .into_iter()
-            .map(|user_id| state.data.migrated_user_ids.latest(user_id))
-            .collect();
         state.push_community_event(CommunityEventInternal::GroupImported(Box::new(GroupImportedInternal {
             group_id,
             channel_id,
             members_added,
         })));
-    });
 
-    ic_cdk_timers::set_timer(Duration::ZERO, async move {
-        run_regular_jobs();
-        mark_import_complete(group_id, channel_id)
+        state.data.channels_importing_members.remove(&channel_id);
+
+        // Queued as a job, so that it survives an upgrade and the channel can't be deleted until it
+        // has run (see `is_importing_into_channel`)
+        let now = state.env.now();
+        state.data.timer_jobs.enqueue_job(
+            TimerJob::MarkGroupImportComplete(MarkGroupImportCompleteJob { group_id, channel_id }),
+            now,
+            now,
+        );
     });
     info!(%group_id, "'process_channel_members' completed");
 }
@@ -521,7 +475,12 @@ pub(crate) fn mark_import_complete(group_id: ChatId, channel_id: ChannelId) {
 
     mutate_state(|state| {
         let now = state.env.now();
-        state.data.channels.get_mut(&channel_id).unwrap().date_imported = Some(now);
+        // Only possible for a channel deleted during its import before that was refused
+        let Some(channel) = state.data.channels.get_mut(&channel_id) else {
+            error!(%group_id, ?channel_id, "Channel deleted before its import was complete");
+            return;
+        };
+        channel.date_imported = Some(now);
         let channel = state.data.channels.get(&channel_id).unwrap();
         let public_community_activity = state.data.is_public.then(|| extract_activity(now, &state.data));
 
@@ -556,6 +515,24 @@ pub(crate) fn mark_import_complete(group_id: ChatId, channel_id: ChannelId) {
     });
 
     info!(%group_id, "'mark_import_complete' completed");
+}
+
+// Whether a group is still being imported into the channel, ie. its members are still being added to
+// the community, or the GroupIndex is yet to be told that the import is complete. That needs the
+// channel, so it can't be deleted until then. Imports finalized by an earlier version are only
+// recorded in `channels_importing_members` once their first batch runs, so are known by their jobs
+// until then.
+pub(crate) fn is_importing_into_channel(channel_id: ChannelId, data: &Data) -> bool {
+    data.channels_importing_members.contains(&channel_id)
+        || data.timer_jobs.iter().any(|(_, job)| {
+            matches!(
+                job.deref().borrow().as_ref(),
+                Some(
+                    TimerJob::ProcessGroupImportChannelMembers(ProcessGroupImportChannelMembersJob { channel_id: c, .. })
+                    | TimerJob::MarkGroupImportComplete(MarkGroupImportCompleteJob { channel_id: c, .. })
+                ) if *c == channel_id
+            )
+        })
 }
 
 // Whether retrying the import could ever succeed. A batch which is too large for the group to

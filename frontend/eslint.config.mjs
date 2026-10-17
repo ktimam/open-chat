@@ -10,6 +10,7 @@ import globals from "globals";
 import { dirname } from "path";
 import { fileURLToPath } from "url";
 import noPagejsDirect from "./eslint-rules/no-pagejs-direct.mjs";
+import noRestrictedDynamicImports from "./eslint-rules/no-restricted-dynamic-imports.mjs";
 
 // __dirname equivalent
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -17,6 +18,27 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Load the ESM-only Svelte plugin via dynamic import
 const svelte = await import("eslint-plugin-svelte").then((mod) => mod.default ?? mod);
 const svelteParser = await import("svelte-eslint-parser").then((mod) => mod.default ?? mod);
+
+// What app code may not import. The same patterns cover static imports and re-exports
+// (no-restricted-imports) and dynamic import() (local/no-restricted-dynamic-imports).
+const agentOrWorker = {
+    regex: "^@(agent|worker)($|[/?])|(^|/)openchat-(agent|worker)/",
+    message: "The app talks to the agent and worker only through @client.",
+};
+const insideClient = {
+    regex: "^@client(?:/(?!reactiveStores$)|\\?)|(^|/)openchat-client/",
+    message: "Import from @client or the DOM-free @client/reactiveStores entry point, not from an internal path.",
+};
+
+function restrictAppImports(...patterns) {
+    return {
+        "no-restricted-imports": ["error", { patterns }],
+        "local/no-restricted-dynamic-imports": ["error", { patterns }],
+    };
+}
+
+const svelteStoreMessage =
+    "Use runes or the custom stores in openchat-client/src/utils/stores.ts (see frontend/CLAUDE.md).";
 
 const compat = new FlatCompat({
     baseDirectory: __dirname,
@@ -37,7 +59,12 @@ export default defineConfig([
             "@typescript-eslint": typescriptEslint,
             prettier,
             svelte,
-            local: { rules: { "no-pagejs-direct": noPagejsDirect } },
+            local: {
+                rules: {
+                    "no-pagejs-direct": noPagejsDirect,
+                    "no-restricted-dynamic-imports": noRestrictedDynamicImports,
+                },
+            },
         },
         extends: compat.extends(
             "eslint:recommended",
@@ -48,6 +75,92 @@ export default defineConfig([
             "@typescript-eslint/no-explicit-any": ["error"],
             "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
             "local/no-pagejs-direct": "error",
+            // New state uses runes or the custom stores in openchat-client/src/utils/stores.ts.
+            // Type-only imports stay allowed: the custom stores implement svelte/store's contract.
+            "@typescript-eslint/no-restricted-imports": [
+                "error",
+                {
+                    paths: [{ name: "svelte/store", allowTypeImports: true, message: svelteStoreMessage }],
+                },
+            ],
+            "no-restricted-syntax": [
+                "error",
+                { selector: "ImportExpression[source.value='svelte/store']", message: svelteStoreMessage },
+            ],
+        },
+    },
+    // The app reaches the worker and agent only through the client and its public entry points.
+    {
+        files: ["app/src/**/*.ts", "app/src/**/*.js", "app/src/**/*.svelte"],
+        rules: restrictAppImports(agentOrWorker, insideClient),
+    },
+    // Tests may reach inside the client to build its internal state; the agent and worker stay off limits.
+    {
+        files: ["app/src/**/*.spec.ts", "app/src/**/*.test.ts"],
+        rules: restrictAppImports(agentOrWorker),
+    },
+    // Files that used svelte/store before the rule. Move each to runes or the custom stores when you touch it,
+    // then take it off this list. Never add to it.
+    {
+        files: [
+            "app/src/actions/longpress.ts",
+            "app/src/actions/translatable.ts",
+            "app/src/components/home/ExternalContent.spec.ts",
+            "app/src/components/home/MemeBuilder.spec.ts",
+            "app/src/components_shared/calendar/weekdays.ts",
+            "app/src/i18n/i18n.ts",
+            "app/src/i18n/localeFallback.spec.ts",
+            "app/src/i18n/storedLocale.spec.ts",
+            "app/src/stores/androidInterfaceSizes.ts",
+            "app/src/stores/automation.ts",
+            "app/src/stores/chatListView.ts",
+            "app/src/stores/chatShortcuts.ts",
+            "app/src/stores/messageToForward.ts",
+            "app/src/stores/pendingShare.ts",
+            "app/src/stores/pinNumber.ts",
+            "app/src/stores/proposalSections.ts",
+            "app/src/stores/quickReactions.ts",
+            "app/src/stores/rtl.ts",
+            "app/src/stores/search.svelte.ts",
+            "app/src/stores/snow.ts",
+            "app/src/stores/solana/walletStore.ts",
+            "app/src/stores/time.ts",
+            "app/src/stores/toast.ts",
+            "app/src/stores/video.call.spec.ts",
+            "app/src/stores/video.spec.ts",
+            "app/src/stores/video.ts",
+            "app/src/stores/xframe.ts",
+            "app/src/theme/themeV2.ts",
+            "app/src/theme/themes.ts",
+            "app/src/utils/access.ts",
+            "app/src/utils/dailyPuzzle.svelte.ts",
+            "app/src/utils/native/call_bridge.spec.ts",
+            "app/src/utils/native/share_target.ts",
+            "app/src/utils/navigation.ts",
+            "app/src/utils/share.ts",
+            "app/src/utils/store.ts",
+            "app/src/utils/user.ts",
+            "openchat-client/src/openchat.ts",
+            "openchat-client/src/state/app/appStores.spec.ts",
+            "openchat-client/src/stores/background.ts",
+            "openchat-client/src/stores/i18n.spec.ts",
+            "openchat-client/src/stores/lastOnlineDates.ts",
+            "openchat-client/src/stores/mapStore.spec.ts",
+            "openchat-client/src/stores/minutesOnline.ts",
+            "openchat-client/src/stores/network.ts",
+            "openchat-client/src/stores/profiling.ts",
+            "openchat-client/src/stores/rules.ts",
+            "openchat-client/src/stores/throttling.ts",
+            "openchat-client/src/stores/typing.ts",
+            "openchat-client/src/utils/cryptoFormatter.ts",
+            "openchat-client/src/utils/poller.ts",
+            "openchat-client/src/utils/rtc.ts",
+            "openchat-client/src/utils/stores.spec.ts",
+            "openchat-client/src/utils/user.spec.ts",
+        ],
+        rules: {
+            "@typescript-eslint/no-restricted-imports": "off",
+            "no-restricted-syntax": "off",
         },
     },
     // Explicit exceptions: files that are permitted to import page.js directly.
@@ -58,15 +171,54 @@ export default defineConfig([
         files: [
             "app/src/utils/navigation.ts",
             "openchat-client/src/state/path/stores.ts",
+            // checks the new web UI's route table with page.js's own matching
+            "app/src/web/router/routeTable.spec.ts",
         ],
         rules: {
             "local/no-pagejs-direct": "off",
+        },
+    },
+    // openchat-ui's plain-JS behaviours (a11y.js, tooltip.js) run in the browser.
+    {
+        files: ["openchat-ui/src/**/*.js"],
+        languageOptions: {
+            globals: {
+                ...globals.browser,
+            },
+        },
+    },
+    // Lint every Svelte component with the same rules as the .ts files.
+    {
+        files: ["**/*.svelte"],
+        languageOptions: {
+            parser: svelteParser,
+            parserOptions: {
+                parser: tsParser,
+                extraFileExtensions: [".svelte"],
+            },
+            globals: {
+                ...globals.browser,
+            },
+        },
+        rules: {
+            // TypeScript already reports undefined names, and no-undef doesn't know the DOM types
+            // (NodeListOf, CanvasImageSource). typescript-eslint turns it off for .ts files for the same reason.
+            "no-undef": "off",
+            // typescript-eslint switches these on for .ts files only; components get them too.
+            "no-var": "error",
+            "prefer-rest-params": "error",
+            "prefer-spread": "error",
+            // The core prefer-const flags `let { ... } = $props()` and `let x = $derived(...)`, which Svelte writes
+            // with `let`. eslint-plugin-svelte's version understands runes.
+            // `destructuring: "all"`: a destructuring that mixes reassigned and fixed names stays `let`.
+            "svelte/prefer-const": ["error", { destructuring: "all" }],
         },
     },
     {
         files: [
             "app/src/components/Router.svelte",
             "app/src/components_mobile/Router.svelte",
+            "app/src/web/router/Router.svelte",
             "app/src/components_mobile/home/SlidingModals.svelte",
         ],
         languageOptions: {
@@ -89,8 +241,9 @@ export default defineConfig([
     globalIgnores([
         "**/candid/*.ts",
         "**/candid/*.js",
-        // Compiled/bundled output — never lint build artifacts.
-        "**/lib/**",
+        // Compiled/bundled output — never lint build artifacts (the sub-packages' top-level lib/;
+        // openchat-ui/src/lib is library source and is linted).
+        "*/lib/**",
         "**/build/**",
         "**/dist/**",
         "**/dist-js/**",

@@ -17,7 +17,7 @@
     import { getContext } from "svelte";
     import Close from "svelte-material-icons/Close.svelte";
     import OpenInNew from "svelte-material-icons/OpenInNew.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AiAppSurfaceDestination from "../../components/home/AiAppSurfaceDestination.svelte";
     import HardenedAiAppSurface from "../../components/home/HardenedAiAppSurface.svelte";
 

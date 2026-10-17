@@ -718,7 +718,7 @@ export function checkCurrentClientCi({
   const scripts = frontendPackage.scripts;
   assert.equal(
     scripts["check:ci"],
-    "npm run lint:check && node ./build-ci.mjs typecheck typecheck:agent test",
+    "npm run lint:check && node ./build-ci.mjs typecheck typecheck:agent typecheck:packages test",
     "All check:ci contracts must execute",
   );
   assert.equal(
@@ -735,6 +735,11 @@ export function checkCurrentClientCi({
     "tsc --noEmit -p openchat-agent/tsconfig.json",
   );
   assert.equal(scripts.test, "vitest --run");
+  assert.equal(
+    scripts["typecheck:packages"],
+    "tsc --noEmit -p openchat-client/tsconfig.json && tsc --noEmit -p openchat-shared/tsconfig.json && tsc --noEmit -p openchat-worker/tsconfig.json",
+    "Every shared frontend package must be typechecked",
+  );
   assert.equal(scripts["build:prod"], "cd app && sh ./build_prod.sh");
   for (const fragment of [
     'spawn("npm", ["run", script]',

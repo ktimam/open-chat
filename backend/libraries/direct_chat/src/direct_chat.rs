@@ -17,7 +17,6 @@ use types::{
     P2PSwapContent, P2PSwapStatus, ReserveP2PSwapSuccess, TimestampMillis, Timestamped, UserId, UserIdAndPrincipal, UserType,
     VideoCallPresence,
 };
-use utils::migrated_user_ids::MigratedUserIds;
 
 /// One user's copy of a direct chat. Each user of a chat holds their own copy, with its own events
 /// (so its own event and message indexes) and its own record of how far each of them has read,
@@ -102,22 +101,12 @@ impl DirectChat {
         }
     }
 
-    // Moves what the chat holds under the user's id onto their new id, once they are migrated to a
-    // MultiUser canister: their metrics and, if the chat is with themselves, the other user
-    pub(crate) fn migrate_own_user_id(&mut self, old_user_id: UserId, new_user_id: UserId) {
-        self.events.migrate_user_metrics(old_user_id, new_user_id);
-        if self.them == old_user_id {
-            self.them = new_user_id;
-            self.events.set_direct_chat_user(new_user_id);
-        }
-    }
-
-    // Moves the chat onto the other user's new id, once they are migrated to a MultiUser canister.
-    // Their messages keep the id they were sent under.
-    pub(crate) fn migrate_their_user_id(&mut self, new_user_id: UserId, now: TimestampMillis) {
-        self.them = new_user_id;
-        self.events.set_direct_chat_user(new_user_id);
-        self.them_migrated_at = Some(now);
+    // The id unique to the chat which its stable memory keys are built from
+    pub fn key_id(&self) -> u32 {
+        self.events
+            .stable_memory_prefix()
+            .direct_chat_key_id()
+            .expect("Every direct chat is keyed by its key_id")
     }
 
     pub fn events(&self) -> &ChatEvents {
@@ -380,26 +369,20 @@ impl DirectChat {
     pub fn edit_message<P: EventPusher>(
         &mut self,
         args: EditMessageArgs,
-        migrated_user_ids: &MigratedUserIds,
         event_pusher: Option<P>,
     ) -> OCResult<EditMessageSuccess> {
-        self.events.edit_message(args, migrated_user_ids, event_pusher)
+        self.events.edit_message(args, event_pusher)
     }
 
-    pub fn delete_messages(
-        &mut self,
-        args: DeleteUndeleteMessagesArgs,
-        migrated_user_ids: &MigratedUserIds,
-    ) -> Vec<(MessageId, OCResult<DeleteMessageSuccess>)> {
-        self.events.delete_messages(args, migrated_user_ids)
+    pub fn delete_messages(&mut self, args: DeleteUndeleteMessagesArgs) -> Vec<(MessageId, OCResult<DeleteMessageSuccess>)> {
+        self.events.delete_messages(args)
     }
 
     pub fn undelete_messages(
         &mut self,
         args: DeleteUndeleteMessagesArgs,
-        migrated_user_ids: &MigratedUserIds,
     ) -> Vec<(MessageId, OCResult<Option<BotNotification>>)> {
-        self.events.undelete_messages(args, migrated_user_ids)
+        self.events.undelete_messages(args)
     }
 
     pub fn remove_deleted_message_content(
@@ -415,28 +398,21 @@ impl DirectChat {
     pub fn add_reaction<P: EventPusher>(
         &mut self,
         args: AddRemoveReactionArgs,
-        migrated_user_ids: &MigratedUserIds,
         event_pusher: Option<P>,
     ) -> OCResult<UpdateMessageSuccess<MessageInternal>> {
-        self.events.add_reaction(args, migrated_user_ids, event_pusher)
+        self.events.add_reaction(args, event_pusher)
     }
 
-    pub fn remove_reaction(
-        &mut self,
-        args: AddRemoveReactionArgs,
-        migrated_user_ids: &MigratedUserIds,
-    ) -> OCResult<UpdateMessageSuccess> {
-        self.events.remove_reaction(args, migrated_user_ids)
+    pub fn remove_reaction(&mut self, args: AddRemoveReactionArgs) -> OCResult<UpdateMessageSuccess> {
+        self.events.remove_reaction(args)
     }
 
     pub fn tip_message<P: EventPusher>(
         &mut self,
         args: TipMessageArgs,
-        migrated_user_ids: &MigratedUserIds,
         event_pusher: Option<P>,
     ) -> OCResult<UpdateMessageSuccess> {
-        self.events
-            .tip_message(args, EventIndex::default(), migrated_user_ids, event_pusher)
+        self.events.tip_message(args, EventIndex::default(), event_pusher)
     }
 
     pub fn mark_message_reminder_created_message_hidden(&mut self, message_index: MessageIndex, now: TimestampMillis) -> bool {
@@ -512,10 +488,9 @@ impl DirectChat {
         thread_root_message_index: Option<MessageIndex>,
         message_id: MessageId,
         now: TimestampMillis,
-        migrated_user_ids: &MigratedUserIds,
     ) -> OCResult<UpdateMessageSuccess<u32>> {
         self.events
-            .cancel_p2p_swap(user_id, thread_root_message_index, message_id, now, migrated_user_ids)
+            .cancel_p2p_swap(user_id, thread_root_message_index, message_id, now)
     }
 
     pub fn set_p2p_swap_status(
@@ -775,28 +750,6 @@ mod tests {
                 .archived,
             None
         );
-    }
-
-    #[test]
-    fn thread_roots_are_translated_between_ids_and_indexes() {
-        init_stable_memory_map();
-        let me = user(1);
-        let them = user(2);
-        let mut chat = DirectChat::new(me, them, UserType::User, 1, None, 123, 1);
-        chat.push_message::<NullEventPusher>(message(me, 1, 100), None, None);
-
-        assert_eq!(chat.thread_root_message_id(None).unwrap(), None);
-        assert_eq!(chat.thread_root_message_index(None).unwrap(), None);
-        assert_eq!(
-            chat.thread_root_message_id(Some(0.into())).unwrap(),
-            Some(MessageId::from(1u128))
-        );
-        assert_eq!(
-            chat.thread_root_message_index(Some(MessageId::from(1u128))).unwrap(),
-            Some(0.into())
-        );
-        assert!(chat.thread_root_message_id(Some(1.into())).is_err());
-        assert!(chat.thread_root_message_index(Some(MessageId::from(2u128))).is_err());
     }
 
     #[test]

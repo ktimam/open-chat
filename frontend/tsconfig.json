@@ -14,7 +14,7 @@
         "resolveJsonModule": true,
         "sourceMap": false,
         "target": "ESNext",
-        "types": ["jest", "node", "svelte"],
+        "types": ["vitest/globals", "node", "svelte"],
         "useDefineForClassFields": true,
         "verbatimModuleSyntax": true,
         "paths": {
@@ -26,6 +26,8 @@
             "@agent/*": ["./openchat-agent/src/*"],
             "@worker": ["./openchat-worker/src/worker.ts"],
             "@worker/*": ["./openchat-worker/src/*"],
+            "@openchat/ui": ["./openchat-ui/src/lib/index.ts"],
+            "@openchat/ui/*": ["./openchat-ui/*"],
             "tauri-plugin-oc-api": ["./tauri-plugin-oc/guest-js/index.ts"],
             "tauri-plugin-oc-api/*": ["./tauri-plugin-oc/guest-js/*"]
         }

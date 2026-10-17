@@ -98,7 +98,7 @@ function requireTransportGuards(client, worker) {
   const guard = worker.indexOf(
     "assertUnofficialApiRequestAllowed(payload, config.clientOnlyApps)",
   );
-  const dispatch = worker.indexOf("getAction(payload, agent, config)");
+  const dispatch = worker.indexOf("getAction(kind, payload, agent, config)");
   assert.ok(
     guard >= 0 && dispatch > guard,
     "worker must check policy before agent dispatch",
@@ -126,6 +126,16 @@ test("both real client and worker retain policy-before-dispatch ordering", () =>
     ],
   ])
     assert.throws(() => requireTransportGuards(a, b));
+  const lateGuard = worker
+    .replace(
+      "assertUnofficialApiRequestAllowed(payload, config.clientOnlyApps);",
+      "",
+    )
+    .replace(
+      "const action = getAction(kind, payload, agent, config);",
+      "const action = getAction(kind, payload, agent, config);\nassertUnofficialApiRequestAllowed(payload, config.clientOnlyApps);",
+    );
+  assert.throws(() => requireTransportGuards(client, lateGuard));
 });
 
 function requireBackendIdentity(value) {
@@ -310,7 +320,7 @@ test("production CI supplies Git history to the real unchanged-upstream guard", 
 
 const requiredVitestIncludes = [
   "app/src/**/*.{test,spec}.ts",
-  "app/localAppRelayBuild.spec.ts",
+  "app/*.{test,spec}.ts",
   "openchat-service-worker/src/local_app_relay.spec.ts",
   "openchat-worker/src/existingAccountPolicy.spec.ts",
   "openchat-shared/src/**/*.{test,spec}.ts",
@@ -327,7 +337,7 @@ function requirePrivateBoundaryDiscovery(config) {
   assert.ok(excludes);
   assert.deepEqual(
     [...excludes.matchAll(/"([^"]+)"/gu)].map((match) => match[1]),
-    ["**/node_modules/**", "**/lib/**"],
+    ["**/node_modules/**", "*/lib/**"],
   );
 }
 
@@ -339,6 +349,7 @@ test("full frontend tests keep executable private-draft, transport and account b
       requirePrivateBoundaryDiscovery(config.replace(`"${entry}",`, "")),
     );
   for (const path of [
+    "frontend/app/localAppRelayBuild.spec.ts",
     "frontend/app/src/utils/localAppDrafts.spec.ts",
     "frontend/app/src/utils/localAppHandoff.spec.ts",
     "frontend/app/src/utils/localAppRelayDelivery.spec.ts",

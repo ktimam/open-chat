@@ -9,6 +9,7 @@ import {
     spenderSubaccount,
     userCanisterSpenderAccount,
     userWalletAccount,
+    walletApprovalFee,
 } from "./icrcAccount";
 
 const canisterId = "dfdal-2uaaa-aaaaa-qaama-cai";
@@ -17,13 +18,14 @@ const indexedUserId = "qp43m-xeaaa-aaaaa-qaama-daa";
 // A self-authenticating principal, as users sign in with
 const principal = Principal.fromUint8Array(new Uint8Array(29).fill(7)).toText();
 const getPrincipal = () => principal;
-// A user alone in their canister has no need of their principal, so it must never be asked for
+// The wallet of an id a user had before being migrated to a MultiUser canister, which was their
+// User canister's, has no need of their principal, so it must never be asked for
 const noPrincipal = (): string => {
     throw new Error("The principal was asked for");
 };
 
 describe("userWalletAccount", () => {
-    test("a user alone in their canister holds their funds in its account", () => {
+    test("the wallet of an old user id is its canister's account", () => {
         const account = userWalletAccount(canisterId, noPrincipal);
 
         expect(account.owner.toText()).toBe(canisterId);
@@ -37,19 +39,12 @@ describe("userWalletAccount", () => {
         expect(account.subaccount).toBeUndefined();
     });
 
-    test("the wallet of a user alone in their canister encodes to their user id", () => {
+    test("the wallet of an old user id encodes to that id", () => {
         expect(encodeIcrcAccount(userWalletAccount(canisterId, noPrincipal))).toBe(canisterId);
     });
 });
 
 describe("userCanisterSpenderAccount", () => {
-    test("a User canister spends as itself", () => {
-        const account = userCanisterSpenderAccount(canisterId, noPrincipal);
-
-        expect(account.owner.toText()).toBe(canisterId);
-        expect(account.subaccount).toBeUndefined();
-    });
-
     test("a MultiUser canister spends under the user's own subaccount", () => {
         const account = userCanisterSpenderAccount(indexedUserId, getPrincipal);
 
@@ -65,16 +60,7 @@ describe("paymentSpenderAccount", () => {
     const channel = { kind: "channel", communityId, channelId: 1 } as const;
     const direct = { kind: "direct_chat", userId: groupId } as const;
 
-    test("a User canister pulls every payment its user makes", () => {
-        for (const chatId of [group, channel, direct, undefined]) {
-            const account = paymentSpenderAccount(canisterId, chatId, noPrincipal);
-
-            expect(account.owner.toText()).toBe(canisterId);
-            expect(account.subaccount).toBeUndefined();
-        }
-    });
-
-    test("a group or community pulls a payment made in it by a user who holds their own funds", () => {
+    test("a group or community pulls a payment made in it", () => {
         for (const [chatId, owner] of [
             [group, groupId],
             [channel, communityId],
@@ -86,13 +72,19 @@ describe("paymentSpenderAccount", () => {
         }
     });
 
-    test("a MultiUser canister pulls any other payment made by a user who holds their own funds", () => {
+    test("a MultiUser canister pulls any other payment", () => {
         for (const chatId of [direct, undefined]) {
             const account = paymentSpenderAccount(indexedUserId, chatId, getPrincipal);
 
             expect(account.owner.toText()).toBe(canisterId);
             expect(account.subaccount).toEqual(spenderSubaccount(Principal.fromText(principal)));
         }
+    });
+});
+
+describe("walletApprovalFee", () => {
+    test("the wallet pays the transfer fee for the approval", () => {
+        expect(walletApprovalFee(10_000n)).toBe(10_000n);
     });
 });
 

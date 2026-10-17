@@ -12,7 +12,7 @@
     import { _ } from "svelte-i18n";
     import { i18nKey, interpolate } from "../../../i18n/i18n";
     import { buildDisplayName } from "../../../utils/user";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
     import Reaction from "../message/Reaction.svelte";
     import Tip from "../message/Tip.svelte";
@@ -41,7 +41,7 @@
                 case "group_chat":
                     parts.push(chat.name);
                     break;
-                case "channel":
+                case "channel": {
                     const community = $communitiesStore.get({
                         kind: "community",
                         communityId: chat.id.communityId,
@@ -51,6 +51,7 @@
                     }
                     parts.push(chat.name);
                     break;
+                }
             }
             if (ctx.threadRootMessageIndex !== undefined) {
                 parts.push("Thread");
@@ -102,7 +103,7 @@
         switch (others.size) {
             case 0:
                 return i18nKey(`activity.${root}One`, { username });
-            case 1:
+            case 1: {
                 const u = [...others][0];
                 return i18nKey(`activity.${root}Two`, {
                     username,
@@ -112,6 +113,7 @@
                         u === $currentUserIdStore ? "me" : "user",
                     ),
                 });
+            }
             default:
                 return i18nKey(`activity.${root}N`, { username, n: others.size });
         }
@@ -129,13 +131,14 @@
                 return pluraliseMessage("tip", username, otherTippers(event));
             case "crypto":
                 return i18nKey("activity.crypto", { username });
-            case "poll_vote":
+            case "poll_vote": {
                 const numVoters = numberOfPeopleVoting(message);
                 if (numVoters > 1) {
                     return i18nKey("activity.pollVoteN", { username, number: numVoters - 1 });
                 } else {
                     return i18nKey("activity.pollVote", { username });
                 }
+            }
             case "p2p_swap_accepted":
                 return i18nKey("activity.p2pSwapAccepted", { username });
         }

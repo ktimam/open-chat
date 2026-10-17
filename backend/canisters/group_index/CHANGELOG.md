@@ -8,8 +8,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Stop tracking the async work in progress, since nothing reads it any more ([#9972](https://github.com/open-chat-labs/open-chat/pull/9972))
+- Tell the members of a deleted group or community through events batched per MultiUser canister, rather than a call per member ([#10010](https://github.com/open-chat-labs/open-chat/pull/10010))
+
+### Removed
+
+- Remove the one-off which replaced old user ids in the descriptions of public groups and communities, now that it has run ([#9965](https://github.com/open-chat-labs/open-chat/pull/9965))
+- Remove the cache of users' latest ids ([#9970](https://github.com/open-chat-labs/open-chat/pull/9970))
+
+## [[2.0.2144](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2144-group_index)] - 2026-10-14
+
+### Changed
+
+- Replace old user ids mentioned in the descriptions of public groups and communities ([#9954](https://github.com/open-chat-labs/open-chat/pull/9954))
+
+## [[2.0.2135](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2135-group_index)] - 2026-10-12
+
+### Changed
+
+- Pass on the new `tip_messages` permission when creating a group ([#9902](https://github.com/open-chat-labs/open-chat/pull/9902))
+
+### Removed
+
+- Remove the one-off which queued the chats deleted so far to have their files removed, now that it has run ([#9871](https://github.com/open-chat-labs/open-chat/pull/9871))
+
+### Fixed
+
+- Don't leave a group or community name reserved when creating it fails ([#9901](https://github.com/open-chat-labs/open-chat/pull/9901))
+
+## [[2.0.2120](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2120-group_index)] - 2026-10-08
+
+### Added
+
+- Remove the files sent in deleted groups and communities, including those deleted before now ([#9849](https://github.com/open-chat-labs/open-chat/pull/9849))
+
+### Removed
+
+- Remove the one-off which handed each old LocalGroupIndex over to its LocalUserIndex, which has run in prod ([#9813](https://github.com/open-chat-labs/open-chat/pull/9813))
+
+## [[2.0.2099](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2099-group_index)] - 2026-10-06
+
+### Changed
+
 - Run the repeating jobs on `PerRoundTimer` rather than `set_timer_interval` ([#9772](https://github.com/open-chat-labs/open-chat/pull/9772))
 - Hand each old LocalGroupIndex over to its LocalUserIndex to reclaim the canisters it alone controls ([#9773](https://github.com/open-chat-labs/open-chat/pull/9773))
+- Instantiate the msgpack (de)serializers of widely shared types once, in `types`, cutting the code by 106KB ([#9804](https://github.com/open-chat-labs/open-chat/pull/9804))
+- Bump the rmp-serde fork to one which reads numbers before visiting them, cutting the code by 370KB ([#9808](https://github.com/open-chat-labs/open-chat/pull/9808))
 
 ## [[2.0.2084](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2084-group_index)] - 2026-10-02
 

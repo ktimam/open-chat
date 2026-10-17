@@ -3,7 +3,7 @@
     import type { GateBinding } from "@src/utils/access";
     import { Container, Option, Search, Select, Subtitle } from "component-lib";
     import { _ } from "svelte-i18n";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     interface Props {
         bindings: GateBinding[];
@@ -15,7 +15,7 @@
 
     let { bindings, onSelect, placeholder, title, selectedBinding = $bindable() }: Props = $props();
 
-    let searching = $state(false);
+    const searching = $state(false);
     let searchTerm = $state<string>();
     let filteredBindings = $derived(
         bindings

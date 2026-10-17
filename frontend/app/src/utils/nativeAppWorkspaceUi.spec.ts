@@ -11,19 +11,24 @@ import { localAppCardAnchors, type LocalAppCardAnchorSource } from "./localAppCa
 import type { PrivateAppWorkspaceState } from "./privateAppWorkspace";
 
 vi.mock("@client", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return {
+        ...(await import("@client/utils/stores")),
+        ...(await import("@client/state/localStorageStore")),
         currentUserIdStore: writable("synthetic-account"),
         identityStateStore: writable({ kind: "logged_in" }),
     };
 });
-vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
+vi.mock("@shared", async () => ({
+    ...(await import("@shared/utils/configKeys")),
+    ANON_USER_ID: "anonymous",
+}));
 vi.mock("../theme/themes", async () => ({
-    currentTheme: (await import("svelte/store")).writable({ mode: "light" }),
+    currentTheme: (await import("@client/utils/stores")).writable({ mode: "light" }),
 }));
 vi.mock("@utils/navigation", () => ({ navigate: vi.fn() }));
 vi.mock("./privateAppWorkspace", async () => {
-    const { writable, get } = await import("svelte/store");
+    const { writable, get } = await import("@client/utils/stores");
     const workspaceState = writable({});
     return {
         privateAppWorkspaceState: workspaceState,
@@ -48,14 +53,14 @@ vi.mock("./privateAppWorkspace", async () => {
     };
 });
 vi.mock("./nativeAppDelivery", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return {
         nativeAppPairing: writable(undefined),
         nativeAppDelivery: { cancelAll: vi.fn() },
     };
 });
 vi.mock("./localAppRelayDelivery", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return { localAppDeliveryStatus: writable(undefined) };
 });
 

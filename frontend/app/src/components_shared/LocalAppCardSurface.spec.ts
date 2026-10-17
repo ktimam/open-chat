@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { flushSync, mount, tick, unmount } from "svelte";
-import { writable, type Writable } from "svelte/store";
+import { writable, type Writable } from "@client/utils/stores";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SurfaceHarness from "./LocalAppCardSurface.spec.shell.svelte";
 

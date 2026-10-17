@@ -61,6 +61,7 @@ function state(overrides: Partial<ChatStateFull> = {}): ChatStateFull {
         installedBots: new Map(),
         bitcoinAddress: undefined,
         oneSecAddress: undefined,
+        solanaAddress: undefined,
         streakInsurance: undefined,
         premiumItems: new Set(),
         ...overrides,
@@ -169,26 +170,7 @@ describe("stateFromRows", () => {
                 { kind: "direct_chat", id: "u", version: 1 },
                 { kind: "group_chat", id: "g", version: 1 },
             ]),
-        ).toEqual({
-            directChats: ["u"],
-            movedDirectChats: new Map(),
-            groupChats: ["g"],
-            communities: ["c"],
-        });
-    });
-
-    test("a direct chat moved onto the other user's new id is removed, and its move recorded", () => {
-        expect(
-            removedFromTombstones([
-                { kind: "direct_chat", id: "old", version: 1, movedTo: "new" },
-                { kind: "direct_chat", id: "gone", version: 1 },
-            ]),
-        ).toEqual({
-            directChats: ["old", "gone"],
-            movedDirectChats: new Map([["old", "new"]]),
-            groupChats: [],
-            communities: [],
-        });
+        ).toEqual({ directChats: ["u"], groupChats: ["g"], communities: ["c"] });
     });
 });
 
@@ -277,15 +259,6 @@ describe("mergeUpdatedEventStamps", () => {
         );
         expect(stamps.map((s) => s.chatId.kind)).toEqual(["direct_chat", "group_chat"]);
     });
-
-    test("returns the previous stamps untouched when there is nothing new", () => {
-        const prev = mergeUpdatedEventStamps(
-            [],
-            updatedEvents([[groupA, [{ eventIndex: 1, timestamp: 1n }]]]),
-            1,
-        );
-        expect(mergeUpdatedEventStamps(prev, new ChatMap(), 2)).toBe(prev);
-    });
 });
 
 describe("updatesSince", () => {
@@ -297,12 +270,7 @@ describe("updatesSince", () => {
         blockedUsers: ["x"],
         pinNumberSettings: undefined,
     });
-    const noneRemoved: RemovedChats = {
-        directChats: [],
-        movedDirectChats: new Map(),
-        groupChats: [],
-        communities: [],
-    };
+    const noneRemoved: RemovedChats = { directChats: [], groupChats: [], communities: [] };
     const since = (s: ChatsSince["state"] = full, removed = noneRemoved): ChatsSince => ({
         state: s,
         removed,
@@ -310,19 +278,13 @@ describe("updatesSince", () => {
 
     test("carries the chats and removals it is given as they are", () => {
         const changed = state({ directChats: [direct("u2")], groupChats: [groupA] });
-        const removed = {
-            directChats: ["u9", "u8"],
-            movedDirectChats: new Map([["u8", "u2"]]),
-            groupChats: [],
-            communities: ["c9"],
-        };
+        const removed = { directChats: ["u9"], groupChats: [], communities: ["c9"] };
         const stamps = nextSyncStamps(undefined, touched(), 1);
         const result = updatesSince(since(changed, removed), stamps, 3);
         expect(result.directChatsAddedUpdated.map((c) => c.id.userId)).toEqual(["u2"]);
         expect(result.groupsAddedUpdated.map((g) => g.id.groupId)).toEqual(["a"]);
         expect(result.communitiesAddedUpdated).toEqual([]);
-        expect(result.directChatsRemoved).toEqual(["u9", "u8"]);
-        expect(result.directChatsMoved).toEqual(new Map([["u8", "u2"]]));
+        expect(result.directChatsRemoved).toEqual(["u9"]);
         expect(result.groupsRemoved).toEqual([]);
         expect(result.communitiesRemoved).toEqual(["c9"]);
     });

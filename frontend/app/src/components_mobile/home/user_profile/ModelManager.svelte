@@ -42,7 +42,7 @@
     import type { OpenChat } from "@client";
     import type { ModelCatalogEntry, ModelModality } from "@shared";
     import { getContext, onDestroy, onMount } from "svelte";
-    import { get } from "svelte/store";
+    import { get } from "@client";
     import {
         deleteModel,
         downloadModel,
@@ -53,7 +53,7 @@
         type LocalModel,
         type SystemResources,
     } from "tauri-plugin-oc-api";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import BrowserImageActionModeSettings from "../../../components_shared/BrowserImageActionModeSettings.svelte";
     import WebInferenceRuntimeSettings from "../../../components_shared/WebInferenceRuntimeSettings.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";

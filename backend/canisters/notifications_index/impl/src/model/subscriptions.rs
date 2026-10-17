@@ -123,6 +123,8 @@ impl Subscriptions {
             true
         });
 
+        self.total = self.total.saturating_sub(count_removed as u64);
+
         info!(count_removed, "Removed inactive subscriptions");
 
         removed

@@ -90,6 +90,7 @@ describe("Android bundled frontend OTA policy", () => {
             fs.readFileSync(path.join(REPOSITORY_DIR, "canister_ids.json"), "utf8"),
         );
         const profile = createUnofficialLocalApkEnvironment(canisters, {
+            rpId: "passkeys.example.test",
             inherited: {
                 OC_ANDROID_OTA_UPDATES: "minor",
                 OC_OTA_UPDATES: "patch",
@@ -101,7 +102,7 @@ describe("Android bundled frontend OTA policy", () => {
         expect(profile.OC_ANDROID_APPLICATION_ID).toBe("dev.openchatfork.localtest");
         const rollup = fs.readFileSync(path.join(APP_DIR, "rollup.config.mjs"), "utf8");
         const officialOnlyBundle =
-            /\.\.\.\(!localClientBuild\s*\?\s*\[\s*androidBundlePlugin\(\{\s*version,\s*includeLocalExtractor: transformersWebGpuSpikeEnabled,?\s*\}\),?\s*\]\s*:\s*\[\s*\]\)/u;
+            /\.\.\.\(!localClientBuild\s*\?\s*\[\s*androidBundlePlugin\(\{\s*version,\s*csp: \(\) => otaCsp,\s*includeLocalExtractor: transformersWebGpuSpikeEnabled,?\s*\}\),?\s*\]\s*:\s*\[\s*\]\)/u;
         expect(rollup).toMatch(officialOnlyBundle);
         expect(rollup.replace("...(!localClientBuild", "...(localClientBuild")).not.toMatch(
             officialOnlyBundle,

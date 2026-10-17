@@ -1,6 +1,7 @@
 use crate::activity_notifications::handle_activity_notification;
 use crate::guards::caller_is_escrow_canister;
-use crate::{CommunityEventPusher, RuntimeState, execute_update};
+use crate::timer_job_types::TimerJob;
+use crate::{CommunityEventPusher, RuntimeState, execute_update_even_if_frozen};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use escrow_canister::{SwapStatus, SwapStatusChange as Args};
@@ -9,7 +10,7 @@ use types::{Chat, EventIndex, P2PSwapCancelled, P2PSwapExpired, P2PSwapLocation,
 #[update(guard = "caller_is_escrow_canister", msgpack = true)]
 #[trace]
 fn c2c_notify_p2p_swap_status_change(args: Args) {
-    execute_update(|state| c2c_notify_p2p_swap_status_change_impl(args, state))
+    execute_update_even_if_frozen(|state| c2c_notify_p2p_swap_status_change_impl(args, state))
 }
 
 fn c2c_notify_p2p_swap_status_change_impl(args: Args, state: &mut RuntimeState) {
@@ -79,7 +80,7 @@ fn c2c_notify_p2p_swap_status_change_impl(args: Args, state: &mut RuntimeState) 
             let now = state.env.now();
             // Escrow identifies the acceptor by the owner of their wallet, which the swap
             // recorded when they reserved it. For a swap reserved before that was recorded,
-            // whose acceptor was alone in their canister, the owner is their user id.
+            // whose acceptor was then in their own User canister, the owner is their user id.
             let accepted_by = channel
                 .chat
                 .events
@@ -109,6 +110,13 @@ fn c2c_notify_p2p_swap_status_change_impl(args: Args, state: &mut RuntimeState) 
     }
 
     if let Some(success) = result {
+        // The swap has ended, so there is no longer any need to mark it as expired
+        state.data.timer_jobs.cancel_job(|job| {
+            matches!(job, TimerJob::MarkP2PSwapExpired(j)
+                if j.channel_id == channel_id
+                    && j.thread_root_message_index == m.thread_root_message_index
+                    && j.message_id == m.message_id)
+        });
         state.push_bot_notification(success.bot_notification);
         handle_activity_notification(state);
     }

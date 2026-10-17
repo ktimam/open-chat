@@ -1,6 +1,6 @@
 <script lang="ts">
     import type { MessageActivity } from "@client";
-    import Bitcoin from "../../icons/Bitcoin.svelte";
+    import Bitcoin from "@shared_components/icons/Bitcoin.svelte";
     import EmoticonLolOutline from "svelte-material-icons/EmoticonLolOutline.svelte";
     import ReplyOutline from "svelte-material-icons/ReplyOutline.svelte";
     import At from "svelte-material-icons/At.svelte";
@@ -13,7 +13,7 @@
 
     let { activity }: Props = $props();
 
-    let color = "var(--button-txt)";
+    const color = "var(--button-txt)";
 </script>
 
 <div class="icon">

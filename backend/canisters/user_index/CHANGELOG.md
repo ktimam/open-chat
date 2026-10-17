@@ -6,13 +6,81 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+## [[2.0.2154](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2154-user_index)] - 2026-10-16
+
 ### Added
 
-- One-off in `post_upgrade` which records the prod DailyPuzzle canister id and pushes it to every LocalUserIndex, in place of a governance proposal. Release only once the DailyPuzzle canister has its wasm ([#9768](https://github.com/open-chat-labs/open-chat/pull/9768))
+- Let platform operators set an Alchemy API key, which is passed on to every LocalUserIndex ([#9995](https://github.com/open-chat-labs/open-chat/pull/9995))
+
+### Changed
+
+- Await work inside timers rather than spawning a task from them ([#9971](https://github.com/open-chat-labs/open-chat/pull/9971))
+- Stop tracking the async work in progress, since nothing reads it any more ([#9972](https://github.com/open-chat-labs/open-chat/pull/9972))
+
+### Removed
+
+- Remove the `unique_person_proofs_submitted` metric ([#9961](https://github.com/open-chat-labs/open-chat/pull/9961))
+- Remove the one-offs which replaced old user ids in the reports, told the storage buckets the vault reviewers' latest ids and dropped the User canister's wasm, now that they have run ([#9965](https://github.com/open-chat-labs/open-chat/pull/9965))
+
+## [[2.0.2140](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2140-user_index)] - 2026-10-14
+
+### Changed
+
+- Award external achievements to users' latest ids, refusing any id which isn't a user's ([#9953](https://github.com/open-chat-labs/open-chat/pull/9953))
+- Tell the storage buckets the vault reviewers' latest ids ([#9954](https://github.com/open-chat-labs/open-chat/pull/9954))
+
+### Removed
+
+- Remove the one-off which deleted the two users stuck on 0.0.0, now that it has run ([#9915](https://github.com/open-chat-labs/open-chat/pull/9915))
+- Remove the User canister, along with upgrading User canisters and migrating users to MultiUser canisters ([#9919](https://github.com/open-chat-labs/open-chat/pull/9919))
+
+### Fixed
+
+- Replace migrated users' old ids with their latest in reported messages, including new ones, so that sanctions reach the sender ([#9941](https://github.com/open-chat-labs/open-chat/pull/9941))
+
+## [[2.0.2131](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2131-user_index)] - 2026-10-12
+
+### Fixed
+
+- Delete the two users whose canisters are stuck on 0.0.0, cancelling their migrations ([#9903](https://github.com/open-chat-labs/open-chat/pull/9903))
+
+## [[2.0.2114](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2114-user_index)] - 2026-10-08
+
+### Added
+
+- Pass a migrated user's daily puzzle data on to the LocalUserIndex holding their new id ([#9841](https://github.com/open-chat-labs/open-chat/pull/9841))
+
+### Removed
+
+- Remove the one-offs which queued the users migrated so far for the StorageIndex and moved their bots, now that they have run ([#9823](https://github.com/open-chat-labs/open-chat/pull/9823))
+- Remove the retrying of `c2c_user_ids_migrated` until the StorageIndex has it, now that it has ([#9823](https://github.com/open-chat-labs/open-chat/pull/9823))
+
+## [[2.0.2112](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2112-user_index)] - 2026-10-07
+
+### Added
+
+- Send each migrated user's old and new ids to the StorageIndex, including, once, those migrated so far ([#9790](https://github.com/open-chat-labs/open-chat/pull/9790))
 
 ### Changed
 
 - Run the repeating jobs on `PerRoundTimer` rather than `set_timer_interval` ([#9772](https://github.com/open-chat-labs/open-chat/pull/9772))
+- Instantiate the msgpack (de)serializers of widely shared types once, in `types`, cutting the code by 129KB ([#9804](https://github.com/open-chat-labs/open-chat/pull/9804))
+- Bump the rmp-serde fork to one which reads numbers before visiting them, cutting the code by 620KB ([#9808](https://github.com/open-chat-labs/open-chat/pull/9808))
+
+### Removed
+
+- Remove the one-off which set the DailyPuzzle canister id, now that it has run ([#9775](https://github.com/open-chat-labs/open-chat/pull/9775))
+
+### Fixed
+
+- Retry payments whose ledger can't be called after a growing delay rather than every round, and park those to uninstalled or deleted ledgers ([#9792](https://github.com/open-chat-labs/open-chat/pull/9792))
+- Move bots installed in a migrated user's direct chats onto their new id and LocalUserIndex, and tell each bot, including for users migrated so far ([#9819](https://github.com/open-chat-labs/open-chat/pull/9819))
+
+## [[2.0.2097](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2097-user_index)] - 2026-10-05
+
+### Added
+
+- One-off in `post_upgrade` which records the prod DailyPuzzle canister id and pushes it to every LocalUserIndex, in place of a governance proposal. Release only once the DailyPuzzle canister has its wasm ([#9768](https://github.com/open-chat-labs/open-chat/pull/9768))
 
 ### Removed
 

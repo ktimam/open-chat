@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { writable } from "@client/reactiveStores";
 import type { LocalDraftDeliveryRequest } from "./localAppDrafts";
 import { localAppSessionNonce } from "./localAppHandoff";
 import { sealLocalAppDelivery } from "./localAppEncryption";

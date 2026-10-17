@@ -8,7 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Await work inside timers rather than spawning a task from them ([#9971](https://github.com/open-chat-labs/open-chat/pull/9971))
+- Stop tracking the async work in progress, since nothing reads it any more ([#9972](https://github.com/open-chat-labs/open-chat/pull/9972))
+
+## [[2.0.2138](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2138-registry)] - 2026-10-14
+
+### Added
+
+- Record each ledger's burn fee and pass it to the LocalUserIndexes ([#9935](https://github.com/open-chat-labs/open-chat/pull/9935))
+
+### Removed
+
+- Stop charging listing fees to the account of a user's id, which only User canisters held funds in ([#9919](https://github.com/open-chat-labs/open-chat/pull/9919))
+
+## [[2.0.2113](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2113-registry)] - 2026-10-07
+
+### Changed
+
 - Run the repeating jobs on `PerRoundTimer` rather than `set_timer_interval` ([#9772](https://github.com/open-chat-labs/open-chat/pull/9772))
+
+### Fixed
+
+- Detect a ledger which was uninstalled after running out of cycles ([#9827](https://github.com/open-chat-labs/open-chat/pull/9827))
 
 ## [[2.0.2082](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2082-registry)] - 2026-10-02
 

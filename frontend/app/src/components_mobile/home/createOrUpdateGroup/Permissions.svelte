@@ -12,11 +12,11 @@
     } from "@client";
     import { _ } from "svelte-i18n";
     import ArrowLeft from "svelte-material-icons/ArrowLeft.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import GroupCard from "../createOrUpdateGroup/GroupCard.svelte";
     import PermissionsRoleSlider from "../PermissionsRoleSlider.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
-    import { updateGroupState } from "./group.svelte";
+    import { updateGroupState } from "@shared_components/home/createOrUpdateGroup/group.svelte";
 
     type Selected = {
         role?: ChatPermissionRole;
@@ -27,7 +27,7 @@
 
     const data = updateGroupState;
     let defaultText = $derived($_("role.default"));
-    let roles = [...chatRoles];
+    const roles = [...chatRoles];
     let isCommunityPublic = $derived($selectedCommunitySummaryStore?.public ?? true);
     let isChannel = $derived(data.candidate.id.kind === "channel");
     let selectedTab = $state("permissions.general");
@@ -241,6 +241,11 @@
                     i18nKey("permissions.reactToMessages"),
                     (r) => (p.reactToMessages = r ?? p.reactToMessages),
                     p.reactToMessages,
+                )}
+                {@render permissionSummary(
+                    i18nKey("permissions.tipMessages"),
+                    (r) => (p.tipMessages = r ?? p.tipMessages),
+                    p.tipMessages,
                 )}
                 {@render permissionSummary(
                     i18nKey("permissions.mentionAllMembers", { mention: "@everyone" }),

@@ -95,23 +95,41 @@ describe("daily result custom content mapping", () => {
         return messageContent(apiMessageContent(content) as TMessageContent, "user-1");
     }
 
-    test("round trips without a caption", () => {
-        expect(roundTrip(card)).toEqual(card);
-    });
-
-    test("round trips a caption", () => {
+    test("round trips with and without a caption", () => {
         const captioned = { ...card, caption: "got there in the end" };
+        expect(roundTrip(card)).toEqual(card);
         expect(roundTrip(captioned)).toEqual(captioned);
     });
+});
 
-    test("writes the caption into the payload as version 1", () => {
-        const api = apiMessageContent({ ...card, caption: "hi" });
-        expect(api).toHaveProperty("Custom.kind", "daily_result");
-        const json = JSON.parse(
-            new TextDecoder().decode((api as { Custom: { data: Uint8Array } }).Custom.data),
+describe("prize content mapping", () => {
+    // One of the two ledgers whose symbol is TENDY
+    const tendy = "kylwo-viaaa-aaaaq-aae7a-cai";
+
+    test("keeps the prize's ledger as well as its symbol", () => {
+        const content = messageContent(
+            {
+                Prize: {
+                    prizes_remaining: 2,
+                    prizes_pending: 1,
+                    winner_count: 3,
+                    user_is_winner: false,
+                    token_symbol: "TENDY",
+                    ledger: Principal.fromText(tendy).toUint8Array(),
+                    end_date: 1_000n,
+                    caption: "a prize",
+                    diamond_only: false,
+                    lifetime_diamond_only: false,
+                    unique_person_only: false,
+                    streak_only: 0,
+                    requires_captcha: false,
+                    min_chit_earned: 0,
+                },
+            },
+            "user-1",
         );
-        expect(json.v).toBe(1);
-        expect(json.caption).toBe("hi");
+
+        expect(content).toMatchObject({ kind: "prize_content", token: "TENDY", ledger: tendy });
     });
 });
 

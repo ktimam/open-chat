@@ -11,7 +11,7 @@
     import { getContext } from "svelte";
     import { _ } from "svelte-i18n";
     import NothingToSee from "../home/NothingToSee.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -28,10 +28,9 @@
 
     let { location = $bindable() }: Props = $props();
     let searchTerm: string = $state("");
-    let placeholder = i18nKey("Search for a community or group");
+    const placeholder = i18nKey("Search for a community or group");
     let selected = $state<Match>();
     let searchTermLower = $derived(searchTerm.toLocaleLowerCase());
-    location; // usual hack
 
     let options = $derived.by(() => {
         const communities: Match[] = [...$communitiesStore.values()].map((c) => ({

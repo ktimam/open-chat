@@ -32,7 +32,7 @@
     import { SvelteSet } from "svelte/reactivity";
     import { i18nKey, interpolate } from "../../../../i18n/i18n";
     import { trimLeadingAtSymbol } from "../../../../utils/user";
-    import Translatable from "../../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import SlidingPageContent from "../../SlidingPageContent.svelte";
     import User from "../../User.svelte";
     import { CommunityState } from "./communityState.svelte";
@@ -80,7 +80,7 @@
         );
     }
 
-    let userGroup = $state<UserGroupDetails>({
+    const userGroup = $state<UserGroupDetails>({
         kind: original.kind,
         id: original.id,
         name: original.name,
@@ -92,7 +92,7 @@
     let nameDirty = $derived(original.name !== userGroup.name);
     let dirty = $derived(nameDirty || added.size > 0 || removed.size > 0);
     let saving = $state(false);
-    let communityState = new CommunityState(client, community);
+    const communityState = new CommunityState(client, community);
     let searchTermEntered = $state("");
     let trimmedName = $derived(userGroup.name.trim());
     let nameValid = $derived(

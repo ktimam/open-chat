@@ -2,7 +2,6 @@
  * This is going to encapsulate some shared logic and reactive state used for previewing and joining communities and groups
  */
 
-import { i18nKey } from "@src/i18n/i18n";
 import { toastStore } from "@src/stores/toast";
 import type {
     CommunitySummary,
@@ -11,72 +10,15 @@ import type {
     MultiUserChat,
     OpenChat,
 } from "@client";
-import { anonUserStore, chatListScopeStore, chatSummariesStore, type PaymentGateApprovals, publish, ROLE_NONE, routeForScope, selectedChatSummaryStore, selectedCommunitySummaryStore, stripSuspendedGate } from "@client";
+import { chatListScopeStore, publish, ROLE_NONE, routeForScope, selectedChatSummaryStore, selectedCommunitySummaryStore, stripSuspendedGate } from "@client";
 import { navigate } from "@utils/navigation";
-
-class ApprovalsAndCredentials {
-    #credentials = $state<string[]>([]);
-    #paymentApprovals = $state<PaymentGateApprovals>(new Map());
-    #compositeGateIndex = $state<number | undefined>(undefined);
-
-    get credentials() {
-        return this.#credentials;
-    }
-
-    get paymentApprovals() {
-        return this.#paymentApprovals;
-    }
-
-    get compositeGateIndex() {
-        return this.#compositeGateIndex;
-    }
-
-    setCompositeGateIndex(index: number) {
-        this.#compositeGateIndex = index;
-    }
-
-    reset() {
-        this.#credentials = [];
-        this.#paymentApprovals = new Map();
-        this.#compositeGateIndex = undefined;
-    }
-
-    addCredential(cred: string) {
-        this.#credentials.push(cred);
-    }
-
-    addPaymentApproval({
-        ledger,
-        amount,
-        approvalFee,
-    }: {
-        ledger: string;
-        amount: bigint;
-        approvalFee: bigint;
-    }) {
-        const existing = this.#paymentApprovals.get(ledger);
-        if (existing !== undefined) {
-            // if we already have an approval pending for this ledger we add on the amount
-            // but there will only be one fee
-            existing.amount += amount;
-            this.#paymentApprovals.set(ledger, existing);
-        } else {
-            this.#paymentApprovals.set(ledger, {
-                amount,
-                approvalFee,
-            });
-        }
-    }
-
-    balanceAfterCurrentCommitments(ledger: string, balance: bigint) {
-        return balance - (this.#paymentApprovals.get(ledger)?.amount ?? 0n);
-    }
-}
 
 class GroupPreview {
     #community = $state<CommunitySummary>();
     #chat = $state<MultiUserChat>();
     #joining = $state<MultiUserChat>();
+    // the group being joined, held while its gates are evaluated
+    #pending: MultiUserChat | undefined;
     #gateCheckFailed = $state<EnhancedAccessGate[]>([]);
     #gatesToEvaluate = $state<EnhancedAccessGate[]>([]);
     #previewingCommunity = $derived(
@@ -126,80 +68,54 @@ class GroupPreview {
         }
     }
 
-    joinGroup(client: OpenChat) {
-        if (this.#chat === undefined) return;
-
-        if (anonUserStore.value) {
-            client.updateIdentityState({
-                kind: "logging_in",
-                postLogin: {
-                    kind: "join_group",
-                    group: this.#chat,
-                    select: false,
-                },
-            });
-            return;
-        }
-
-        // it's possible that we got here via a postLogin capture in which case it's possible
-        // that we are actually already a member of this group, so we should double check here
-        // that we actually *need* to join the group
-        const chat = chatSummariesStore.value.get(this.#chat.id);
-        if (chat === undefined || chat.membership.role === ROLE_NONE || client.isLapsed(chat.id)) {
-            this.doJoinGroup(client);
-        }
+    async joinGroup(client: OpenChat, group = this.#chat): Promise<void> {
+        if (group === undefined) return;
+        this.#pending = group;
+        return this.#join(client, group);
     }
 
-    doJoinGroup(client: OpenChat, gateCheck?: GateCheckSucceeded): Promise<void> {
-        if (this.#chat === undefined) return Promise.resolve();
+    /**
+     * Carry on with the join that was waiting for its gates to be evaluated
+     */
+    doJoinGroup(client: OpenChat, gateCheck: GateCheckSucceeded): Promise<void> {
+        if (this.#pending === undefined) return Promise.resolve();
+        return this.#join(client, this.#pending, gateCheck);
+    }
 
-        const group = this.#chat;
-        this.#joining = this.#chat;
-        const credentials = gateCheck?.credentials ?? [];
-        const paymentApprovals = gateCheck?.paymentApprovals ?? new Map();
-        const compositeGateIndex = gateCheck?.compositeGateIndex;
-
-        if (gateCheck === undefined) {
-            const gates = client.accessGatesForChat(group, true);
-            const passed = client.doesUserMeetAccessGates(gates);
-
-            if (!passed) {
-                /**
-                 * If we cannot already tell that the user passes the access gate(s), check if there are any gates that require front end
-                 * pre-processing.
-                 */
-                if (client.gatePreprocessingRequired(gates)) {
-                    accessApprovalState.reset();
-                    this.#gatesToEvaluate = gates;
+    async #join(client: OpenChat, group: MultiUserChat, gateCheck?: GateCheckSucceeded) {
+        this.#joining = group;
+        try {
+            const outcome = await client.joinGroup(group, gateCheck);
+            switch (outcome.kind) {
+                case "needs_gate_evaluation":
+                    this.#gatesToEvaluate = outcome.gates;
                     publish("evaluateGroupAccessGate");
-                    return Promise.resolve();
-                }
+                    break;
+                case "gate_check_failed":
+                    this.#gateCheckFailed = outcome.gates;
+                    break;
+                case "failed":
+                    toastStore.showFailureToast(outcome.message);
+                    break;
+                case "success":
+                case "skipped":
+                    break;
+                default:
+                    outcome satisfies never;
             }
+        } finally {
+            this.#joining = undefined;
         }
-
-        return client
-            .joinGroup(group, credentials, paymentApprovals, compositeGateIndex)
-            .then((resp) => {
-                if (resp.kind === "blocked") {
-                    toastStore.showFailureToast(i18nKey("youreBlocked"));
-                } else if (resp.kind === "gate_check_failed") {
-                    const gates = client.accessGatesForChat(group);
-                    this.#gateCheckFailed = gates;
-                } else if (resp.kind !== "success") {
-                    toastStore.showFailureToast(
-                        i18nKey("joinGroupFailed", undefined, group.level, true),
-                    );
-                }
-            })
-            .finally(() => (this.#joining = undefined));
     }
 }
 
 class CommunityPreview {
     #joining = $state(false);
-    #gateCheckFailed = $state<EnhancedAccessGate>();
-    #gatesToEvaluate = $state<EnhancedAccessGate>();
+    #gateCheckFailed = $state<EnhancedAccessGate[]>([]);
+    #gatesToEvaluate = $state<EnhancedAccessGate[]>([]);
     #community = $state<CommunitySummary>();
+    // the community being joined, held while its gates are evaluated
+    #pending: CommunitySummary | undefined;
     // Where cancelling the preview should return to, if the preview was entered
     // from somewhere other than the default scope (e.g. the community explorer)
     #origin: { communityId: string; path: string } | undefined = undefined;
@@ -224,7 +140,7 @@ class CommunityPreview {
     }
 
     get gatesToEvaluate() {
-        return this.#gatesToEvaluate ? [this.#gatesToEvaluate] : [];
+        return this.#gatesToEvaluate;
     }
 
     get gateCheckFailed() {
@@ -235,73 +151,54 @@ class CommunityPreview {
         return this.#gatesInEffect;
     }
 
-    joinCommunity(client: OpenChat) {
-        if (anonUserStore.value) {
-            client.updateIdentityState({
-                kind: "logging_in",
-                postLogin: { kind: "join_community" },
-            });
-            return;
-        }
-        this.doJoinCommunity(client);
+    async joinCommunity(client: OpenChat, community = this.#community): Promise<void> {
+        if (community === undefined) return;
+        this.#pending = community;
+        return this.#join(client, community);
     }
 
     reset() {
-        this.#gatesToEvaluate = undefined;
-        this.#gateCheckFailed = undefined;
+        this.#gatesToEvaluate = [];
+        this.#gateCheckFailed = [];
     }
 
     setOrigin(communityId: string, path: string) {
         this.#origin = { communityId, path };
     }
 
-    doJoinCommunity(client: OpenChat, gateCheck?: GateCheckSucceeded): Promise<void> {
-        if (this.#previewing && this.#community) {
-            const credentials = gateCheck?.credentials ?? [];
-            const paymentApprovals = gateCheck?.paymentApprovals ?? new Map();
-            const compositeGateIndex = gateCheck?.compositeGateIndex;
-            const gateConfigWithLevel: EnhancedAccessGate = {
-                ...this.#community.gateConfig.gate,
-                level: "community",
-                collectionName: this.#community.name,
-                expiry: this.#community.gateConfig.expiry,
-            };
+    /**
+     * Carry on with the join that was waiting for its gates to be evaluated
+     */
+    doJoinCommunity(client: OpenChat, gateCheck: GateCheckSucceeded): Promise<void> {
+        if (this.#pending === undefined) return Promise.resolve();
+        this.reset();
+        return this.#join(client, this.#pending, gateCheck);
+    }
 
-            if (gateCheck === undefined) {
-                if (this.#gatesInEffect) {
-                    const gateConfigs = [this.#community.gateConfig];
-                    const gates = gateConfigs.map((gc) => gc.gate);
-                    const passed = client.doesUserMeetAccessGates(gates);
-                    if (!passed) {
-                        /**
-                         * If we cannot already tell that the user passes the access gate(s), check if there are any gates that require front end
-                         * pre-processing.
-                         */
-                        if (client.gatePreprocessingRequired(gates)) {
-                            this.#gatesToEvaluate = gateConfigWithLevel;
-                            accessApprovalState.reset();
-                            publish("evaluateCommunityAccessGate");
-                            return Promise.resolve();
-                        }
-                    }
-                }
+    async #join(client: OpenChat, community: CommunitySummary, gateCheck?: GateCheckSucceeded) {
+        this.#joining = true;
+        try {
+            const outcome = await client.joinCommunity(community, gateCheck);
+            switch (outcome.kind) {
+                case "needs_gate_evaluation":
+                    this.#gatesToEvaluate = outcome.gates;
+                    publish("evaluateCommunityAccessGate");
+                    break;
+                case "gate_check_failed":
+                    this.#gateCheckFailed = outcome.gates;
+                    break;
+                case "failed":
+                    toastStore.showFailureToast(outcome.message);
+                    break;
+                case "success":
+                case "skipped":
+                    break;
+                default:
+                    outcome satisfies never;
             }
-
-            this.reset();
-            this.#joining = true;
-
-            return client
-                .joinCommunity(this.#community, credentials, paymentApprovals, compositeGateIndex)
-                .then((resp) => {
-                    if (resp.kind === "gate_check_failed") {
-                        this.#gateCheckFailed = gateConfigWithLevel;
-                    } else if (resp.kind !== "success") {
-                        toastStore.showFailureToast(i18nKey("communities.errors.joinFailed"));
-                    }
-                })
-                .finally(() => (this.#joining = false));
+        } finally {
+            this.#joining = false;
         }
-        return Promise.resolve();
     }
 
     cancelPreview(client: OpenChat) {
@@ -321,4 +218,3 @@ class CommunityPreview {
 
 export const groupPreviewState = new GroupPreview();
 export const communityPreviewState = new CommunityPreview();
-export const accessApprovalState = new ApprovalsAndCredentials();

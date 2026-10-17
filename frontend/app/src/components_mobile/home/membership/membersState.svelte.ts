@@ -1,11 +1,12 @@
 import { i18nKey } from "@src/i18n/i18n";
 import { toastStore } from "@src/stores/toast";
+import { reactiveValue } from "@src/utils/reactiveValue";
 import {
     compareRoles,
     currentUserIdStore,
+    inviteLinkUrl,
     publish,
     roleAsText,
-    routeForChatIdentifier,
     selectedChatBlockedUsersStore,
     selectedChatBotsStore,
     selectedChatInvitedUsersStore,
@@ -24,6 +25,8 @@ import {
     type ExternalBot,
     type FullMember,
     type GrantedBotPermissions,
+    type InviteLink,
+    type InviteLinkOutcome,
     type Member,
     type MemberRole,
     type MultiUserChat,
@@ -35,21 +38,23 @@ import {
     type WebhookDetails,
 } from "@client";
 
+// A community has no webhooks
+const noWebhooks: ReadonlyMap<string, WebhookDetails> = new Map();
+
 export class MemberManagement {
     #usersToAddOrInvite = $state<UserSummary[]>([]);
     #inviting = $state(false);
-    #members = $state<ReadonlyMap<string, Member>>(new Map());
-    #lapsed = $state<ReadonlySet<string>>(new Set());
-    #blocked = $state<ReadonlySet<string>>(new Set());
-    #invited = $state<ReadonlySet<string>>(new Set());
-    #bots = $state<ReadonlyMap<string, GrantedBotPermissions>>(new Map());
-    #webhooks = $state<ReadonlyMap<string, WebhookDetails>>(new Map());
+    // Read through `reactiveValue`, so the stores are only subscribed to while a page renders them
+    #members: () => ReadonlyMap<string, Member>;
+    #lapsed: () => ReadonlySet<string>;
+    #blocked: () => ReadonlySet<string>;
+    #invited: () => ReadonlySet<string>;
+    #bots: () => ReadonlyMap<string, GrantedBotPermissions>;
+    #webhooks: () => ReadonlyMap<string, WebhookDetails>;
     #togglingSharingLink = $state(false);
-    #sharingLinkEnabled = $state(false);
-    #sharingLinkCode = $state<string>();
+    // undefined until the link has loaded
+    #inviteLink = $state<InviteLink>();
     #confirmingResetLink = $state(false);
-
-    destroy: () => void;
 
     constructor(
         private client: OpenChat,
@@ -80,21 +85,15 @@ export class MemberManagement {
                 ? selectedCommunityBotsStore
                 : selectedChatBotsStore;
 
-        const unsubs = [
-            membersStore.subscribe((m) => (this.#members = m)),
-            lapsedStore.subscribe((m) => (this.#lapsed = m)),
-            blockedStore.subscribe((m) => (this.#blocked = m)),
-            invitedStore.subscribe((m) => (this.#invited = m)),
-            botsStore.subscribe((b) => (this.#bots = b)),
-        ];
-
-        if (collection.kind !== "community") {
-            unsubs.push(selectedChatWebhooksStore.subscribe((h) => (this.#webhooks = h)));
-        }
-
-        this.destroy = () => {
-            unsubs.forEach((u) => u());
-        };
+        this.#members = reactiveValue(membersStore);
+        this.#lapsed = reactiveValue(lapsedStore);
+        this.#blocked = reactiveValue(blockedStore);
+        this.#invited = reactiveValue(invitedStore);
+        this.#bots = reactiveValue(botsStore);
+        this.#webhooks =
+            collection.kind === "community"
+                ? () => noWebhooks
+                : reactiveValue(selectedChatWebhooksStore);
     }
 
     get inviting() {
@@ -109,36 +108,32 @@ export class MemberManagement {
         return this.#togglingSharingLink;
     }
 
-    get sharingLinkEnabled() {
-        return this.#sharingLinkEnabled;
-    }
-
-    get sharingLinkCode() {
-        return this.#sharingLinkCode;
+    get inviteLink() {
+        return this.#inviteLink;
     }
 
     get invited() {
-        return this.#invited;
+        return this.#invited();
     }
 
     get blocked() {
-        return this.#blocked;
+        return this.#blocked();
     }
 
     get lapsed() {
-        return this.#lapsed;
+        return this.#lapsed();
     }
 
     get members() {
-        return this.#members;
+        return this.#members();
     }
 
     get bots() {
-        return this.#bots;
+        return this.#bots();
     }
 
     get webhooks() {
-        return this.#webhooks;
+        return this.#webhooks();
     }
 
     get level() {
@@ -161,28 +156,14 @@ export class MemberManagement {
         }
     }
 
-    #resetLink(): Promise<void> {
-        if (this.collection.kind === "channel") return Promise.resolve();
-        return this.client
-            .resetInviteCode(this.collection.id)
-            .then((resp) => {
-                if (resp.kind === "success") {
-                    this.#sharingLinkCode = resp.code;
-                } else {
-                    console.error("Unauthorized response calling resetInviteCode");
-                }
-            })
-            .catch((err) => {
-                console.error("Unable to reset invite code: ", err);
-            });
-    }
-
-    confirmResetLinkResponse(yes: boolean): Promise<void> {
-        const result = yes ? this.#resetLink() : Promise.resolve();
-
-        return result.finally(() => {
+    async confirmResetLinkResponse(yes: boolean): Promise<void> {
+        try {
+            if (yes) {
+                this.#applyInviteLink(await this.client.resetInviteLink(this.collection));
+            }
+        } finally {
             this.#confirmingResetLink = false;
-        });
+        }
     }
 
     confirmResetLink() {
@@ -361,62 +342,30 @@ export class MemberManagement {
         return this.client.canDemote(this.collection.id, from, to);
     }
 
-    get isPublic() {
-        return this.collection.public;
+    async initialiseSharing() {
+        this.#applyInviteLink(await this.client.getInviteLink(this.collection));
     }
 
-    initialiseSharing() {
-        if (this.collection.public || this.collection.kind === "channel") {
+    async toggleInviteLink() {
+        const link = this.#inviteLink;
+        if (this.#togglingSharingLink || (link?.kind !== "enabled" && link?.kind !== "disabled")) {
             return;
         }
-        this.client
-            .getInviteCode(this.collection.id)
-            .then((resp) => {
-                if (resp.kind === "success") {
-                    this.#sharingLinkEnabled = resp.code !== undefined;
-                    this.#sharingLinkCode = resp.code;
-                }
-            })
-            .catch((err) => {
-                console.error("Unable to get invite code: ", err);
-            });
+        this.#togglingSharingLink = true;
+        try {
+            this.#applyInviteLink(
+                await this.client.setInviteLinkEnabled(this.collection, link.kind === "disabled"),
+            );
+        } finally {
+            this.#togglingSharingLink = false;
+        }
     }
 
-    toggleInviteLink() {
-        if (this.collection.kind === "channel") return;
-        if (this.#togglingSharingLink) return;
-
-        this.#togglingSharingLink = true;
-        this.#sharingLinkEnabled = !this.#sharingLinkEnabled;
-        if (this.#sharingLinkEnabled) {
-            this.client
-                .enableInviteCode(this.collection.id)
-                .then((resp) => {
-                    if (resp.kind === "success") {
-                        this.#sharingLinkCode = resp.code;
-                    } else {
-                        this.#sharingLinkEnabled = false;
-                        console.error("Unauthorized response calling enableInviteCode");
-                    }
-                })
-                .catch((err) => {
-                    this.#sharingLinkEnabled = false;
-                    console.error("Unable to enable invite code: ", err);
-                })
-                .finally(() => {
-                    this.#togglingSharingLink = false;
-                });
+    #applyInviteLink(outcome: InviteLinkOutcome) {
+        if (outcome.kind === "failed") {
+            toastStore.showFailureToast(outcome.message);
         } else {
-            this.client
-                .disableInviteCode(this.collection.id)
-                .catch((err) => {
-                    this.#sharingLinkCode = undefined;
-                    this.#sharingLinkEnabled = true;
-                    console.error("Unable to disable invite code: ", err);
-                })
-                .finally(() => {
-                    this.#togglingSharingLink = false;
-                });
+            this.#inviteLink = outcome;
         }
     }
 
@@ -434,26 +383,14 @@ export class MemberManagement {
         });
     }
 
-    getSharingLink(client: OpenChat) {
-        const qs =
-            `/?ref=${currentUserIdStore.value}` +
-            (!this.collection.public ? `&code=${this.#sharingLinkCode}` : "");
-        switch (this.collection.id.kind) {
-            case "community":
-                return `${client.canonicalOrigin()}/community/${
-                    this.collection.id.communityId
-                }${qs}`;
-            case "channel":
-                return `${client.canonicalOrigin()}${routeForChatIdentifier(
-                    "community",
-                    this.collection.id,
-                )}${qs}`;
-            case "group_chat":
-                return `${client.canonicalOrigin()}${routeForChatIdentifier(
-                    "chats",
-                    this.collection.id,
-                )}${qs}`;
-        }
+    /** The URL to share, once the link has loaded and if it is public or enabled */
+    get sharingLink(): string | undefined {
+        return inviteLinkUrl(
+            this.client.canonicalOrigin(),
+            this.collection.id,
+            currentUserIdStore.value,
+            this.#inviteLink,
+        );
     }
 
     canManageBots() {

@@ -21,7 +21,6 @@
         MultiUserChatIdentifier,
         NervousSystemDetails,
         OpenChat,
-        PubSubEvents,
         ResourceKey,
         RouteParams,
         Rules,
@@ -30,14 +29,13 @@
     } from "@client";
     import {
         allUsersStore,
+        candidateGroupFromChat,
         anonUserStore,
         allChatsStore,
         chatIdentifiersEqual,
         chatListScopeStore,
         chatsInitialisedStore,
         chatSummariesListStore,
-        chatSummariesStore,
-        communitiesStore,
         ANON_USER_ID,
         CURRENT_TERMS_VERSION,
         currentUserStore,
@@ -49,7 +47,7 @@
         offlineStore,
         pinNumberResolverStore,
         querystringStore,
-        ROLE_NONE,
+        postLoginJoin,
         routeForChatIdentifier,
         routeForScope,
         routeStore,
@@ -65,11 +63,11 @@
     import { getContext, onMount, tick, untrack } from "svelte";
     import { _ } from "svelte-i18n";
     import { i18nKey } from "../../i18n/i18n";
-    import { createCandidateCommunity } from "../../stores/community";
+    import { newCommunity } from "@shared_components/home/communities/createOrUpdate/community.svelte";
     import { messageToForwardStore } from "../../stores/messageToForward";
     import { chitPopup, disableChit } from "../../stores/settings";
     import { toastStore } from "../../stores/toast";
-    import { activeVideoCall, incomingVideoCall } from "../../stores/video";
+    import { ringForRemoteCall, stopRingingForRemoteCall } from "../../stores/video";
     import {
         currentTheme,
         currentThemeName,
@@ -95,6 +93,7 @@
     import TermsUpdatedModal from "../TermsUpdatedModal.svelte";
     import GateCheckFailed from "./access/AccessGateCheckFailed.svelte";
     import AccessGateEvaluator from "./access/AccessGateEvaluator.svelte";
+    import { communityPreviewState } from "@src/utils/preview.svelte";
     import AnonFooter from "./AnonFooter.svelte";
     import ChitEarned from "./ChitEarned.svelte";
     import HallOfFame from "./ChitHallOfFame.svelte";
@@ -188,20 +187,25 @@
         | { kind: "registering" }
         | { kind: "logging_in" }
         | { kind: "not_found" }
+        | { kind: "restricted_content" }
         | { kind: "claim_daily_chit" }
         | { kind: "daily_puzzle"; gameId?: string }
         | { kind: "challenge" }
         | {
               kind: "evaluating_access_gates";
               group: MultiUserChat;
-              select: boolean;
               gates: EnhancedAccessGate[];
               level: Level;
           };
 
     let modal: ModalType = $state({ kind: "none" });
     let confirmActionEvent: ConfirmActionEvent | undefined = $state();
-    let joining: MultiUserChat | undefined = $state(undefined);
+    let joinInFlight: MultiUserChat | undefined = $state(undefined);
+    // Derived rather than set and cleared by hand, because the Overlay's teardown calls closeModal
+    // after the next join has started
+    let joining: MultiUserChat | undefined = $derived.by(() =>
+        modal.kind === "evaluating_access_gates" ? modal.group : joinInFlight,
+    );
     let showUpgrade: boolean = $state(false);
     let share: Share = { title: "", text: "", url: "", files: [] };
     let messageToForward: Message | undefined = undefined;
@@ -232,7 +236,7 @@
                 attachmentToShare = content;
                 modal = { kind: "select_chat", excludeCurrent: false };
             }),
-            subscribe("joinGroup", joinGroup),
+            subscribe("joinGroup", (group) => joinGroup(group)),
             subscribe("createCommunity", createCommunity),
             subscribe("unarchiveChat", unarchiveChat),
             subscribe("forward", forwardMessage),
@@ -252,11 +256,12 @@
             subscribe("removeBot", removeBot),
             subscribe("registerWebhook", registerWebhook),
             subscribe("updateWebhook", updateWebhook),
-            subscribe("remoteVideoCallStarted", remoteVideoCallStarted),
-            subscribe("remoteVideoCallEnded", remoteVideoCallEnded),
+            subscribe("remoteVideoCallStarted", (ev) => ringForRemoteCall(ev)),
+            subscribe("remoteVideoCallEnded", stopRingingForRemoteCall),
             subscribe("notification", (n) => client.notificationReceived(n)),
             subscribe("noAccess", () => (modal = { kind: "no_access" })),
             subscribe("notFound", () => (modal = { kind: "not_found" })),
+            subscribe("restrictedContent", () => (modal = { kind: "restricted_content" })),
             subscribe("copyUrl", copyUrl),
             subscribe("suspendUser", suspendUser),
             subscribe("closeModalStack", () => {
@@ -331,25 +336,6 @@
         }, 2000);
     }
 
-    function remoteVideoCallEnded(messageId: bigint) {
-        if ($incomingVideoCall?.messageId === messageId) {
-            incomingVideoCall.set(undefined);
-        }
-    }
-
-    function remoteVideoCallStarted(ev: PubSubEvents["remoteVideoCallStarted"]) {
-        // If current user is already in the call, or has previously been in the call, or the call started more than 2 hours ago, exit
-        if (
-            chatIdentifiersEqual($activeVideoCall?.chatId, ev.chatId) ||
-            ev.currentUserIsParticipant ||
-            Number(ev.timestamp) < Date.now() - 2 * 60 * 60 * 1000
-        ) {
-            return;
-        }
-
-        incomingVideoCall.set(ev);
-    }
-
     async function routeChange(initialised: boolean, route: RouteParams): Promise<void> {
         // wrap the whole thing in untrack because we don't want it to react to everything it reads in here
         untrack(async () => {
@@ -407,7 +393,6 @@
 
     function closeModal() {
         modal = { kind: "none" };
-        joining = undefined;
     }
 
     function closeNoAccess() {
@@ -460,7 +445,6 @@
                 return leaveGroup(confirmActionEvent.chatId, confirmActionEvent.level);
             case "leave_community":
                 return leaveCommunity(confirmActionEvent.communityId);
-            case "delete_direct_chat":
             case "delete_direct_chat": {
                 const viewingThisChat = chatIdentifiersEqual(
                     $selectedChatIdStore,
@@ -640,95 +624,40 @@
         }
     }
 
-    async function joinGroup(detail: { group: MultiUserChat; select: boolean }): Promise<void> {
-        if ($anonUserStore) {
-            client.updateIdentityState({
-                kind: "logging_in",
-                postLogin: { kind: "join_group", ...detail },
-            });
-            return;
-        }
-        const { group, select } = detail;
-
-        // it's possible that we got here via a postLogin capture in which case it's possible
-        // that we are actually already a member of this group, so we should double check here
-        // that we actually *need* to join the group
-        let chat = $chatSummariesStore.get(group.id);
-        if (chat === undefined || chat.membership.role === ROLE_NONE || client.isLapsed(chat.id)) {
-            doJoinGroup(group, select, undefined);
+    async function joinGroup(group: MultiUserChat, gateCheck?: GateCheckSucceeded): Promise<void> {
+        joinInFlight = group;
+        const outcome = await client.joinGroup(group, gateCheck).catch(() => undefined);
+        joinInFlight = undefined;
+        if (outcome === undefined) return;
+        switch (outcome.kind) {
+            case "needs_gate_evaluation":
+                modal = {
+                    kind: "evaluating_access_gates",
+                    group,
+                    gates: outcome.gates,
+                    level: group.level,
+                };
+                break;
+            case "gate_check_failed":
+                modal = { kind: "gate_check_failed", gates: outcome.gates };
+                break;
+            case "failed":
+                toastStore.showFailureToast(outcome.message);
+                break;
+            case "success":
+            case "skipped":
+                break;
+            default:
+                outcome satisfies never;
         }
     }
 
     function accessGatesEvaluated(success: GateCheckSucceeded) {
         if (modal.kind === "evaluating_access_gates") {
-            const { group, select } = modal;
+            const { group } = modal;
             closeModal();
-            doJoinGroup(group, select, success);
+            joinGroup(group, success);
         }
-    }
-
-    /**
-     * When we try to join a group we need to first scrutinise the access gates and
-     * see whether any of them require client side action before we can proceed with the
-     * call to the back end. If there are gates which require action, we need to perform
-     * those actions one by one until they are all done and then feed their results
-     * back into this function.
-     */
-
-    async function doJoinGroup(
-        group: MultiUserChat,
-        select: boolean,
-        gateCheck: GateCheckSucceeded | undefined,
-    ): Promise<void> {
-        joining = group;
-        if (gateCheck === undefined) {
-            const gates = client.accessGatesForChat(group, true);
-            const passed = client.doesUserMeetAccessGates(gates);
-
-            if (!passed) {
-                /**
-                 * If we cannot already tell that the user passes the access gate(s), check if there are any gates that require front end
-                 * pre-processing.
-                 */
-                if (client.gatePreprocessingRequired(gates)) {
-                    modal = {
-                        kind: "evaluating_access_gates",
-                        group,
-                        select,
-                        gates,
-                        level: group.level,
-                    };
-                    return Promise.resolve();
-                }
-            }
-        }
-
-        const credentials = gateCheck?.credentials ?? [];
-        const paymentApprovals = gateCheck?.paymentApprovals ?? new Map();
-        const compositeGateIndex = gateCheck?.compositeGateIndex;
-
-        return client
-            .joinGroup(group, credentials, paymentApprovals, compositeGateIndex)
-            .then((resp) => {
-                if (resp.kind === "blocked") {
-                    toastStore.showFailureToast(i18nKey("youreBlocked"));
-                    joining = undefined;
-                } else if (resp.kind === "gate_check_failed") {
-                    const gates = client.accessGatesForChat(group);
-                    modal = { kind: "gate_check_failed", gates };
-                } else if (resp.kind !== "success") {
-                    toastStore.showFailureToast(
-                        i18nKey("joinGroupFailed", undefined, group.level, true),
-                    );
-                    joining = undefined;
-                } else if (select) {
-                    joining = undefined;
-                    navigate(routeForChatIdentifier($chatListScopeStore.kind, group.id));
-                } else {
-                    joining = undefined;
-                }
-            })
-            .catch(() => (joining = undefined));
     }
 
     function upgrade() {
@@ -800,34 +729,10 @@
 
     function editGroup(detail: { chat: MultiUserChat; rules: UpdatedRules | undefined }) {
         const chat = detail.chat;
-        let level: Level = chat.id.kind === "group_chat" ? "group" : "channel";
-        let rules = detail.rules ?? { ...defaultChatRules(level), newVersion: false };
         modal = {
             kind: "new_group",
             embeddedContent: chat.kind === "channel" && chat.externalUrl !== undefined,
-            candidate: {
-                id: chat.id,
-                kind: "candidate_group_chat",
-                name: chat.name,
-                description: chat.description,
-                historyVisible: chat.historyVisible,
-                public: chat.public,
-                frozen: chat.frozen,
-                members: [],
-                permissions: structuredClone(chat.permissions),
-                rules,
-                avatar: {
-                    blobUrl: chat.blobUrl,
-                    blobData: chat.blobData,
-                },
-                gateConfig: structuredClone(chat.gateConfig),
-                level,
-                membership: chat.membership,
-                eventsTTL: chat.eventsTTL,
-                messagesVisibleToNonMembers: chat.messagesVisibleToNonMembers,
-                externalUrl: chat.kind === "channel" ? chat.externalUrl : undefined,
-                verified: chat.kind === "group_chat" ? chat.verified : false,
-            },
+            candidate: candidateGroupFromChat(chat, detail.rules),
         };
     }
 
@@ -875,13 +780,9 @@
     }
 
     function createCommunity() {
-        const maxIndex = $communitiesStore.reduce(
-            (m, [_, c]) => (c.membership.index > m ? c.membership.index : m),
-            0,
-        );
         modal = {
             kind: "edit_community",
-            community: createCandidateCommunity("", maxIndex + 1),
+            community: newCommunity(),
             communityRules: defaultChatRules("community"),
         };
     }
@@ -966,14 +867,14 @@
             console.log("We are now logged in so we are closing the register modal");
             closeModal();
         }
-        if (
-            $identityStateStore.kind === "logged_in" &&
-            $identityStateStore.postLogin?.kind === "join_group" &&
-            $chatsInitialisedStore
-        ) {
-            const join = { ...$identityStateStore.postLogin };
+        const join = postLoginJoin($identityStateStore, $chatsInitialisedStore);
+        if (join !== undefined) {
             client.clearPostLoginState();
-            tick().then(() => joinGroup(join));
+            tick().then(() =>
+                join.kind === "join_group"
+                    ? joinGroup(join.group)
+                    : communityPreviewState.joinCommunity(client, join.community),
+            );
         }
     });
 
@@ -1075,7 +976,8 @@
             <SelectChatModal
                 onClose={onCloseSelectChat}
                 onSelect={onSelectChat}
-                excludeCurrent={modal.excludeCurrent ?? true} />
+                excludeCurrent={modal.excludeCurrent ?? true}
+            />
         {:else if modal.kind === "suspended"}
             <SuspendedModal onClose={closeModal} />
         {:else if modal.kind === "register_bot"}
@@ -1100,6 +1002,12 @@
             <NoAccess onClose={closeNoAccess} />
         {:else if modal.kind === "not_found"}
             <NotFound onClose={closeNoAccess} />
+        {:else if modal.kind === "restricted_content"}
+            <NoAccess
+                onClose={closeNoAccess}
+                titleKey={"appStore.notAvailableTitle"}
+                textKey={"appStore.notAvailable"}
+            />
         {:else if modal.kind === "gate_check_failed"}
             <GateCheckFailed onClose={closeModal} gates={modal.gates} />
         {:else if modal.kind === "evaluating_access_gates"}
@@ -1111,7 +1019,7 @@
         {:else if modal.kind === "new_group"}
             <CreateOrUpdateGroup
                 embeddedContent={modal.embeddedContent}
-                bind:candidateGroup={modal.candidate}
+                candidateGroup={modal.candidate}
                 onClose={closeModal}
             />
         {:else if modal.kind === "edit_community"}
@@ -1164,6 +1072,25 @@
 <Convert bind:group={convertGroup} />
 
 <EditLabel />
+
+{#if communityPreviewState.gatesToEvaluate.length > 0}
+    <Overlay dismissible onClose={() => communityPreviewState.reset()}>
+        <AccessGateEvaluator
+            gates={communityPreviewState.gatesToEvaluate}
+            onClose={() => communityPreviewState.reset()}
+            onSuccess={(gateCheck) => communityPreviewState.doJoinCommunity(client, gateCheck)}
+        />
+    </Overlay>
+{/if}
+
+{#if communityPreviewState.gateCheckFailed.length > 0}
+    <Overlay dismissible onClose={() => communityPreviewState.reset()}>
+        <GateCheckFailed
+            onClose={() => communityPreviewState.reset()}
+            gates={communityPreviewState.gateCheckFailed}
+        />
+    </Overlay>
+{/if}
 
 <!-- Not shown while the suspension notice is up: the two would stack, and the notice
      (which also carries the contest affordance) explains the account state first. The gate

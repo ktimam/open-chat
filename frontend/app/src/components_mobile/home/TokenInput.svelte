@@ -3,7 +3,7 @@
     import { enhancedCryptoLookup as cryptoLookup, type OpenChat } from "@client";
     import { getContext, untrack, type Snippet } from "svelte";
     import { i18nKey } from "../../i18n/i18n";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -85,9 +85,13 @@
         // Update display value, this will run $effect which will set the amount!
         // We either set an actual percentage value if the value with fee is less
         // than balance, or we reduce the pct for the fee amount.
-        displayValue = toDisplayValue(
-            balance && pctValueWithFee <= balance ? pctValue : pctValue - tokenDetails.transferFee,
-        );
+        let value =
+            balance && pctValueWithFee <= balance ? pctValue : pctValue - tokenDetails.transferFee;
+        // A payment which costs more than one transfer's fee can't take quite so much
+        if (maxAmount !== undefined && value > maxAmount) {
+            value = maxAmount;
+        }
+        displayValue = toDisplayValue(value);
 
         validate();
     }

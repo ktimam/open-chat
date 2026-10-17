@@ -1,6 +1,7 @@
 import { dequal } from "dequal";
 import DRange from "drange";
 import {
+    configKeys,
     ANON_USER_ID,
     anonymousUser,
     applyOptionUpdate,
@@ -16,6 +17,9 @@ import {
     emptyDailyPuzzleState,
     getDisplayDate,
     Immutable,
+    LEDGER_CANISTER_CKBTC,
+    LEDGER_CANISTER_CKETH,
+    LEDGER_CANISTER_ICP,
     mergeListOfCombinedUnreadCounts,
     mergePairOfCombinedUnreadCounts,
     messageContextsEqual,
@@ -24,7 +28,6 @@ import {
     PremiumItem,
     SafeMap,
     videoCallsInProgressForChats,
-    type ChatEvent,
     type ChatIdentifier,
     type ChatSummary,
     type ChitState,
@@ -36,7 +39,6 @@ import {
     type CryptocurrencyDetails,
     type DirectChatSummary,
     type EnhancedTokenDetails,
-    type EventWrapper,
     type GrantedBotPermissions,
     type GroupChatSummary,
     type IdentityState,
@@ -73,21 +75,26 @@ import {
     mergePermissions,
     mergeUnconfirmedIntoSummary,
 } from "../../utils/chat";
-import { configKeys } from "../../utils/config";
 import { enumFromStringValue } from "../../utils/enums";
 import { derived, writable, type Subscriber } from "../../utils/stores";
 import { nullProfile } from "../../utils/user";
 import { chatDetailsLocalUpdates } from "../chat/detailsUpdates";
-import type { ChatDetailsState } from "../chat/serverDetails";
 import { chatSummaryLocalUpdates, ChatSummaryUpdates } from "../chat/summaryUpdates";
 import { communityLocalUpdates } from "../community/detailUpdates";
 import type { CommunityDetailsState } from "../community/server";
 import { communitySummaryLocalUpdates } from "../community/summaryUpdates";
-import type { FilteredProposals } from "../filteredProposals.svelte";
 import { LocalStorageBoolStore, LocalStorageStore } from "../localStorageStore";
 import { localUpdates } from "../localUpdates";
 import { messageLocalUpdates } from "../message/localUpdates";
 import { routeStore, selectedCommunityIdStore } from "../path/stores";
+import {
+    expiredServerEventRanges,
+    selectedServerChatStore,
+    serverEventsStore,
+    serverThreadEventsStore,
+    startChatVisit,
+    startThreadVisit,
+} from "../selectedChat";
 import { SnsFunctions } from "../snsFunctions.svelte";
 import { messagesRead } from "../unread/markRead";
 import { blockedUsersStore, suspendedUsersStore } from "../users/stores";
@@ -110,7 +117,7 @@ type LedgerCanister = string;
 type GovernanceCanister = string;
 
 export const hideMessagesFromDirectBlocked = new LocalStorageBoolStore(
-    "openchat_hideblocked",
+    configKeys.hideBlocked,
     false,
 );
 
@@ -132,7 +139,7 @@ export const nervousSystemLookup = writable<ReadonlyMap<GovernanceCanister, Nerv
     undefined,
     notEq,
 );
-export const exchangeRatesLookupStore = writable<ReadonlyMap<string, TokenExchangeRates>>(
+export const exchangeRatesLookupStore = writable<ReadonlyMap<LedgerCanister, TokenExchangeRates>>(
     new SafeMap(),
     undefined,
     notEq,
@@ -167,6 +174,7 @@ const cryptoBalancesLastUpdated = new Map<string, number>();
 
 export const bitcoinAddress = writable<string | undefined>(undefined);
 export const oneSecAddress = writable<string | undefined>(undefined);
+export const solanaAddress = writable<string | undefined>(undefined);
 export const namedAccountsStore = writable<NamedAccount[]>([], undefined, notEq);
 
 export const lastCryptoSent = new LocalStorageStore<string | undefined>(
@@ -181,23 +189,30 @@ export type ConvertedBalances = {
     ethBalance: number | undefined;
 };
 
+// The ledgers whose exchange rates balances are converted at. ckBTC and ckETH are backed 1:1 by
+// BTC and ETH, so their prices are those of BTC and ETH
+export const conversionLedgers = {
+    icp: LEDGER_CANISTER_ICP,
+    btc: LEDGER_CANISTER_CKBTC,
+    eth: LEDGER_CANISTER_CKETH,
+};
+
 export function getConvertedBalances(
-    xr: ReadonlyMap<string, TokenExchangeRates>,
+    xr: ReadonlyMap<LedgerCanister, TokenExchangeRates>,
     balance: bigint,
     decimals: number,
-    symbol: string,
+    ledger: LedgerCanister,
 ): ConvertedBalances {
-    const xrICPtoDollar = xr.get("icp")?.toUSD;
-    const xrBTCtoDollar = xr.get("btc")?.toUSD;
-    const xrETHtoDollar = xr.get("eth")?.toUSD;
-    const xrDollarToICP = xrICPtoDollar === undefined ? 0 : 1 / xrICPtoDollar;
-    const xrDollarToBTC = xrBTCtoDollar === undefined ? 0 : 1 / xrBTCtoDollar;
-    const xrDollarToETH = xrETHtoDollar === undefined ? 0 : 1 / xrETHtoDollar;
+    const xrICPtoDollar = xr.get(conversionLedgers.icp)?.toUSD;
+    const xrBTCtoDollar = xr.get(conversionLedgers.btc)?.toUSD;
+    const xrETHtoDollar = xr.get(conversionLedgers.eth)?.toUSD;
+    // Without a rate (or with a rate of 0) a converted balance is unknown rather than 0
+    const xrDollarToICP = xrICPtoDollar ? 1 / xrICPtoDollar : undefined;
+    const xrDollarToBTC = xrBTCtoDollar ? 1 / xrBTCtoDollar : undefined;
+    const xrDollarToETH = xrETHtoDollar ? 1 / xrETHtoDollar : undefined;
 
-    const symbolLower = symbol.toLowerCase();
     const balanceWholeUnits = Number(balance) / Math.pow(10, decimals);
-    const rates = exchangeRatesLookupStore.value.get(symbolLower);
-    const xrUSD = rates?.toUSD;
+    const xrUSD = xr.get(ledger)?.toUSD;
     const dollarBalance = xrUSD !== undefined ? xrUSD * balanceWholeUnits : undefined;
     const icpBalance =
         dollarBalance !== undefined && xrDollarToICP !== undefined
@@ -224,12 +239,11 @@ export const enhancedCryptoLookup = derived(
     ([$lookup, $balance, $exchangeRatesLookup]) => {
         return [...$lookup.entries()].reduce((result, [key, t]) => {
             const balance = $balance.get(t.ledger) ?? BigInt(0);
-            const symbolLower = t.symbol.toLowerCase();
             const balances = getConvertedBalances(
                 $exchangeRatesLookup,
                 balance,
                 t.decimals,
-                symbolLower,
+                t.ledger,
             );
 
             const zero = balance === BigInt(0) && !DEFAULT_TOKENS.includes(t.symbol);
@@ -248,6 +262,14 @@ export const enhancedCryptoLookup = derived(
 export const cryptoTokensSorted = derived(enhancedCryptoLookup, ($lookup) => {
     return [...$lookup.values()].filter((t) => t.enabled || !t.zero).sort(compareTokens);
 });
+
+// Several ledgers can share a symbol, so prefer an enabled one, then the first in the wallet's
+// order, which puts the tokens the user holds first
+export function walletTokenBySymbol(symbol: string): EnhancedTokenDetails | undefined {
+    const lower = symbol.toLowerCase();
+    const matches = cryptoTokensSorted.value.filter((t) => t.symbol.toLowerCase() === lower);
+    return matches.find((t) => t.enabled) ?? matches[0];
+}
 
 function meetsAutoWalletCriteria(config: WalletConfig, token: EnhancedTokenDetails): boolean {
     return (
@@ -599,21 +621,6 @@ export const userGroupSummariesStore = derived(
     notEq,
 );
 
-export const serverEventsStore = writable<EventWrapper<ChatEvent>[]>([], undefined, notEq);
-export const serverThreadEventsStore = writable<EventWrapper<ChatEvent>[]>([], undefined, notEq);
-export const expiredServerEventRanges = writable<DRange>(new DRange(), undefined, notEq);
-export const selectedChatUserIdsStore = writable<Set<string>>(new Set(), undefined, notEq);
-export const selectedChatExpandedDeletedMessageStore = writable<Set<number>>(
-    new Set(),
-    undefined,
-    notEq,
-);
-export const filteredProposalsStore = writable<FilteredProposals | undefined>(
-    undefined,
-    undefined,
-    notEq,
-);
-
 export const selectedChatIdStore = derived(
     routeStore,
     (route) => {
@@ -634,18 +641,16 @@ export const selectedThreadIdStore = writable<ThreadIdentifier | undefined>(
     messageContextsEqual,
 );
 
-// Whenever the selectedChatIdStore value changes the first thing we do is clear the related stores
-selectedChatIdStore.subscribe((_) => {
-    serverEventsStore.set([]);
-    expiredServerEventRanges.set(new DRange());
+// Whenever the selectedChatIdStore value changes the first thing we do is start a new visit, which
+// clears the related stores
+selectedChatIdStore.subscribe((chatId) => {
+    startChatVisit(chatId);
     selectedThreadIdStore.set(undefined);
-    selectedChatUserIdsStore.set(new Set());
-    selectedChatExpandedDeletedMessageStore.set(new Set());
-    filteredProposalsStore.set(undefined);
 });
 
-// Whenever the selectedThreadIdStore value changes we immediately clear the serverThreadEventsStore
-selectedThreadIdStore.subscribe((_) => serverThreadEventsStore.set([]));
+// Whenever the selectedThreadIdStore value changes we start a new visit to the thread, which clears
+// the serverThreadEventsStore
+selectedThreadIdStore.subscribe((thread) => startThreadVisit(thread));
 
 export const chatListScopeStore = derived(routeStore, (route) => route.scope, dequal);
 export const chatsInitialisedStore = writable(false);
@@ -735,11 +740,6 @@ export const selectedCommunitySummaryStore = derived(
     notEq,
 );
 
-export const selectedServerChatStore = writable<ChatDetailsState | undefined>(
-    undefined,
-    undefined,
-    notEq,
-);
 export const selectedChatMembersStore = derived(
     [selectedServerChatStore, chatDetailsLocalUpdates.members],
     ([chat, members]) => {
@@ -1396,14 +1396,11 @@ const mergedThreadEventsStore = derived(
 
 export const threadEventsStore = derived(mergedThreadEventsStore, (merged) => merged.events);
 
-export const confirmedThreadEventIndexesLoadedStore = derived(
-    serverThreadEventsStore,
-    (events) => {
-        const ranges = new DRange();
-        events.forEach((e) => ranges.add(e.index));
-        return ranges;
-    },
-);
+export const confirmedThreadEventIndexesLoadedStore = derived(serverThreadEventsStore, (events) => {
+    const ranges = new DRange();
+    events.forEach((e) => ranges.add(e.index));
+    return ranges;
+});
 
 export const threadEventIndexesLoadedStore = derived(
     mergedThreadEventsStore,

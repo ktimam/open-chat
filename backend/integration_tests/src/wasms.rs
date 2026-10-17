@@ -18,19 +18,19 @@ lazy_static! {
     pub static ref IDENTITY: CanisterWasm = get_canister_wasm("identity");
     pub static ref LOCAL_USER_INDEX: CanisterWasm = get_canister_wasm("local_user_index");
     pub static ref MULTI_USER: CanisterWasm = get_canister_wasm("multi_user");
+    // The MultiUser canister wasm currently in production, downloaded by `run-integration-tests.sh`
+    pub static ref MULTI_USER_PROD: CanisterWasm = get_canister_wasm("multi_user_prod");
     pub static ref NOTIFICATIONS_INDEX: CanisterWasm = get_canister_wasm("notifications_index");
     pub static ref ONLINE_USERS: CanisterWasm = get_canister_wasm("online_users");
     pub static ref OPENCHAT_INSTALLER: CanisterWasm = get_canister_wasm("openchat_installer");
     pub static ref PROPOSALS_BOT: CanisterWasm = get_canister_wasm("proposals_bot");
     pub static ref REGISTRY: CanisterWasm = get_canister_wasm("registry");
     pub static ref SIGN_IN_WITH_EMAIL: CanisterWasm = get_canister_wasm("sign_in_with_email");
+    pub static ref SNS_GOVERNANCE: CanisterWasm = get_canister_wasm("sns_governance");
     pub static ref SNS_WASM: CanisterWasm = get_canister_wasm("sns_wasm");
     pub static ref STORAGE_BUCKET: CanisterWasm = get_canister_wasm("storage_bucket");
     pub static ref STORAGE_INDEX: CanisterWasm = get_canister_wasm("storage_index");
     pub static ref TRANSLATIONS: CanisterWasm = get_canister_wasm("translations");
-    pub static ref USER: CanisterWasm = get_canister_wasm("user");
-    // The User canister wasm currently in production, downloaded by `run-integration-tests.sh`
-    pub static ref USER_PROD: CanisterWasm = get_canister_wasm("user_prod");
     pub static ref USER_INDEX: CanisterWasm = get_canister_wasm("user_index");
 }
 

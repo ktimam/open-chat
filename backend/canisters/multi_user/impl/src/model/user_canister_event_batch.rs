@@ -1,8 +1,9 @@
 use crate::{can_borrow_state, mutate_state, read_state, run_regular_jobs};
-use std::collections::HashSet;
+use multi_user_canister::c2c_user_canister_v2::Event;
 use timer_job_queues::{TimerJobItem, grouped_timer_job_batch};
+use tracing::info;
 use types::{C2CError, CanisterId, IdempotentEnvelope, Milliseconds, UserId};
-use user_canister::c2c_user_canister_v2::Event;
+use user_core::event_recipient::{EventRecipient, lookup_event_recipient};
 use utils::canister::{
     delay_if_should_retry_failed_c2c_call, delay_if_should_retry_failed_c2c_call_to_new_method,
     is_user_canister_possibly_migrated,
@@ -19,27 +20,26 @@ impl TimerJobItem for UserCanisterEventBatch {
             run_regular_jobs();
         }
 
-        let response = user_canister_c2c_client::c2c_user_canister_v2(
+        let response = multi_user_canister_c2c_client::c2c_user_canister_v2(
             self.key,
-            &user_canister::c2c_user_canister_v2::Args {
+            &multi_user_canister::c2c_user_canister_v2::Args {
                 events: self.items.clone(),
             },
         )
         .await;
 
         match response {
-            Ok(user_canister::c2c_user_canister_v2::Response::Success) => Ok(()),
+            Ok(multi_user_canister::c2c_user_canister_v2::Response::Success) => Ok(()),
             Err(error) => {
                 // If the user has been migrated to a MultiUser canister, their events are sent on
-                // to them there instead. Only a canister which holds a user alone is ever migrated.
+                // to them there instead. Only a user's old id, which was a User canister's id, can be one
+                // they have been migrated from.
                 if is_user_canister_possibly_migrated(&error)
                     && self.items.iter().all(|event| event.value.recipient.index() == 0)
                 {
-                    match latest_id_if_migrated(self.key.into()).await {
-                        Ok(Some(new_user_id)) => {
+                    match lookup_recipient(self.key.into()).await {
+                        Ok(EventRecipient::Migrated(new_user_id)) => {
                             mutate_state(|state| {
-                                state.data.migrated_user_ids.insert(self.key.into(), new_user_id);
-
                                 // Any events queued for the old id since this batch was taken are moved
                                 // too, after it, so that they stay in order. All are stamped with the
                                 // current time, since the MultiUser canister ignores any event from this
@@ -52,18 +52,6 @@ impl TimerJobItem for UserCanisterEventBatch {
                                     .cloned()
                                     .chain(state.data.user_canister_events_queue.take(&self.key))
                                     .collect();
-
-                                // The senders may not have been told of the migration, eg. if their
-                                // first message to the user was sent while the user was being
-                                // migrated, so their chats are moved onto the new id now
-                                let senders: HashSet<UserId> = pending.iter().map(|event| event.value.sender).collect();
-                                for sender in senders {
-                                    if let Some(sender_index) = state.index_of_local_user(sender) {
-                                        state.data.users.with_user_mut(sender_index, |user| {
-                                            user.migrate_their_user_id(self.key.into(), new_user_id, now)
-                                        });
-                                    }
-                                }
 
                                 let events = pending
                                     .into_iter()
@@ -83,10 +71,19 @@ impl TimerJobItem for UserCanisterEventBatch {
                             });
                             return Ok(());
                         }
+                        // The events can never be delivered, eg. to a user who has deleted their account,
+                        // and would otherwise be retried forever
+                        Ok(EventRecipient::Gone) => {
+                            // As are any events queued for them since this batch was taken
+                            let dropped = mutate_state(|state| state.data.user_canister_events_queue.take(&self.key));
+                            let count = self.items.len() + dropped.len();
+                            info!(canister_id = %self.key, count, "Dropped events for a user who is gone");
+                            return Ok(());
+                        }
                         // The LocalUserIndex may not have heard of the migration yet, so the events are
-                        // retried, including while the cycles refunder is installed, which is only
-                        // briefly, and is otherwise the only time a User canister is missing the method
-                        Ok(None) => return Err(delay_if_should_retry_failed_c2c_call_to_new_method(&error)),
+                        // retried, including while the cycles refunder, which lacks the method, is briefly
+                        // installed in the old canister
+                        Ok(EventRecipient::User) => return Err(delay_if_should_retry_failed_c2c_call_to_new_method(&error)),
                         // They may have been migrated, so the events are retried as the lookup would
                         // be, falling back to retrying them as the call to the old canister would be
                         Err(lookup_error) => {
@@ -102,19 +99,10 @@ impl TimerJobItem for UserCanisterEventBatch {
     }
 }
 
-// The user's latest id, if they have been migrated to a MultiUser canister since having `user_id`,
-// taken from the cache if it is there and otherwise looked up from the LocalUserIndex. A migration
-// the LocalUserIndex hasn't yet heard of isn't found, so the events are retried as usual until it has.
-async fn latest_id_if_migrated(user_id: UserId) -> Result<Option<UserId>, C2CError> {
-    let (cached, local_user_index_canister_id) = read_state(|state| {
-        (
-            state.data.migrated_user_ids.get(&user_id),
-            state.data.local_user_index_canister_id,
-        )
-    });
-    if cached.is_some() {
-        return Ok(cached);
-    }
+// What has become of the user, looked up from the LocalUserIndex and if need be the UserIndex
+async fn lookup_recipient(user_id: UserId) -> Result<EventRecipient, C2CError> {
+    let (local_user_index_canister_id, user_index_canister_id) =
+        read_state(|state| (state.data.local_user_index_canister_id, state.data.user_index_canister_id));
 
-    local_user_index_canister_c2c_client::lookup_migrated_user_id(user_id, local_user_index_canister_id).await
+    lookup_event_recipient(user_id, local_user_index_canister_id, user_index_canister_id).await
 }

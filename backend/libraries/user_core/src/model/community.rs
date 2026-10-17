@@ -1,7 +1,9 @@
 use crate::model::group_chat::{GroupChat, GroupMessagesRead};
+use constants::MAX_PINNED_CHATS;
+use oc_error_codes::OCErrorCode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use types::{CanisterId, ChannelId, CommunityId, MultiUserChat, TimestampMillis, Timestamped};
+use types::{CanisterId, ChannelId, CommunityId, MultiUserChat, OCResult, TimestampMillis, Timestamped};
 
 #[derive(Serialize, Deserialize)]
 pub struct Community {
@@ -49,7 +51,7 @@ impl Community {
         .unwrap()
     }
 
-    pub fn mark_read(&mut self, channels_read: Vec<user_canister::mark_read::ChannelMessagesRead>, now: TimestampMillis) {
+    pub fn mark_read(&mut self, channels_read: Vec<multi_user_canister::mark_read::ChannelMessagesRead>, now: TimestampMillis) {
         for channel_messages_read in channels_read {
             self.channels
                 .entry(channel_messages_read.channel_id)
@@ -79,14 +81,14 @@ impl Community {
         );
     }
 
-    pub fn to_summary(&self) -> user_canister::CommunitySummary {
-        user_canister::CommunitySummary {
+    pub fn to_summary(&self) -> multi_user_canister::CommunitySummary {
+        multi_user_canister::CommunitySummary {
             community_id: self.community_id,
             local_user_index_canister_id: self.local_user_index_canister_id,
             channels: self
                 .channels
                 .values()
-                .map(|c| user_canister::ChannelSummary {
+                .map(|c| multi_user_canister::ChannelSummary {
                     channel_id: c.channel_id,
                     read_by_me_up_to: c.messages_read.read_by_me_up_to.value,
                     threads_read: c
@@ -103,8 +105,8 @@ impl Community {
         }
     }
 
-    pub fn to_summary_updates(&self, updates_since: TimestampMillis) -> user_canister::CommunitySummaryUpdates {
-        user_canister::CommunitySummaryUpdates {
+    pub fn to_summary_updates(&self, updates_since: TimestampMillis) -> multi_user_canister::CommunitySummaryUpdates {
+        multi_user_canister::CommunitySummaryUpdates {
             community_id: self.community_id,
             channels: self
                 .channels
@@ -114,7 +116,7 @@ impl Community {
                     // If the channel has just been imported, return all updates
                     let since = if c.imported.unwrap_or_default() > updates_since { 0 } else { updates_since };
 
-                    user_canister::ChannelSummaryUpdates {
+                    multi_user_canister::ChannelSummaryUpdates {
                         channel_id: c.channel_id,
                         read_by_me_up_to: c.messages_read.read_by_me_up_to_updates(since),
                         threads_read: c
@@ -131,11 +133,16 @@ impl Community {
         }
     }
 
-    pub fn pin(&mut self, channel_id: ChannelId, now: TimestampMillis) {
+    // Pins the channel, provided fewer than `MAX_PINNED_CHATS` of the community's channels are pinned
+    pub fn pin(&mut self, channel_id: ChannelId, now: TimestampMillis) -> OCResult {
         if !self.pinned.value.contains(&channel_id) {
+            if self.pinned.value.len() >= MAX_PINNED_CHATS {
+                return Err(OCErrorCode::LimitReached.with_message(MAX_PINNED_CHATS));
+            }
             self.pinned.timestamp = now;
             self.pinned.value.insert(0, channel_id);
         }
+        Ok(())
     }
 
     pub fn unpin(&mut self, channel_id: &ChannelId, now: TimestampMillis) {
@@ -176,5 +183,27 @@ impl Channel {
         .max()
         .copied()
         .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candid::Principal;
+
+    #[test]
+    fn pinned_channels_are_limited() {
+        let mut community = Community::new(Principal::from_slice(&[1; 10]).into(), Principal::from_slice(&[2; 10]), 1, 0);
+        for i in 0..MAX_PINNED_CHATS as u32 {
+            community.pin(i.into(), 1).unwrap();
+        }
+        // Pinning a channel which is already pinned changes nothing
+        community.pin(0u32.into(), 2).unwrap();
+        assert_eq!(community.pinned.timestamp, 1);
+        let error = community.pin((MAX_PINNED_CHATS as u32).into(), 3).unwrap_err();
+        assert!(error.matches_code(OCErrorCode::LimitReached), "{error:?}");
+
+        community.unpin(&0u32.into(), 4);
+        community.pin((MAX_PINNED_CHATS as u32).into(), 5).unwrap();
     }
 }

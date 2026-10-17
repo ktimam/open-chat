@@ -73,12 +73,14 @@ function startBootstrap(
     webRuntime: boolean,
     options: {
         nativeClient?: boolean;
+        webLayout?: string;
         prepare?: () => Promise<boolean>;
         failDeferredComponentImports?: boolean;
     } = {},
 ) {
     const desktopApp = { layout: "v1" };
     const mobileApp = { layout: "v2" };
+    const webApp = { layout: "v3" };
     const mountedApp = {};
     const startupFailure = { layout: "startup-failure" };
     const body = {};
@@ -86,6 +88,8 @@ function startBootstrap(
     const chooseLayout = vi.fn(selectLayout);
     const setNativeTheme = vi.fn();
     const writeNativeCssVariables = vi.fn();
+    const writeLayoutCssVariables = vi.fn();
+    const linkFonts = vi.fn();
     const clearStartupBackground = vi.fn();
     const usesWebInferenceRuntime = vi.fn(() => webRuntime);
     const isNativeClient = vi.fn(() => options.nativeClient ?? true);
@@ -99,16 +103,26 @@ function startBootstrap(
         "./web-components/customEmoji": {},
         "./web-components/profileLink": {},
         "./web-components/spoiler": {},
-        "@client": { mobileWidth: { value: narrow } },
+        "@client": {
+            mobileWidth: { value: narrow },
+            isTauriApp: () => options.nativeClient ?? true,
+            prepareServiceWorkerBeforeApplicationStart,
+        },
         svelte: { mount },
-        "./theme/themes": { setNativeTheme, writeNativeCssVariables, clearStartupBackground },
+        "./theme/themes": {
+            setNativeTheme,
+            writeNativeCssVariables,
+            writeLayoutCssVariables,
+            clearStartupBackground,
+        },
+        "./utils/fonts": { linkFonts },
         "./utils/layout": { selectLayout: chooseLayout },
         "./utils/onDeviceInference": { usesWebInferenceRuntime, isNativeClient },
-        "@client/utils/updateSw": { prepareServiceWorkerBeforeApplicationStart },
         "./components_shared/StartupFailure.svelte": { default: startupFailure },
         "./utils/webInference": { ensureWebModelRestored },
         "./components/App.svelte": { default: desktopApp },
         "./components_mobile/App.svelte": { default: mobileApp },
+        "./web/App.svelte": { default: webApp },
     };
     let bootstrapEvaluated = false;
     const loadModule = vi.fn((name: string) => {
@@ -127,7 +141,14 @@ function startBootstrap(
     new Script(bootstrap, { filename: "main.ts" }).runInNewContext({
         exports: exported,
         require: loadModule,
-        __bootstrapImportMeta: { env: { OC_MOBILE_LAYOUT: flag } },
+        __bootstrapImportMeta: {
+            env: {
+                OC_MOBILE_LAYOUT: flag,
+                OC_WEB_LAYOUT: options.webLayout,
+                OC_APP_FONTS_URL: "/app-fonts.css",
+                OC_WEB_FONTS_URL: "/web-fonts.css",
+            },
+        },
         document: { body },
         // Mocked browser APIs reject with this realm's Error objects.
         Error,
@@ -138,6 +159,7 @@ function startBootstrap(
         body,
         desktopApp,
         mobileApp,
+        webApp,
         mountedApp,
         startupFailure,
         prepareServiceWorkerBeforeApplicationStart,
@@ -146,6 +168,8 @@ function startBootstrap(
         chooseLayout,
         setNativeTheme,
         writeNativeCssVariables,
+        writeLayoutCssVariables,
+        linkFonts,
         clearStartupBackground,
         usesWebInferenceRuntime,
         ensureWebModelRestored,
@@ -200,7 +224,13 @@ describe("application bootstrap security", () => {
             expect(result.prepareServiceWorkerBeforeApplicationStart).toHaveBeenCalledTimes(
                 nativeClient ? 0 : 1,
             );
-            expect(result.chooseLayout).toHaveBeenCalledExactlyOnceWith(flag, narrow);
+            expect(result.chooseLayout).toHaveBeenCalledExactlyOnceWith(
+                flag,
+                undefined,
+                narrow,
+                nativeClient,
+            );
+            expect(result.linkFonts).toHaveBeenCalledExactlyOnceWith("/app-fonts.css");
             expect(result.usesWebInferenceRuntime).toHaveBeenCalledExactlyOnceWith();
             expect(result.ensureWebModelRestored).toHaveBeenCalledTimes(webRuntime ? 1 : 0);
             expect(result.clearStartupBackground).toHaveBeenCalledOnce();
@@ -242,8 +272,25 @@ describe("application bootstrap security", () => {
         );
         finishPreparation(true);
         await expect(result.app).resolves.toBe(result.mountedApp);
-        expect(result.chooseLayout).toHaveBeenCalledExactlyOnceWith("v2", true);
+        expect(result.chooseLayout).toHaveBeenCalledExactlyOnceWith("v2", undefined, true, false);
         expect(result.ensureWebModelRestored).toHaveBeenCalledOnce();
+    });
+
+    test("an opt-in v3 browser build keeps worker preparation and model restore before its own mount", async () => {
+        const result = startBootstrap("v2", false, true, {
+            nativeClient: false,
+            webLayout: "v3",
+        });
+        await expect(result.app).resolves.toBe(result.mountedApp);
+        expect(result.prepareServiceWorkerBeforeApplicationStart).toHaveBeenCalledOnce();
+        expect(result.ensureWebModelRestored).toHaveBeenCalledOnce();
+        expect(result.chooseLayout).toHaveBeenCalledExactlyOnceWith("v2", "v3", false, false);
+        expect(result.linkFonts).toHaveBeenCalledExactlyOnceWith("/web-fonts.css");
+        expect(result.writeLayoutCssVariables).toHaveBeenCalledOnce();
+        expect(result.mount).toHaveBeenCalledExactlyOnceWith(result.webApp, { target: result.body });
+        expect(result.loadModule.mock.calls.filter(([name]) => name.endsWith("/App.svelte"))).toEqual([
+            ["./web/App.svelte"],
+        ]);
     });
 
     test("a browser worker navigation stops this startup without mounting or restoring a model", async () => {

@@ -1,9 +1,9 @@
 use crate::{User, openchat_bot};
 use chat_events::{MessageContentInternal, TextContentInternal};
+use multi_user_canister::LocalUserIndexEvent;
+use multi_user_canister::mark_read::ChannelMessagesRead;
 use stable_memory_map::BaseKeyPrefix;
 use types::{Achievement, DiamondMembershipPlanDuration, ReferralStatus, TimestampMillis, Timestamped, UserId};
-use user_canister::LocalUserIndexEvent;
-use user_canister::mark_read::ChannelMessagesRead;
 
 // A message for the OpenChat bot to send the user
 pub struct BotMessage {
@@ -58,7 +58,7 @@ pub fn apply(user: &mut User, event: LocalUserIndexEvent, now: TimestampMillis) 
                 .push(BotMessage::text(openchat_bot::storage_upgraded_text(&ev)));
         }
         LocalUserIndexEvent::ReferredUserRegistered(ev) => {
-            user.referrals.set_status(ev.user_id, &[], ReferralStatus::Registered, now);
+            user.referrals.set_status(ev.user_id, ReferralStatus::Registered, now);
             effects.bot_messages.push(BotMessage {
                 content: MessageContentInternal::Text(TextContentInternal {
                     text: openchat_bot::referred_user_joined_text(ev.user_id),
@@ -100,7 +100,7 @@ pub fn apply(user: &mut User, event: LocalUserIndexEvent, now: TimestampMillis) 
                 .removed_since(ev.community_canister_timestamp)
                 .contains(&ev.community_id)
             {
-                let (community, _) = user.communities.join(ev.community_id, ev.local_user_index_canister_id, now);
+                let (mut community, _) = user.communities.join(ev.community_id, ev.local_user_index_canister_id, now);
                 community.mark_read(
                     ev.channels
                         .into_iter()
@@ -113,6 +113,7 @@ pub fn apply(user: &mut User, event: LocalUserIndexEvent, now: TimestampMillis) 
                         .collect(),
                     now,
                 );
+                drop(community);
                 effects.chit_changed |= user.award_achievement(Achievement::JoinedCommunity, now);
             }
         }
@@ -162,9 +163,8 @@ pub fn apply(user: &mut User, event: LocalUserIndexEvent, now: TimestampMillis) 
         LocalUserIndexEvent::BotUpdated(ev) => {
             user.handle_bot_definition_updated(*ev, now);
         }
-        LocalUserIndexEvent::UserIdMigrated(ev) => {
-            user.migrate_their_user_id(ev.old_user_id, ev.new_user_id, now);
-        }
+        // Applied to the canister, so never passed on to a user
+        LocalUserIndexEvent::SetAlchemyApiKey(_) => {}
     }
 
     effects

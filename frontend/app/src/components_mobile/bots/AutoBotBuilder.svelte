@@ -23,7 +23,7 @@
     import Markdown from "@shared_components/Markdown.svelte";
     import SingleUserSelector from "../home/SingleUserSelector.svelte";
     import Tabs, { type Tab } from "../Tabs.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import BotCommands from "./BotCommands.svelte";
     import BotPermissionViewer from "./BotPermissionViewer.svelte";
     import InstallationLocationSelector from "./InstallationLocationSelector.svelte";
@@ -47,7 +47,7 @@
         nameDirty,
         mode,
     }: Props = $props();
-    let debug = $state(false);
+    const debug = $state(false);
     let schemaLoading = $state(false);
 
     let errors = $derived.by(

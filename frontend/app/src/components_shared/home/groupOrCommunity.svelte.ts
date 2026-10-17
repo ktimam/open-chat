@@ -1,0 +1,347 @@
+import { flattenGateConfig } from "@src/utils/access";
+import {
+    defaultChatRules,
+    hasAccessGateChanged,
+    isCompositeGate,
+    isLeafGate,
+    ROLE_MEMBER,
+    type AccessControlled,
+    type AccessGate,
+    type AccessGateConfig,
+    type CandidateMember,
+    type ChitEarnedGate,
+    type GroupChangeConfirmation,
+    type HasLevel,
+    type LeafGate,
+    type NeuronGate,
+    type PaymentGate,
+    type TokenBalanceGate,
+    type UpdatedRules,
+    type UpdateGroupOutcome,
+    type UserOrUserGroup,
+    type UserSummary,
+} from "@client";
+
+export const MAX_RULES_LENGTH = 1024;
+
+function gatesByKind(config: AccessGateConfig, kind: AccessGate["kind"]): AccessGate[] {
+    if (isLeafGate(config.gate)) {
+        if (config.gate.kind === kind) {
+            return [config.gate];
+        }
+    }
+    if (isCompositeGate(config.gate)) {
+        return config.gate.gates.filter((g) => g.kind === kind);
+    }
+    return [];
+}
+
+type Entity = AccessControlled & HasLevel & { name: string };
+
+export abstract class UpdateGroupOrCommunityState {
+    abstract get candidate(): Entity;
+    abstract get original(): Entity;
+    abstract get rules(): UpdatedRules;
+    abstract get originalRules(): UpdatedRules;
+    abstract enableDefaultRules(): void;
+    #confirming = $state(false);
+    #busy = $state(false);
+    #showingVerificationWarning = $state(false);
+    #candidateMembers = $state<CandidateMember[]>([]);
+    // The changes the user has confirmed while saving
+    #confirmed: GroupChangeConfirmation[] = [];
+    #rulesValid = $derived.by(() => {
+        return (
+            !this.rules.enabled ||
+            (this.rules.text.length > 0 && this.rules.text.length <= MAX_RULES_LENGTH)
+        );
+    });
+    #candidateUsers = $derived(this.#candidateMembers.map((m) => m.user));
+    #accessGates = $derived.by<LeafGate[]>(() => {
+        if (this.candidate === undefined) return [];
+        return flattenGateConfig(this.candidate.gateConfig);
+    });
+    #gateConfig = $derived.by<AccessGateConfig>(
+        () => this.candidate.gateConfig ?? { expiry: undefined, gate: { kind: "no_gate" } },
+    );
+    #neuronGates = $derived.by<NeuronGate[]>(() => {
+        return gatesByKind(this.gateConfig, "neuron_gate") as NeuronGate[];
+    });
+    #paymentGates = $derived.by<PaymentGate[]>(() => {
+        return gatesByKind(this.gateConfig, "payment_gate") as PaymentGate[];
+    });
+    #tokenBalanceGates = $derived.by<TokenBalanceGate[]>(() => {
+        return gatesByKind(this.gateConfig, "token_balance_gate") as TokenBalanceGate[];
+    });
+
+    protected reset() {
+        this.#busy = false;
+        this.#confirming = false;
+        this.#candidateMembers = [];
+        this.#showingVerificationWarning = false;
+    }
+
+    /**
+     * Saves the user's changes with `send`, which says when a change needs the user to confirm it.
+     * `confirming` or `showingVerificationWarning` is then set, and the user's answer comes back here
+     * as `yes`. Every answer is kept until the save goes through.
+     */
+    protected async sendChanges(
+        yes: boolean,
+        send: (confirmed: GroupChangeConfirmation[]) => Promise<UpdateGroupOutcome>,
+    ): Promise<UpdateGroupOutcome | { kind: "declined" }> {
+        const answering: GroupChangeConfirmation | undefined = this.showingVerificationWarning
+            ? "verified_name"
+            : this.confirming
+              ? "visibility"
+              : undefined;
+        this.showingVerificationWarning = false;
+        this.confirming = false;
+
+        if (answering === undefined) {
+            this.#confirmed = [];
+        } else if (yes) {
+            this.#confirmed.push(answering);
+        } else {
+            this.declined(answering);
+            return { kind: "declined" };
+        }
+
+        this.busy = true;
+        const outcome = await send(this.#confirmed);
+        this.busy = false;
+
+        if (outcome.kind === "needs_confirmation") {
+            this.showingVerificationWarning = outcome.confirmation === "verified_name";
+            this.confirming = outcome.confirmation === "visibility";
+        }
+        return outcome;
+    }
+
+    // Undoes a change the user declined to confirm
+    protected declined(confirmation: GroupChangeConfirmation) {
+        if (confirmation === "verified_name") {
+            this.candidate.name = this.original.name;
+        }
+    }
+
+    get defaultRules() {
+        return defaultChatRules(this.candidate.level);
+    }
+
+    get rulesValid() {
+        return this.#rulesValid;
+    }
+
+    get rulesChanged() {
+        return (
+            this.rules.enabled !== this.originalRules.enabled ||
+            this.rules.text !== this.originalRules.text
+        );
+    }
+
+    accessGatesChanged() {
+        return hasAccessGateChanged(this.original.gateConfig, this.candidate.gateConfig);
+    }
+
+    toggleRulesEnabled() {
+        this.rules.enabled = !this.rules.enabled;
+    }
+
+    toggleNewRulesVersion() {
+        this.rules.newVersion = !this.rules.newVersion;
+    }
+
+    get showingVerificationWarning() {
+        return this.#showingVerificationWarning;
+    }
+
+    set showingVerificationWarning(val: boolean) {
+        this.#showingVerificationWarning = val;
+    }
+
+    get busy() {
+        return this.#busy;
+    }
+
+    set busy(val: boolean) {
+        this.#busy = val;
+    }
+
+    get confirming() {
+        return this.#confirming;
+    }
+
+    set confirming(val: boolean) {
+        this.#confirming = val;
+    }
+
+    get accessGates() {
+        return this.#accessGates;
+    }
+    get gateConfig() {
+        return this.#gateConfig;
+    }
+    get neuronGates() {
+        return this.#neuronGates;
+    }
+
+    get paymentGates() {
+        return this.#paymentGates;
+    }
+
+    get tokenBalanceGates() {
+        return this.#tokenBalanceGates;
+    }
+
+    get candidateMembers() {
+        return this.#candidateMembers;
+    }
+
+    set candidateMembers(val: CandidateMember[]) {
+        this.#candidateMembers = val;
+    }
+
+    get candidateUsers() {
+        return this.#candidateUsers;
+    }
+
+    deleteMember(user: UserOrUserGroup): void {
+        if (user.kind !== "user") return;
+        this.#candidateMembers = this.#candidateMembers.filter(
+            (m) => m.user.userId !== user.userId,
+        );
+    }
+
+    addMember(user: UserSummary): void {
+        const u = this.#candidateMembers.find((m) => m.user.userId === user.userId);
+        if (u === undefined) {
+            this.#candidateMembers.push({ role: ROLE_MEMBER, user });
+        }
+    }
+
+    isGateActive(gate: AccessGate) {
+        if (isLeafGate(this.#gateConfig.gate)) {
+            return gate.kind === this.#gateConfig.gate.kind;
+        }
+        if (isCompositeGate(this.#gateConfig.gate)) {
+            return this.#gateConfig.gate.gates.some((g) => g.kind === gate.kind);
+        }
+        return false;
+    }
+
+    addLeaf(newGate: LeafGate) {
+        if (isCompositeGate(this.#gateConfig.gate)) {
+            this.#gateConfig.gate.gates.push(newGate);
+        } else {
+            if (this.#gateConfig.gate.kind === "no_gate") {
+                this.#gateConfig.gate = newGate;
+            } else {
+                const oldGate = { ...this.#gateConfig.gate };
+                this.#gateConfig.gate = {
+                    kind: "composite_gate",
+                    gates: [oldGate, newGate],
+                    operator: "and",
+                };
+            }
+        }
+    }
+
+    deleteGate(gate: LeafGate) {
+        if (isCompositeGate(this.#gateConfig.gate)) {
+            this.#gateConfig.gate.gates = this.#gateConfig.gate.gates.filter(
+                (g) => !this.gatesMatch(g, gate),
+            );
+            if (this.#gateConfig.gate.gates.length === 1) {
+                this.#gateConfig.gate = this.#gateConfig.gate.gates[0];
+            }
+        } else {
+            this.#gateConfig.gate = { kind: "no_gate" };
+        }
+    }
+
+    #findMatchBy(fn: (g: LeafGate) => boolean) {
+        if (isCompositeGate(this.#gateConfig.gate)) {
+            return this.#gateConfig.gate.gates.find(fn);
+        }
+
+        if (isLeafGate(this.#gateConfig.gate) && fn(this.#gateConfig.gate)) {
+            return this.#gateConfig.gate;
+        }
+    }
+
+    findMatchByKind(kind: LeafGate["kind"]): LeafGate | undefined {
+        return this.#findMatchBy((g) => g.kind === kind);
+    }
+
+    findMatch(gate: LeafGate): LeafGate | undefined {
+        return this.#findMatchBy((g) => this.gatesMatch(g, gate));
+    }
+
+    gatesMatch(a: LeafGate, b: LeafGate): boolean {
+        if (a.kind === "neuron_gate" && b.kind === "neuron_gate") {
+            return a.governanceCanister === b.governanceCanister;
+        }
+        if (a.kind === "payment_gate" && b.kind === "payment_gate") {
+            return a.ledgerCanister === b.ledgerCanister;
+        }
+        if (a.kind === "token_balance_gate" && b.kind === "token_balance_gate") {
+            return a.ledgerCanister === b.ledgerCanister;
+        }
+        return a.kind === b.kind;
+    }
+
+    defaultChitGate(): ChitEarnedGate {
+        return {
+            kind: "chit_earned_gate",
+            minEarned: 0,
+        };
+    }
+
+    defaultTokenBalanceGate(): TokenBalanceGate {
+        return {
+            kind: "token_balance_gate",
+            ledgerCanister: "",
+            minBalance: 0n,
+        };
+    }
+
+    defaultNeuronGate(): NeuronGate {
+        return {
+            kind: "neuron_gate",
+            governanceCanister: "",
+        };
+    }
+
+    defaultPaymentGate(): PaymentGate {
+        return {
+            kind: "payment_gate",
+            ledgerCanister: "",
+            amount: 0n,
+            fee: 0n,
+        };
+    }
+
+    toggleGate(gate: AccessGate, active: boolean) {
+        if (isLeafGate(gate)) {
+            if (active) {
+                this.deleteGate(gate);
+            } else {
+                this.addLeaf(gate);
+            }
+        }
+    }
+
+    toggleOperator() {
+        if (isCompositeGate(this.#gateConfig.gate)) {
+            switch (this.#gateConfig.gate.operator) {
+                case "and":
+                    this.#gateConfig.gate.operator = "or";
+                    break;
+                case "or":
+                    this.#gateConfig.gate.operator = "and";
+                    break;
+            }
+        }
+    }
+}

@@ -2,14 +2,12 @@
     import { i18nKey } from "@src/i18n/i18n";
     import { Switch } from "component-lib";
     import Setting from "../../Setting.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import DisappearingDuration from "../DisappearingDuration.svelte";
-    import { updateGroupState } from "./group.svelte";
-
-    let ugs = updateGroupState;
+    import { updateGroupState } from "@shared_components/home/createOrUpdateGroup/group.svelte";
 </script>
 
-<DisappearingDuration bind:eventsTTL={ugs.candidateGroup.eventsTTL}>
+<DisappearingDuration bind:eventsTTL={updateGroupState.candidateGroup.eventsTTL}>
     {#snippet toggle(onToggle, enabled)}
         <Setting
             toggle={onToggle}

@@ -46,6 +46,10 @@ export function localApkParentRpId(environment) {
     return rpId;
 }
 
+/**
+ * @param {Record<string, { ic: string }>} canisters
+ * @param {{ inherited?: Record<string, string | undefined>, buildId?: string, appDirectoryUrl?: string, rpId: string }} options
+ */
 export function createUnofficialLocalApkEnvironment(
     canisters,
     { inherited = {}, buildId, appDirectoryUrl, rpId: suppliedRpId } = {},

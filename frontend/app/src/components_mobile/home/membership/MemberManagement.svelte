@@ -15,7 +15,7 @@
     import AccountCancel from "svelte-material-icons/AccountCancelOutline.svelte";
     import Account from "svelte-material-icons/AccountGroupOutline.svelte";
     import AccountPlus from "svelte-material-icons/AccountPlusOutline.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
     import AddList from "./AddList.svelte";
     import BlockedList from "./BlockedList.svelte";
@@ -36,7 +36,7 @@
     let searchTermLower = $derived(searchTerm.toLowerCase());
     const MAX_SEARCH_RESULTS = 255;
     const client = getContext<OpenChat>("client");
-    let membersState = new MemberManagement(client, collection);
+    const membersState = new MemberManagement(client, collection);
     // The collection is as it was when the page was opened, so the count is read from its summary
     // as it is now
     let memberCount = $derived.by(() => {

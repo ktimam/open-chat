@@ -7,6 +7,7 @@ use candid::Principal;
 use canister_timer_jobs::Job;
 use chat_events::{ChatEvents, EndPollResult, MessageContentInternal};
 use constants::{DAY_IN_MS, MINUTE_IN_MS, NANOS_PER_MILLISECOND, SECOND_IN_MS};
+use group_community_common::PendingPayment;
 use ledger_utils::process_transaction;
 use serde::{Deserialize, Serialize};
 use tracing::error;
@@ -26,6 +27,7 @@ pub enum TimerJob {
     NotifyEscrowCanisterOfSwapFunded(NotifyEscrowCanisterOfSwapFundedJob),
     MarkP2PSwapExpired(MarkP2PSwapExpiredJob),
     MarkVideoCallEnded(MarkVideoCallEndedJob),
+    RetryPayment(Box<RetryPaymentJob>),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -68,7 +70,7 @@ pub struct RemoveOldEventsJob {
 pub struct NotifyEscrowCanisterOfDepositJob {
     // The owner of the depositor's wallet, by which the escrow canister knows them. Jobs queued
     // before this was recorded hold the depositor's user id, which is the same principal since
-    // those depositors were all alone in their canisters.
+    // those depositors were then all in their own User canisters.
     #[serde(alias = "user_id")]
     pub principal: Principal,
     pub swap_id: u32,
@@ -147,6 +149,14 @@ pub struct MarkP2PSwapExpiredJob {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MarkVideoCallEndedJob(pub group_canister::end_video_call_v2::Args);
 
+// Retries a payment, after a failed attempt to call into its ledger
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RetryPaymentJob {
+    pub payment: PendingPayment,
+    // The number of attempts at the payment which have failed to call into its ledger so far
+    pub failures: u32,
+}
+
 impl Job for TimerJob {
     fn execute(self) {
         let can_borrow_state = can_borrow_state();
@@ -167,6 +177,7 @@ impl Job for TimerJob {
             TimerJob::NotifyEscrowCanisterOfSwapFunded(job) => job.execute(),
             TimerJob::MarkP2PSwapExpired(job) => job.execute(),
             TimerJob::MarkVideoCallEnded(job) => job.execute(),
+            TimerJob::RetryPayment(job) => job.execute(),
         }
 
         if can_borrow_state {
@@ -241,7 +252,7 @@ impl Job for HardDeleteMessageContentJob {
 
 impl Job for DeleteFileReferencesJob {
     fn execute(self) {
-        utils::async_work::spawn_tracked(async move {
+        ic_cdk::futures::spawn_migratory(async move {
             let to_retry = storage_bucket_client::delete_files(self.files.clone()).await;
 
             if !to_retry.is_empty() {
@@ -299,7 +310,7 @@ impl Job for FinalPrizePaymentsJob {
 impl Job for MakeTransferJob {
     fn execute(self) {
         let pending = self.pending_transaction.clone();
-        utils::async_work::spawn_tracked(make_transfer(pending, self.attempt));
+        ic_cdk::futures::spawn_migratory(make_transfer(pending, self.attempt));
 
         async fn make_transfer(mut pending_transaction: PendingCryptoTransaction, attempt: u32) {
             if let Err(error) = process_transaction(pending_transaction.clone(), None, true).await {
@@ -341,7 +352,7 @@ impl Job for NotifyEscrowCanisterOfDepositJob {
     fn execute(self) {
         let escrow_canister_id = read_state(|state| state.data.escrow_canister_id);
 
-        utils::async_work::spawn_tracked(async move {
+        ic_cdk::futures::spawn_migratory(async move {
             match escrow_canister_c2c_client::notify_deposit(
                 escrow_canister_id,
                 &escrow_canister::notify_deposit::Args {
@@ -399,7 +410,7 @@ impl Job for NotifyEscrowCanisterOfSwapFundedJob {
     fn execute(self) {
         let escrow_canister_id = read_state(|state| state.data.escrow_canister_id);
 
-        utils::async_work::spawn_tracked(async move {
+        ic_cdk::futures::spawn_migratory(async move {
             match escrow_canister_c2c_client::notify_deposit(
                 escrow_canister_id,
                 &escrow_canister::notify_deposit::Args {
@@ -437,7 +448,7 @@ impl Job for CancelP2PSwapInEscrowCanisterJob {
     fn execute(self) {
         let escrow_canister_id = read_state(|state| state.data.escrow_canister_id);
 
-        utils::async_work::spawn_tracked(async move {
+        ic_cdk::futures::spawn_migratory(async move {
             match escrow_canister_c2c_client::cancel_swap(
                 escrow_canister_id,
                 &escrow_canister::cancel_swap::Args { swap_id: self.swap_id },
@@ -487,6 +498,12 @@ impl Job for MarkVideoCallEndedJob {
         if let Err(error) = mutate_state(|state| end_video_call_impl(self.0.clone(), state)) {
             error!(?error, args = ?self.0, "Failed to mark video call ended");
         }
+    }
+}
+
+impl Job for RetryPaymentJob {
+    fn execute(self) {
+        crate::jobs::make_pending_payments::retry(self.payment, self.failures);
     }
 }
 

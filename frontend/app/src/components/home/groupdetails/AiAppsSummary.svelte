@@ -36,7 +36,7 @@
     import Button from "../../Button.svelte";
     import CollapsibleCard from "../../CollapsibleCard.svelte";
     import Toggle from "../../Toggle.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AiAppLinkModal from "../AiAppLinkModal.svelte";
     import AiAppSurfaceModal from "../AiAppSurfaceModal.svelte";
     import PrivateMatchAutomaticNotice from "../PrivateMatchAutomaticNotice.svelte";

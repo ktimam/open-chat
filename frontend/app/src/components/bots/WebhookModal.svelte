@@ -19,7 +19,7 @@
     import EditableAvatar from "../EditableAvatar.svelte";
     import Legend from "../Legend.svelte";
     import ModalContent from "../ModalContent.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import ValidatingInput from "./ValidatingInput.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -36,7 +36,7 @@
     let busyUpdate = $state(false);
     let step = $state(mode.kind as string);
 
-    let webhook = $state({
+    const webhook = $state({
         original: mode.kind === "update" ? mode.webhook : emptyWebhookInstance(),
         current: mode.kind === "update" ? { ...mode.webhook } : emptyWebhookInstance(),
     });

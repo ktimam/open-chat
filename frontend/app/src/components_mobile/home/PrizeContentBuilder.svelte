@@ -41,6 +41,7 @@
         LocalStorageStore,
         localUpdates,
         ONE_DAY,
+        walletApprovalFee,
     } from "@client";
     import { onMount } from "svelte";
     import Diamond from "svelte-material-icons/DiamondOutline.svelte";
@@ -51,7 +52,7 @@
     import LightningBolt from "svelte-material-icons/LightningBoltCircle.svelte";
     import { i18nKey } from "../../i18n/i18n";
     import Setting from "../Setting.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import CryptoSelector from "./CryptoSelector.svelte";
     import DurationSelector from "./DurationSelector.svelte";
     import SelectChitEarned from "./SelectChitEarned.svelte";
@@ -60,7 +61,7 @@
     import SourceWalletSelector from "./SourceWalletSelector.svelte";
     import TokenInput from "./TokenInput.svelte";
     import TransferFeesMessage from "./TransferFeesMessage.svelte";
-    import { TokenState } from "./wallet/walletState.svelte";
+    import { TokenState } from "@shared_components/home/wallet/walletState.svelte";
     import { keyboard } from "@stores/keyboard.svelte";
 
     const OC_FEE_PERCENTAGE = 5n;
@@ -109,7 +110,9 @@
     let transferFee = $derived(tokenDetails.transferFee);
     let transferFees = $derived(transferFee * BigInt(numberOfWinners ?? 0));
     let prizeFees = $derived(transferFees + (draftAmount * OC_FEE_PERCENTAGE) / 100n);
-    let totalFees = $derived(transferFee + prizeFees);
+    // What the prize costs in fees: the transfer of its fund, which includes the approval the wallet
+    // makes before the fund is pulled from it, and the prize's fees
+    let totalFees = $derived(transferFee + walletApprovalFee(transferFee) + prizeFees);
     let minAmount = $derived(100n * BigInt(numberOfWinners ?? 0) * transferFee);
     // What the user is able to spend, or undefined when that is the external wallet's business
     // rather than ours
@@ -343,7 +346,12 @@
             {@render sectionTitle("Select the prize token")}
             <!-- An external wallet's balance is its own business, so while one is selected the
                  OpenChat balance is hidden -->
-            <CryptoSelector {draftAmount} showRefresh hideBalance={payFromWallet} bind:ledger />
+            <CryptoSelector
+                {draftAmount}
+                fees={totalFees}
+                showRefresh
+                hideBalance={payFromWallet}
+                bind:ledger />
             <SourceWalletSelector bind:wallet={sourceWallet} {ledger} />
         </Column>
 

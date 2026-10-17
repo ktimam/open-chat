@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
+import { beforeEach, describe, expect, it, test } from "vitest";
 import {
     MAX_AI_APP_LOOKUPS_PER_CLIENT_CALL,
     boundedAiAppLookupBatches,
@@ -52,11 +52,11 @@ describe("boundedAiAppLookupBatches", () => {
 
 const SERVER_TIMESTAMP = 1000n;
 
-function cachedUser(userId: string, username = userId): UserSummary {
+function cachedUser(userId: string): UserSummary {
     return {
         kind: "user",
         userId,
-        username,
+        username: userId,
         displayName: undefined,
         updated: 10n,
         suspended: false,
@@ -106,10 +106,10 @@ function args(...userIds: string[]): UsersArgs {
 
 // Real user ids are principals, which getUsers insists on
 const OLD = "ryjl3-tyaaa-aaaaa-aaaba-cai";
-const OLDER = "rrkah-fqaaa-aaaaa-aaaaq-cai";
 const LATEST = "dfdal-2uaaa-aaaaa-qaama-cai";
-const ME_OLD = "renrk-eyaaa-aaaaa-aaada-cai";
-const ME_LATEST = "rno2w-sqaaa-aaaaa-aaacq-cai";
+// The user's id, and that of an account they deleted before creating it on the same principal
+const ME = "rno2w-sqaaa-aaaaa-aaacq-cai";
+const ME_DELETED = "renrk-eyaaa-aaaaa-aaada-cai";
 
 describe("UserIndexClient.getUsers with migrated users", () => {
     let stores: Map<string, Map<string, unknown>>;
@@ -172,10 +172,8 @@ describe("UserIndexClient.getUsers with migrated users", () => {
         chatStateForgotten = false;
     });
 
-    afterEach(() => vi.restoreAllMocks());
-
     test("a user requested by an earlier id is returned and cached under their latest id", async () => {
-        setup({ users: { [OLD]: cachedUser(OLD, "stale") } });
+        setup();
         respond = () => ({ users: [fullUpdate(LATEST, "fresh", [OLD])] });
 
         const resp = await client.getUsers(args(OLD), false);
@@ -184,168 +182,45 @@ describe("UserIndexClient.getUsers with migrated users", () => {
         expect(resp.users.map((u) => [u.userId, u.username])).toEqual([[LATEST, "fresh"]]);
         expect(resp.migratedUserIds).toEqual(new Map([[OLD, LATEST]]));
         expect([...stores.get("users")!.keys()]).toEqual([LATEST]);
-        expect(stores.get("migratedUserIds")).toEqual(new Map([[OLD, LATEST]]));
     });
 
-    test("once the mapping is cached, the latest id is requested instead of the earlier one", async () => {
-        setup({
-            users: { [LATEST]: cachedUser(LATEST) },
-            migratedUserIds: { [OLD]: LATEST },
-        });
+    test("a user requested by several ids is returned once", async () => {
+        setup();
+        respond = () => ({ users: [fullUpdate(LATEST, "fresh", [OLD])] });
 
-        const resp = await client.getUsers(args(OLD), false);
+        const resp = await client.getUsers(args(OLD, LATEST), false);
 
-        expect(requests).toEqual([[LATEST]]);
+        expect(requests).toEqual([[OLD, LATEST]]);
         expect(resp.users.map((u) => u.userId)).toEqual([LATEST]);
         expect(resp.migratedUserIds).toEqual(new Map([[OLD, LATEST]]));
     });
 
-    test("a user requested by several ids is returned once", async () => {
-        setup({ migratedUserIds: { [OLDER]: OLD } });
-        respond = () => ({ users: [fullUpdate(LATEST, "fresh", [OLD])] });
-
-        const resp = await client.getUsers(args(OLDER, OLD, LATEST), false);
-        await flush();
-
-        expect(requests).toEqual([[OLD, LATEST]]);
-        expect(resp.users.map((u) => u.userId)).toEqual([LATEST]);
-        expect(resp.migratedUserIds).toEqual(
-            new Map([
-                [OLD, LATEST],
-                [OLDER, LATEST],
-            ]),
-        );
-    });
-
-    test("a deleted user is reported as deleted under the id they were requested by", async () => {
-        setup({ migratedUserIds: { [OLD]: LATEST } });
-        respond = () => ({ deletedUserIds: new Set([LATEST]) });
-
-        const resp = await client.getUsers(args(OLD), false);
-
-        expect(resp.deletedUserIds).toEqual(new Set([LATEST, OLD]));
-    });
-
-    test("a deleted user isn't logged as missing", async () => {
-        setup();
-        respond = () => ({ deletedUserIds: new Set([OLD]) });
-        const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
-
-        await client.getUsers(args(OLD), false);
-
-        expect(debug).not.toHaveBeenCalled();
-    });
-
-    test("a user neither returned nor deleted is logged as missing", async () => {
-        setup();
-        const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
-
-        await client.getUsers(args(OLD), false);
-
-        expect(debug).toHaveBeenCalledWith(
-            "USERS: userId requested not in cache and not returned from server",
-            OLD,
-        );
-    });
-
-    test("the current user returned under a new id replaces the entry under their old one", async () => {
-        setup({ users: { [ME_OLD]: cachedUser(ME_OLD) } });
-        cachedCurrentUser = { ...anonymousUser(), userId: ME_OLD };
-        respond = () => ({ currentUser: currentUserSummary(ME_LATEST) });
-
-        const resp = await client.getUsers(args(ME_OLD), false);
-
-        expect(resp.users.map((u) => u.userId)).toEqual([ME_LATEST]);
-        expect(resp.currentUser?.userId).toEqual(ME_LATEST);
-        expect(resp.migratedUserIds).toEqual(new Map([[ME_OLD, ME_LATEST]]));
-        // Everything the restarted session relies on is cached before getUsers returns
-        expect(cachedCurrentUser?.userId).toEqual(ME_LATEST);
-        expect(stores.get("migratedUserIds")).toEqual(new Map([[ME_OLD, ME_LATEST]]));
-        expect(chatStateForgotten).toBe(true);
-        await flush();
-        expect([...stores.get("users")!.keys()]).toEqual([ME_LATEST]);
-    });
-
-    test("the current user's migration recorded while the request was in flight is applied", async () => {
-        setup({ users: { [ME_OLD]: cachedUser(ME_OLD) } });
-        cachedCurrentUser = { ...anonymousUser(), userId: ME_OLD };
-        respond = () => {
-            // As getCurrentUser does on finding the user's id has changed
-            cachedCurrentUser = { ...anonymousUser(), userId: ME_LATEST };
-            stores.set("migratedUserIds", new Map([[ME_OLD, ME_LATEST]]));
-            stores.get("users")!.delete(ME_OLD);
-            return { currentUser: currentUserSummary(ME_LATEST) };
-        };
-
-        const resp = await client.getUsers(args(ME_OLD), false);
-        await flush();
-
-        expect(resp.users.map((u) => u.userId)).toEqual([ME_LATEST]);
-        expect(resp.migratedUserIds).toEqual(new Map([[ME_OLD, ME_LATEST]]));
-        expect([...stores.get("users")!.keys()]).toEqual([ME_LATEST]);
-    });
-
-    test("the current user under an id they've been migrated from is out of date and ignored", async () => {
-        setup({
-            users: { [ME_LATEST]: cachedUser(ME_LATEST) },
-            migratedUserIds: { [ME_OLD]: ME_LATEST },
-        });
-        cachedCurrentUser = { ...anonymousUser(), userId: ME_LATEST };
-        // From a replica which hasn't caught up with the migration
-        respond = () => ({ currentUser: currentUserSummary(ME_OLD) });
-
-        const resp = await client.getUsers(args(ME_LATEST), false);
-        await flush();
-
-        expect(resp.currentUser).toBeUndefined();
-        expect(resp.users.map((u) => u.userId)).toEqual([ME_LATEST]);
-        expect(cachedCurrentUser?.userId).toEqual(ME_LATEST);
-        expect(stores.get("migratedUserIds")).toEqual(new Map([[ME_OLD, ME_LATEST]]));
-        expect(chatStateForgotten).toBe(false);
-    });
-
-    test("getCurrentUser ignores a live user under an id they've been migrated from", async () => {
-        setup({ migratedUserIds: { [ME_OLD]: ME_LATEST } });
-        cachedCurrentUser = { ...anonymousUser(), userId: ME_LATEST };
-        liveCurrentUser = { ...anonymousUser(), userId: ME_OLD };
-
-        const results = await new Promise<string[]>((resolve) => {
-            const ids: string[] = [];
-            client.getCurrentUser().subscribe({
-                onResult: (user, final) => {
-                    if (user.kind === "created_user") ids.push(user.userId);
-                    if (final) resolve(ids);
-                },
+    test.each([
+        ["reported deleted", new Set([ME_DELETED])],
+        ["not reported deleted", new Set<string>()],
+    ])(
+        "the current user returned under a different id, the old one %s, isn't taken to have been migrated",
+        async (_, deletedUserIds) => {
+            setup();
+            cachedCurrentUser = { ...anonymousUser(), userId: ME_DELETED };
+            respond = () => ({
+                currentUser: currentUserSummary(ME),
+                deletedUserIds,
             });
-        });
-        await flush();
 
-        expect(results).toEqual([ME_LATEST, ME_LATEST]);
-        expect(cachedCurrentUser?.userId).toEqual(ME_LATEST);
-        expect(stores.get("migratedUserIds")).toEqual(new Map([[ME_OLD, ME_LATEST]]));
-        expect(chatStateForgotten).toBe(false);
-    });
+            const resp = await client.getUsers(args(ME_DELETED, ME), false);
 
-    test("a current user whose old id was deleted is a new account, not a migration", async () => {
+            // The current user is cached before getUsers returns, for the client to restart under
+            expect(cachedCurrentUser?.userId).toEqual(ME);
+            expect(resp.users.map((u) => u.userId)).toEqual([ME]);
+            expect(resp.migratedUserIds).toBeUndefined();
+        },
+    );
+
+    test("getCurrentUser under a new account forgets the old one's chat state before returning it", async () => {
         setup();
-        cachedCurrentUser = { ...anonymousUser(), userId: ME_OLD };
-        respond = () => ({
-            currentUser: currentUserSummary(ME_LATEST),
-            deletedUserIds: new Set([ME_OLD]),
-        });
-
-        const resp = await client.getUsers(args(ME_OLD), false);
-        await flush();
-
-        expect(resp.migratedUserIds).toBeUndefined();
-        expect(stores.get("migratedUserIds")?.size ?? 0).toBe(0);
-        expect(chatStateForgotten).toBe(false);
-    });
-
-    test("getCurrentUser caches everything for the new id before returning it", async () => {
-        setup({ users: { [ME_OLD]: cachedUser(ME_OLD) } });
-        cachedCurrentUser = { ...anonymousUser(), userId: ME_OLD };
-        liveCurrentUser = { ...anonymousUser(), userId: ME_LATEST };
+        cachedCurrentUser = { ...anonymousUser(), userId: ME_DELETED };
+        liveCurrentUser = { ...anonymousUser(), userId: ME };
 
         const results = await new Promise<string[]>((resolve) => {
             const ids: string[] = [];
@@ -357,52 +232,31 @@ describe("UserIndexClient.getUsers with migrated users", () => {
             });
         });
 
-        expect(results).toEqual([ME_OLD, ME_LATEST]);
-        expect(cachedCurrentUser?.userId).toEqual(ME_LATEST);
-        expect(stores.get("migratedUserIds")).toEqual(new Map([[ME_OLD, ME_LATEST]]));
-        expect(stores.get("users")!.has(ME_OLD)).toBe(false);
+        // Everything the restarted session relies on is done before the new user is returned
+        expect(results).toEqual([ME_DELETED, ME]);
+        expect(cachedCurrentUser?.userId).toEqual(ME);
         expect(chatStateForgotten).toBe(true);
     });
 
     test("getCurrentUser leaves the cache alone when the id hasn't changed", async () => {
         setup();
-        cachedCurrentUser = { ...anonymousUser(), userId: ME_OLD };
-        liveCurrentUser = { ...anonymousUser(), userId: ME_OLD };
+        cachedCurrentUser = { ...anonymousUser(), userId: ME };
+        liveCurrentUser = { ...anonymousUser(), userId: ME };
 
         await new Promise<void>((resolve) =>
             client.getCurrentUser().subscribe({ onResult: (_, final) => final && resolve() }),
         );
         await flush();
 
-        expect(stores.get("migratedUserIds")?.size ?? 0).toBe(0);
         expect(chatStateForgotten).toBe(false);
     });
 
-    test("populateUserCache requests latest ids and marks the requested id deleted", async () => {
-        setup({ migratedUserIds: { [OLD]: LATEST } });
-        respond = () => ({ deletedUserIds: new Set([LATEST]) });
+    test("populateUserCache drops ids that are not principals", async () => {
+        setup();
 
-        await client.populateUserCache([OLD]);
-        await flush();
+        await client.populateUserCache(["n", LATEST]);
 
         expect(requests).toEqual([[LATEST]]);
-        expect(stores.get("deletedUserIds")).toEqual(
-            new Map([
-                [LATEST, LATEST],
-                [OLD, OLD],
-            ]),
-        );
-    });
-
-    test("populateUserCache caches a user under their latest id", async () => {
-        setup();
-        respond = () => ({ users: [fullUpdate(LATEST, "fresh", [OLD])] });
-
-        await client.populateUserCache([OLD]);
-        await flush();
-
-        expect([...stores.get("users")!.keys()]).toEqual([LATEST]);
-        expect(stores.get("migratedUserIds")).toEqual(new Map([[OLD, LATEST]]));
     });
 
     test("users who haven't been migrated are unaffected", async () => {

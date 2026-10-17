@@ -3,10 +3,10 @@
     import { anonUserStore, identityStateStore, publish } from "@client";
     import { getContext, tick } from "svelte";
     import { i18nKey } from "../../../i18n/i18n";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     import { MenuItem } from "component-lib";
-    import { updateGroupState } from "../createOrUpdateGroup/group.svelte";
+    import { updateGroupState } from "@shared_components/home/createOrUpdateGroup/group.svelte";
 
     const client = getContext<OpenChat>("client");
 

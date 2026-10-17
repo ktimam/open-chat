@@ -12,7 +12,8 @@ import {
 import { verifyImportedLocalProcessor } from "./isolatedAppProcessor";
 import type { LocalAppSetupContext } from "./localAppScopedSetup";
 
-vi.mock("@client", () => ({ currentUserIdStore: { value: "synthetic-account" } }));
+vi.mock("@client", async () => ({
+        ...(await import("@client/utils/stores")), currentUserIdStore: { value: "synthetic-account" } }));
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
 vi.mock("./aiActionRunner", () => ({ extractPrivateAppAction: vi.fn() }));
 vi.mock("./nativeAppDelivery", () => ({
@@ -22,7 +23,7 @@ vi.mock("./nativeAppDelivery", () => ({
 vi.mock("./localAppRelayDelivery", async () => ({
     deliverLocalAppViaRelay: vi.fn(),
     cancelLocalAppHandoffs: vi.fn(),
-    localAppDeliveryStatus: (await import("svelte/store")).writable(undefined),
+    localAppDeliveryStatus: (await import("@client/utils/stores")).writable(undefined),
 }));
 
 async function fixture() {

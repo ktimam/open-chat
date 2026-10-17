@@ -37,11 +37,11 @@
     import { toastStore } from "../../stores/toast";
     import { getProxyAdjustedBlobUrl } from "../../utils/media";
     import AreYouSure from "../AreYouSure.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AcceptP2PSwapModal from "./AcceptP2PSwapModal.svelte";
     import MessageRenderer from "./MessageRenderer.svelte";
     import P2PSwapProgress from "./P2PSwapProgress.svelte";
-    import { TokenState } from "./wallet/walletState.svelte";
+    import { TokenState } from "@shared_components/home/wallet/walletState.svelte";
 
     const client = getContext<OpenChat>("client");
 

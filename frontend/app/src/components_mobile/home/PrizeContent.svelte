@@ -40,15 +40,16 @@
     import { now500 } from "../../stores/time";
     import { toastStore } from "../../stores/toast";
     import Diamond from "../icons/Diamond.svelte";
-    import SpinningToken from "../icons/SpinningToken.svelte";
+    import SpinningToken from "@shared_components/icons/SpinningToken.svelte";
     import SecureButton from "../SecureButton.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Badges from "./profile/Badges.svelte";
     import ChitEarnedBadge from "./profile/ChitEarnedBadge.svelte";
     import ReAuthenticateModal from "./profile/ReAuthenticateModal.svelte";
     import Streak from "./profile/Streak.svelte";
     import MessageRenderer from "./MessageRenderer.svelte";
-    import { TokenState } from "./wallet/walletState.svelte";
+    import { TokenState } from "@shared_components/home/wallet/walletState.svelte";
+    import { prizeClaimStep } from "@shared_components/home/prize/prizeClaim";
     import TransferFeesMessage from "./TransferFeesMessage.svelte";
     import TextContent from "./TextContent.svelte";
 
@@ -103,22 +104,27 @@
     ) {
         if (!chatId || !messageId) return;
 
-        let signInProof: string | undefined = undefined;
-        if (content.requiresCaptcha) {
-            if (auth) {
-                signInProof = await client.getSignInProof(auth.key, auth.delegation);
-            } else {
-                mouseEvent = e;
-                showAuthentication = true;
-                return;
-            }
+        const signIn =
+            content.requiresCaptcha && auth !== undefined
+                ? { proof: await client.getSignInProof(auth.key, auth.delegation) }
+                : undefined;
+        const step = prizeClaimStep(content.requiresCaptcha, signIn);
+        if (step.kind === "authenticate") {
+            mouseEvent = e;
+            showAuthentication = true;
+            return;
         }
 
         showAuthentication = false;
+        if (step.kind === "failed") {
+            toastStore.showFailureToast(step.message);
+            return;
+        }
+
         if (e.isTrusted && chatId.kind !== "direct_chat" && !me && userEligible) {
             claimsStore.add(messageId);
             client
-                .claimPrize(chatId, messageId, e, signInProof)
+                .claimPrize(chatId, messageId, e, step.signInProof)
                 .then((success) => {
                     if (!success) {
                         toastStore.showFailureToast(i18nKey("prizes.claimFailed"));
@@ -129,11 +135,7 @@
     }
 
     let logo = $derived(
-        [...$cryptoLookup.values()].find((t) =>
-            content.kind === "prize_content"
-                ? t.symbol.toLowerCase() === content.token.toLowerCase()
-                : false,
-        )?.logo ?? "",
+        content.kind === "prize_content" ? ($cryptoLookup.get(content.ledger)?.logo ?? "") : "",
     );
     let total = $derived(
         content.kind === "prize_content"

@@ -1,6 +1,5 @@
 use candid::{CandidType, Principal};
 use event_store_types::Event;
-use oc_error_codes::OCError;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
@@ -38,8 +37,6 @@ pub enum UserIndexEvent {
     BotUpdateInstallation(BotInstallationLocation, BotDefinitionUpdate),
     PlatformOperatorStatusChanged(PlatformOperatorStatusChanged),
     PlatformModeratorStatusChanged(PlatformModeratorStatusChanged),
-    MaxConcurrentCanisterUpgradesChanged(MaxConcurrentCanisterUpgradesChanged),
-    UserUpgradeConcurrencyChanged(UserUpgradeConcurrencyChanged),
     UserSuspended(UserSuspended),
     UserJoinedGroup(UserJoinedGroup),
     UserJoinedCommunityOrChannel(UserJoinedCommunityOrChannel),
@@ -60,23 +57,10 @@ pub enum UserIndexEvent {
     SetOpenAIApiKey(SetOpenAIApiKey),
     SetModerationReferralConfig(SetModerationReferralConfig),
     SetMediaScanConfig(types::MediaScanConfig),
-    SetMultiUserCanistersEnabled(bool),
     SetCallPushEnabled(bool),
     SetDailyPuzzleCanisterId(CanisterId),
-    RefundDeletedUserCycles(Vec<CanisterId>),
     UserIdMigrated(UserIdMigrated),
-    StartUserMigration(StartUserMigration),
-    ImportUser(ImportUser),
-    EventForMigratedUser(Box<EventForMigratedUser>),
-}
-
-// An event which another LocalUserIndex had queued for a user's old canister, for a user who has since
-// been migrated to a MultiUser canister held by this one, passed on by the UserIndex
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct EventForMigratedUser {
-    pub user_id: UserId,
-    // A msgpack serialized `user_canister::LocalUserIndexEvent`
-    pub event: serde_bytes::ByteBuf,
+    SetAlchemyApiKey(SetAlchemyApiKey),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -99,6 +83,9 @@ pub enum GroupOrCommunityEvent<T = UserNotificationPayload> {
     Notification(Box<Notification<T>>),
     MessageClassifyRequest(Box<ClassifyMessageRequest>),
     MediaScanRequest(Box<types::MediaScanRequest>),
+    // Whether the canister has finished replacing the ids users had before being migrated to
+    // MultiUser canisters with their latest ids, sent each time that changes
+    UserIdMigrationComplete(bool),
 }
 
 pub type GroupEvent = GroupOrCommunityEvent<GroupChatUserNotificationPayload>;
@@ -206,16 +193,6 @@ pub struct PlatformModeratorStatusChanged {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct MaxConcurrentCanisterUpgradesChanged {
-    pub value: u32,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct UserUpgradeConcurrencyChanged {
-    pub value: u32,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct UserSuspended {
     pub user_id: UserId,
     pub timestamp: TimestampMillis,
@@ -271,54 +248,13 @@ pub struct ReferralCodeAdded {
     pub expiry: Option<TimestampMillis>,
 }
 
-// A user has been migrated to a MultiUser canister, which gave them a new id
+// A user who was migrated to a MultiUser canister, which gave them a new id
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct UserIdMigrated {
     #[serde(rename = "o")]
     pub old_user_id: UserId,
     #[serde(rename = "n")]
     pub new_user_id: UserId,
-    // The groups and communities the user is in, each of which the LocalUserIndex controlling it
-    // tells of the user's new id. Empty when sent to a LocalUserIndex added after the migration.
-    #[serde(rename = "c", default, skip_serializing_if = "Vec::is_empty")]
-    pub canisters_to_notify: Vec<CanisterId>,
-    // The users the migrated user has blocked, whose blocked-user pairs with the user's old id are
-    // moved onto the new one, since the LocalUserIndex could only find them by scanning every pair
-    #[serde(rename = "b", default, skip_serializing_if = "Vec::is_empty")]
-    pub blocked_users: Vec<UserId>,
-    // The users held by this LocalUserIndex who are told of the user's new id: those the user has,
-    // or had, a direct chat with, those who have blocked them and those they have blocked
-    #[serde(rename = "u", default, skip_serializing_if = "Vec::is_empty")]
-    pub users_to_notify: Vec<UserId>,
-    // Only sent to the LocalUserIndex holding the user's new id: those the user has, or had, a direct
-    // chat with, or has blocked, who were migrated before them, by their old and new ids. The user is
-    // told of each, since they may not have been when it happened, eg. if they were being migrated
-    // themselves at the time.
-    #[serde(rename = "e", default, skip_serializing_if = "Vec::is_empty")]
-    pub migrated_earlier: Vec<(UserId, UserId)>,
-}
-
-// Tells the LocalUserIndex controlling a user's canister to start migrating the user to the given
-// MultiUser canister, first upgrading the user's canister to the latest wasm if it is behind
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct StartUserMigration {
-    #[serde(rename = "u")]
-    pub user_id: UserId,
-    #[serde(rename = "m")]
-    pub multi_user_canister_id: CanisterId,
-}
-
-// Tells the LocalUserIndex controlling a MultiUser canister to have it import the user, whose
-// canister has started migrating them to it
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ImportUser {
-    #[serde(rename = "u")]
-    pub user_id: UserId,
-    #[serde(rename = "m")]
-    pub multi_user_canister_id: CanisterId,
-    // The hash of the user as serialized when their migration started, which identifies it
-    #[serde(rename = "h")]
-    pub user_hash: types::Hash,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -396,34 +332,21 @@ pub enum UserEvent<T = UserNotificationPayload> {
     SetMaxStreak(u16),
     EventStoreEvent(Event),
     Notification(Box<Notification<T>>),
-    // From a MultiUser canister, naming the user's new id: the user who was being migrated from a
-    // canister of their own has been imported
-    UserImported(UserImported),
-    // From a MultiUser canister, naming the id the user was assigned: the user couldn't be imported
-    UserImportFailed(UserImportFailed),
+    // Whether the MultiUser canister has finished replacing the ids users had before being migrated
+    // with their latest ids, sent each time that changes. This is about the canister rather than one
+    // of its users, so is sent naming the canister's own id.
+    UserIdMigrationComplete(bool),
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct UserImportFailed {
-    pub old_user_id: UserId,
-    // The hash identifying the migration whose import failed
-    pub user_hash: types::Hash,
-    pub error: OCError,
+impl<T> UserEvent<T> {
+    // Whether the event is about the MultiUser canister itself rather than one of its users
+    pub fn is_about_canister(&self) -> bool {
+        matches!(self, UserEvent::UserIdMigrationComplete(_))
+    }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct UserImported {
-    pub old_user_id: UserId,
-    // The groups and communities the user is in, each of which is told of the user's new id
-    pub canisters_to_notify: Vec<CanisterId>,
-    // The users the user has, or had, a direct chat with, each of whom is told of the user's new id
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub users_to_notify: Vec<UserId>,
-}
-
-// An event along with the user it is from, as taken by `c2c_user_canister_v2`. A User canister
-// names itself, while a MultiUser canister, which hosts many users, names whichever of its users
-// the event is from
+// An event along with the user it is from, as taken by `c2c_user_canister_v2`. A MultiUser canister
+// hosts many users, so names whichever of its users the event is from
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "T: Serialize + DeserializeOwned")]
 pub struct UserEventWithUserId<T = UserNotificationPayload> {
@@ -435,6 +358,8 @@ pub struct UserEventWithUserId<T = UserNotificationPayload> {
 
 #[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChildCanisterType {
+    // No longer used, but kept until the User canister wasm has been dropped from the stored wasms
+    #[deprecated]
     User,
     Group,
     Community,
@@ -540,6 +465,20 @@ pub struct UpdateBlockedUsernamePatterns {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SetOpenAIApiKey {
     pub api_key: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SetAlchemyApiKey {
+    pub api_key: Option<String>,
+}
+
+// Written by hand so that `#[trace]` doesn't record the key
+impl std::fmt::Debug for SetAlchemyApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetAlchemyApiKey")
+            .field("api_key_set", &self.api_key.is_some())
+            .finish()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

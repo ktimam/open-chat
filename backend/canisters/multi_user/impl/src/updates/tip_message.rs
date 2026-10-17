@@ -6,15 +6,15 @@ use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use chat_events::TipMessageArgs;
 use constants::{MEMO_TIP, NANOS_PER_MILLISECOND};
+use multi_user_canister::UserCanisterEvent;
+use multi_user_canister::tip_message::{Response::*, *};
 use oc_error_codes::OCErrorCode;
 use types::{Achievement, CanisterId, Chat, OCResult, UserId, icrc1, icrc2};
-use user_canister::UserCanisterEvent;
-use user_canister::tip_message::{Response::*, *};
 
-// The User canister's `tip_message`, for direct chats. Users hold their own funds in their own
-// wallets, so the tip is pulled from the user's wallet (or the account they name) via ICRC2, against
-// an approval made under their own spender subaccount, and paid into the recipient's wallet. Tips in
-// groups and channels are given by calling the group or community directly.
+// Tips a message in a direct chat. Users hold their own funds in their own wallets, so the tip is
+// pulled from the user's wallet (or the account they name) via ICRC2, against an approval made
+// under their own spender subaccount, and paid into the recipient's wallet. Tips in groups and
+// channels are given by calling the group or community directly.
 #[update(guard = "caller_is_hosted_user", msgpack = true)]
 #[trace]
 async fn tip_message(args: Args) -> Response {
@@ -84,12 +84,13 @@ fn prepare(args: &mut Args, state: &mut RuntimeState) -> OCResult<PrepareOk> {
     }
     let this_canister_id = state.env.canister_id();
     let now = state.env.now();
-    let (my_index, my_principal, tip_args) = state.with_caller_user_mut(|my_index, user| {
+    let (my_index, my_user_id, my_principal) = state.with_caller_user_mut(|my_index, user| {
         let my_user_id = UserId::new_indexed(this_canister_id, my_index);
         user_core::updates::tip_message::verify(user, my_user_id, args, this_canister_id, now)?;
-        let tip_args = user_core::updates::tip_message::direct_tip_args(user, my_user_id, args, now)?;
-        OCResult::Ok((my_index, user.principal, tip_args))
+        OCResult::Ok((my_index, my_user_id, user.principal))
     })?;
+    let tip_args =
+        state.with_caller_user(|_, user| user_core::updates::tip_message::direct_tip_args(user, my_user_id, args, now))?;
     let their_index = state.index_of_local_user(args.recipient);
     if their_index.is_none() && state.user_index(args.recipient).is_some() {
         // An index in this canister which no longer holds a user
@@ -104,8 +105,7 @@ fn prepare(args: &mut Args, state: &mut RuntimeState) -> OCResult<PrepareOk> {
     })
 }
 
-// Records the tip in the tipper's copy of the chat, then sends it to the recipient, as the User
-// canister does
+// Records the tip in the tipper's copy of the chat, then sends it to the recipient
 fn tip_direct_chat_message(my_index: u16, args: TipMessageArgs, decimals: u8, state: &mut RuntimeState) -> Response {
     let recipient = args.recipient;
     let event_pusher = MultiUserEventPusher {
@@ -115,13 +115,7 @@ fn tip_direct_chat_message(my_index: u16, args: TipMessageArgs, decimals: u8, st
         queue: &mut state.data.local_user_index_event_sync_queue,
     };
     let c2c_args = match state.data.users.with_user_mut(my_index, |user| {
-        user_core::updates::tip_message::tip_direct_chat_message(
-            user,
-            args,
-            decimals,
-            &state.data.migrated_user_ids,
-            Some(event_pusher),
-        )
+        user_core::updates::tip_message::tip_direct_chat_message(user, args, decimals, Some(event_pusher))
     }) {
         Some(Ok(c2c_args)) => c2c_args,
         Some(Err(error)) => return Error(error),

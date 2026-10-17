@@ -6,10 +6,8 @@
     import Reload from "@shared_components/Reload.svelte";
     import { trackedEffect } from "@src/utils/effects.svelte";
     import { detectNeedsSafeInset, setupKeyboardTracking } from "@src/utils/safe_area";
-    import { rtlStore } from "@stores/rtl";
     import { snowing } from "@stores/snow";
     import { incomingVideoCall } from "@stores/video";
-    import { broadcastLoggedInUser } from "@stores/xframe";
     import { currentTheme } from "@theme/themes";
     import "@utils/markdown";
     import {
@@ -36,18 +34,23 @@
         chatListScopeStore,
         fontSize,
         identityStateStore,
-        inititaliseLogger,
         notFoundStore,
-        requiresLogout,
         routeForChatIdentifier,
         routeForScope,
         routeStore,
         startupErrorStore,
         subscribe,
     } from "@client";
-    import { eventToError, isIdbConnectionClosingError, recordError } from "@utils/errorPostmortem";
     import { navigate } from "@utils/navigation";
     import { warmRichTextEditor } from "@shared_components/richTextEditorLoader";
+    import {
+        boundaryErrorHandler,
+        followDocumentDirection,
+        initialiseAppLogger,
+        subscribeToSessionEvents,
+    } from "@utils/appRoot.svelte";
+    import { createOpenChatClient } from "@utils/openchatClient";
+    import { handleUnhandledError } from "@utils/unhandledError";
     import { onMount, setContext } from "svelte";
     import { overrideItemIdKeyNameBeforeInitialisingDndZones } from "svelte-dnd-action";
     import { _, isLoading, locale } from "svelte-i18n";
@@ -72,81 +75,27 @@
 
     overrideItemIdKeyNameBeforeInitialisingDndZones("_id");
 
-    const logger = inititaliseLogger(
-        import.meta.env.OC_ROLLBAR_ACCESS_TOKEN!,
-        import.meta.env.OC_WEBSITE_VERSION!,
-        import.meta.env.OC_BUILD_ENV!,
-    );
+    const logger = initialiseAppLogger();
 
-    function createOpenChatClient(): OpenChat {
-        const client = new OpenChat({
-            mobileLayout: import.meta.env.OC_MOBILE_LAYOUT,
-            icUrl: import.meta.env.OC_IC_URL,
-            webAuthnOrigin: import.meta.env.OC_WEBAUTHN_ORIGIN,
-            iiDerivationOrigin: import.meta.env.OC_II_DERIVATION_ORIGIN,
-            openStorageIndexCanister: import.meta.env.OC_STORAGE_INDEX_CANISTER!,
-            groupIndexCanister: import.meta.env.OC_GROUP_INDEX_CANISTER!,
-            notificationsCanister: import.meta.env.OC_NOTIFICATIONS_CANISTER!,
-            identityCanister: import.meta.env.OC_IDENTITY_CANISTER!,
-            onlineCanister: import.meta.env.OC_ONLINE_CANISTER!,
-            dailyPuzzleCanister: import.meta.env.OC_DAILY_PUZZLE_CANISTER ?? "",
-            userIndexCanister: import.meta.env.OC_USER_INDEX_CANISTER!,
-            translationsCanister: import.meta.env.OC_TRANSLATIONS_CANISTER!,
-            registryCanister: import.meta.env.OC_REGISTRY_CANISTER!,
-            internetIdentityUrl: import.meta.env.OC_INTERNET_IDENTITY_URL!,
-            nfidUrl: import.meta.env.OC_NFID_URL!,
-            userGeekApiKey: import.meta.env.OC_USERGEEK_APIKEY!,
-            videoBridgeUrl: import.meta.env.OC_VIDEO_BRIDGE_URL!,
-            translateProxyUrl: import.meta.env.OC_TRANSLATE_PROXY_URL!,
-            meteredApiKey: import.meta.env.OC_METERED_APIKEY!,
-            blobUrlPattern: import.meta.env.OC_BLOB_URL_PATTERN!,
-            canisterUrlPath: import.meta.env.OC_CANISTER_URL_PATH!,
-            proposalBotCanister: import.meta.env.OC_PROPOSALS_BOT_CANISTER!,
-            marketMakerCanister: import.meta.env.OC_MARKET_MAKER_CANISTER!,
-            signInWithEmailCanister: import.meta.env.OC_SIGN_IN_WITH_EMAIL_CANISTER!,
-            signInWithEthereumCanister: import.meta.env.OC_SIGN_IN_WITH_ETHEREUM_CANISTER!,
-            signInWithSolanaCanister: import.meta.env.OC_SIGN_IN_WITH_SOLANA_CANISTER!,
-            oneSecForwarderCanister: import.meta.env.OC_ONESEC_FORWARDER_CANISTER!,
-            oneSecMinterCanister: import.meta.env.OC_ONESEC_MINTER_CANISTER!,
-            i18nFormatter: $_,
-            logger,
-            websiteVersion: import.meta.env.OC_WEBSITE_VERSION!,
-            rollbarApiKey: import.meta.env.OC_ROLLBAR_ACCESS_TOKEN!,
-            env: import.meta.env.OC_BUILD_ENV!,
-            bitcoinMainnetEnabled: import.meta.env.OC_BITCOIN_MAINNET_ENABLED! === "true",
-            vapidPublicKey: import.meta.env.OC_VAPID_PUBLIC_KEY!,
-            accountLinkingCodesEnabled:
-                import.meta.env.OC_ACCOUNT_LINKING_CODES_ENABLED! === "true",
-            clientOnlyApps: import.meta.env.OC_UNOFFICIAL_CLIENT === "true",
-            appDirectoryUrl: import.meta.env.OC_APP_DIRECTORY_URL,
-            baseOrigin: import.meta.env.OC_BASE_ORIGIN!,
-        });
-
-        return client;
-    }
-
-    let client: OpenChat = createOpenChatClient();
+    const client: OpenChat = createOpenChatClient($_, logger);
     setContext<OpenChat>("client", client);
 
-    let profileTrace = client.showTrace();
+    const profileTrace = client.showTrace();
     // I can't (yet) find a way to avoid using "any" here. Will try to improve but need to commit this crime for the time being
-    let videoCallElement: any;
+    let videoCallElement: ReturnType<typeof ActiveCall> | undefined;
     let landingPageRoute = $derived(isLandingPageRoute($routeStore));
     let homeRoute = $derived($routeStore.kind === "home_route");
     let showLandingPage = $derived(
         landingPageRoute || (homeRoute && $identityStateStore.kind === "anon" && $anonUserStore),
     );
-    let isFirefox = navigator.userAgent.indexOf("Firefox") >= 0;
+    const isFirefox = navigator.userAgent.indexOf("Firefox") >= 0;
     let burstPath = $derived(
         $currentTheme.mode === "dark" ? "/assets/burst_dark" : "/assets/burst_light",
     );
     let burstUrl = $derived(isFirefox ? `${burstPath}.png` : `${burstPath}.svg`);
     let burstFixed = $derived(isScrollingRoute($routeStore));
 
-    trackedEffect("rtl", () => {
-        // subscribe to the rtl store so that we can set the overall page direction at the right time
-        document.dir = $rtlStore ? "rtl" : "ltr";
-    });
+    followDocumentDirection();
 
     trackedEffect("landing-page", () => {
         if (!$notFoundStore && showLandingPage) {
@@ -172,10 +121,7 @@
             subscribe("startVideoCall", startVideoCall),
             subscribe("hangup", hangup),
             subscribe("askToSpeak", askToSpeak),
-            subscribe("userLoggedIn", onUserLoggedIn),
-            subscribe("sessionExpired", () => client.logout()),
-            // The current user has been migrated to a new user id, so start again under it
-            subscribe("currentUserIdChanged", () => window.location.reload()),
+            subscribeToSessionEvents(client, { onLoggedIn: onUserLoggedIn }),
         ];
         window.addEventListener("orientationchange", calculateHeight);
         window.addEventListener("unhandledrejection", unhandledError);
@@ -185,7 +131,7 @@
 
         redirectLandingPageLinksIfNecessary();
 
-        //@ts-ignore
+        // @ts-expect-error debug hooks attached to window for the console
         window.platformModerator = {
             addHotGroupExclusion,
             deleteFrozenGroup,
@@ -202,12 +148,11 @@
             unsuspendUser,
         };
 
-        //@ts-ignore
+        // @ts-expect-error debug hooks attached to window for the console
         window.platformOperator = {
             addRemoveSwapProvider,
             setGroupUpgradeConcurrency,
             setCommunityUpgradeConcurrency,
-            setUserUpgradeConcurrency,
             markLocalGroupIndexFull,
             reinstateMissedDailyClaims,
             setAirdropConfig,
@@ -216,7 +161,6 @@
             stakeNeuronForSubmittingProposals,
             topUpNeuronForSubmittingProposals,
             updateMarketMakerConfig,
-            withdrawFromIcpSwap,
             setPremiumItemCost,
             updateBlockedUsernamePatterns,
             pauseEventLoop: () => client.pauseEventLoop(),
@@ -314,10 +258,9 @@
         warmRichTextEditor();
     }
 
-    function onUserLoggedIn(userId: string) {
+    function onUserLoggedIn() {
         setupNativeApp();
         warmRichTextEditor();
-        broadcastLoggedInUser(userId);
     }
 
     function addHotGroupExclusion(chatId: string): void {
@@ -499,16 +442,6 @@
         });
     }
 
-    function setUserUpgradeConcurrency(value: number): void {
-        client.setUserUpgradeConcurrency(value).then((success) => {
-            if (success) {
-                console.log("User upgrade concurrency set", value);
-            } else {
-                console.error("Failed to set user upgrade concurrency", value);
-            }
-        });
-    }
-
     function markLocalGroupIndexFull(canisterId: string, full: boolean): void {
         client.markLocalGroupIndexFull(canisterId, full).then((success) => {
             if (success) {
@@ -597,16 +530,6 @@
         });
     }
 
-    function withdrawFromIcpSwap(
-        userId: string,
-        swapId: bigint,
-        inputToken: boolean,
-        amount: bigint | undefined,
-        fee: bigint | undefined,
-    ): void {
-        client.withdrawFromIcpSwap(userId, swapId, inputToken, amount, fee);
-    }
-
     function setPremiumItemCost(item: PremiumItem, chitCost: number): void {
         client.setPremiumItemCost(item, chitCost);
     }
@@ -629,38 +552,10 @@
     }
 
     function unhandledError(ev: Event) {
-        if (
-            ev instanceof ErrorEvent &&
-            (ev.message.includes("ResizeObserver loop completed with undelivered notifications") ||
-                ev.message.includes("ResizeObserver loop limit exceeded"))
-        ) {
-            return;
-        }
-
-        const err = eventToError(ev);
-        if (isIdbConnectionClosingError(err)) {
-            ev.preventDefault();
-            return;
-        }
-        recordError("window", err);
-        // Deliberately not reported here. Rollbar's own captureUncaught /
-        // captureUnhandledRejections already reports every event this handler sees, and
-        // installs earlier than this listener, so logging again produced two Rollbar items
-        // per rejection - one titled "Unhandled error: X" and one titled "X" - splitting
-        // every defect in two and doubling the volume. Its `checkIgnore` reads the rejection
-        // reason out of the original arguments, so worker errors - which arrive as plain
-        // objects, not Errors - are still filtered on name and code. This handler keeps the
-        // crash-log record and the logout, which Rollbar's capture does not do.
-        if (ev instanceof PromiseRejectionEvent && requiresLogout(ev.reason)) {
-            client.logout();
-            ev.preventDefault();
-        }
+        handleUnhandledError(ev, () => client.logout());
     }
 
-    function boundaryError(err: unknown) {
-        recordError("boundary", err);
-        logger?.error("Top level boundary error: ", err);
-    }
+    const boundaryError = boundaryErrorHandler(logger);
 
     function resize() {
         portalState.close();

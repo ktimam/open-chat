@@ -26,7 +26,7 @@
     import EditableAvatar from "../EditableAvatar.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
     import SlidingPageContent from "../home/SlidingPageContent.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import WebhookMember from "./WebhookMember.svelte";
 
     type Mode = "register" | "update" | "regenerate";
@@ -42,7 +42,7 @@
     let { mode = "register", chat, webhook = $bindable(emptyWebhookInstance()) }: Props = $props();
 
     let busy = $state(false);
-    let original = { ...webhook };
+    const original = { ...webhook };
     let nameDirty = $derived(original.name !== webhook.name);
     let avatarDirty = $derived(original.avatarUrl !== webhook.avatarUrl);
     let dirty = $derived(nameDirty || avatarDirty);

@@ -130,8 +130,10 @@ test("writeBundle emits both configured OTA ZIPs with the existing asset exclusi
   try {
     const source = path.join(fixture, "checkout with spaces & symbols");
     const version = "1.2.3-test";
-    const originalHtml =
-      "<html><head><title>Bundle fixture</title></head><body>Ready</body></html>";
+    const websiteCsp = "default-src 'self'; connect-src https:;";
+    const nativeCsp =
+      "default-src 'self'; connect-src https: asset: ipc: http://asset.localhost;";
+    const originalHtml = `<html><head><meta http-equiv="Content-Security-Policy" content="${websiteCsp}" /><title>Bundle fixture</title></head><body>Ready</body></html>`;
     const publicBytes = Buffer.from([0, 1, 127, 128, 255]);
     const retained = {
       ".ic-assets.json5": "[]",
@@ -171,12 +173,13 @@ test("writeBundle emits both configured OTA ZIPs with the existing asset exclusi
       [
         "--input-type=module",
         "-e",
-        "const { androidBundlePlugin } = await import(process.argv[1]); await androidBundlePlugin({ version: process.argv[2] }).writeBundle();",
+        "const { androidBundlePlugin } = await import(process.argv[1]); await androidBundlePlugin({ version: process.argv[2], csp: () => process.argv[3] }).writeBundle();",
         new URL(
           "../frontend/app/rollup-plugin-android-bundle.mjs",
           import.meta.url,
         ).href,
         version,
+        nativeCsp,
       ],
       { cwd: source, env: { ...process.env, OC_APP_TYPE: "web" } },
     );
@@ -217,7 +220,9 @@ test("writeBundle emits both configured OTA ZIPs with the existing asset exclusi
       const injection = `<script>window.OC_CONFIG={OC_MOBILE_LAYOUT:"v2", OC_APP_STORE: "${store}", OC_OTA_UPDATES: "${ota}"}</script>`;
       const expected = {
         ...retained,
-        "index.html": originalHtml.replace("<head>", `<head>${injection}`),
+        "index.html": originalHtml
+          .replace(websiteCsp, nativeCsp)
+          .replace("<head>", `<head>${injection}`),
       };
       for (const [name, content] of Object.entries(expected)) {
         assert.deepEqual(

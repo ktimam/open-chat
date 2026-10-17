@@ -1,6 +1,6 @@
 <script module lang="ts">
     let current: WaveSurfer | undefined = undefined;
-    let registry: WaveSurfer[] = [];
+    const registry: WaveSurfer[] = [];
     function register(w: WaveSurfer) {
         registry.push(w);
     }
@@ -36,7 +36,7 @@
     import Play from "svelte-material-icons/PlayCircleOutline.svelte";
     import type WaveSurfer from "wavesurfer.js";
     import { loadWaveSurfer, waveSurferFailedToLoad } from "../../utils/wavesurfer";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import TextContent from "./TextContent.svelte";
 
     interface Props {

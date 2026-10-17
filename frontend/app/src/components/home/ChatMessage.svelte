@@ -131,9 +131,9 @@
     import ModalContent from "../ModalContent.svelte";
     import AiAppLinkModal from "./AiAppLinkModal.svelte";
     import Overlay from "../Overlay.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AutoProposeChip from "./AutoProposeChip.svelte";
-    import Spinner from "../icons/Spinner.svelte";
+    import Spinner from "@shared_components/icons/Spinner.svelte";
     import ChatMessageContent from "./ChatMessageContent.svelte";
     import ChatMessageMenu from "./ChatMessageMenu.svelte";
     import EmojiPicker from "./EmojiPickerWrapper.svelte";
@@ -143,7 +143,7 @@
     import Badges from "./profile/Badges.svelte";
     import BotBadge from "./profile/BotBadge.svelte";
     import RoleIcon from "./profile/RoleIcon.svelte";
-    import WithRole from "./profile/WithRole.svelte";
+    import WithRole from "@shared_components/home/profile/WithRole.svelte";
     import ReminderBuilder from "./ReminderBuilder.svelte";
     import RepliesTo from "./RepliesTo.svelte";
     import ReportMessage from "./ReportMessage.svelte";
@@ -179,6 +179,7 @@
         canDelete: boolean;
         canQuoteReply: boolean;
         canReact: boolean;
+        canTipMessages: boolean;
         publicGroup: boolean;
         editing: boolean;
         canStartThread: boolean;
@@ -225,6 +226,7 @@
         canDelete,
         canQuoteReply,
         canReact,
+        canTipMessages,
         publicGroup,
         editing,
         canStartThread,
@@ -250,10 +252,10 @@
     let messageMenu: ChatMessageMenu | undefined;
     let componentMounted = true;
 
-    let multiUserChat = chatType === "group_chat" || chatType === "channel";
+    const multiUserChat = chatType === "group_chat" || chatType === "channel";
     let showEmojiPicker = $state(false);
-    let debug = false;
-    let crypto =
+    const debug = false;
+    const crypto =
         msg.content.kind === "crypto_content" ||
         msg.content.kind === "prize_content" ||
         msg.content.kind === "p2p_swap_content";
@@ -285,7 +287,9 @@
                 if (observer !== undefined && msgElement !== undefined) {
                     try {
                         observer.observe(msgElement);
-                    } catch {}
+                    } catch {
+                        // the element may already be detached; nothing to observe
+                    }
                 }
             });
         }
@@ -985,14 +989,13 @@
             ? reservedMediaWidth(mediaDimensions.width, mediaDimensions.height)
             : undefined,
     );
-    // Auto-propose: the matcher (utils/autoPropose.ts) flagged this message as matching a
-    // registered action's trigger keywords — render the under-bubble chip. Tapping it re-uses the
-    // exact same propose path as the message menu.
-    let canTip = $derived(!me && confirmed && !inert && !failed);
+    let canTip = $derived(canTipMessages && !me && confirmed && !inert && !failed);
     let inThread = $derived(threadRootMessage !== undefined);
     let threadRootMessageIndex = $derived(
         isThreadRoot ? undefined : threadRootMessage?.messageIndex,
     );
+    // The app-owned trigger matcher supplies suggestions; the chip uses the message menu's
+    // same proposal path.
     let autoProposeSuggestionList = $derived(
         !client.clientOnlyApps() && $autoProposeEnabled && !inert
             ? ($autoProposeSuggestions.get(
@@ -1079,8 +1082,8 @@
             $selectedChatWebhooksStore,
         ),
     );
-    // The details held can be for another chat, e.g. until the next chat's details load, or when
-    // a thread preview shows a message from a chat other than the one selected
+    // The details held can be for another chat, when a thread preview shows a message from a chat
+    // other than the one selected
     let chatMembers = $derived(
         chatIdentifiersEqual($selectedServerChatStore?.chatId, chatId)
             ? $selectedChatMembersStore

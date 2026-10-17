@@ -185,7 +185,7 @@ export function assertReviewedFeatureImports(text, names) {
     if (
       specifier.startsWith(".") ||
       specifier.startsWith("node:") ||
-      /^@(src|utils|client|shared|agent|app|i18n|stores|components|theme)(?:\/|$)/.test(
+      /^@(src|utils|client|shared|agent|app|i18n|stores|components|shared_components|theme)(?:\/|$)/.test(
         specifier,
       )
     )

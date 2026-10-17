@@ -3,7 +3,7 @@
     import { setThemeV2Appearance, themeV2Appearance } from "@src/theme/themeV2";
     import { Body, BodySmall, Chip, Container, Row, type ThemeAppearance } from "component-lib";
     import { locale } from "svelte-i18n";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import LanguageSelector from "../LanguageSelector.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
     import FontSize from "./FontSize.svelte";
@@ -18,7 +18,7 @@
         light: "Light",
     };
 
-    let selectedLocale = $state(($locale as string).substring(0, 2));
+    const selectedLocale = $state(($locale as string).substring(0, 2));
     let selectedLanguage = $state(supportedLanguages.find((l) => l.code === selectedLocale));
 
     $effect(() => {

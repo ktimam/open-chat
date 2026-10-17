@@ -13,7 +13,7 @@
     import ButtonGroup from "../ButtonGroup.svelte";
     import FancyLoader from "../icons/FancyLoader.svelte";
     import ModalContent from "../ModalContent.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import BotBuilder from "./AutoBotBuilder.svelte";
     import ChooseBot from "./ChooseBot.svelte";
 
@@ -34,7 +34,7 @@
         mode === "update" || mode === "remove" ? "choose" : "edit",
     );
 
-    let botState = $state({
+    const botState = $state({
         original: emptyBotInstance($currentUserIdStore),
         current: emptyBotInstance($currentUserIdStore),
     });

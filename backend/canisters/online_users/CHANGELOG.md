@@ -6,13 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+## [[2.0.2149](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2149-online_users)] - 2026-10-16
+
 ### Changed
 
 - Run the repeating jobs on `PerRoundTimer` rather than `set_timer_interval` ([#9772](https://github.com/open-chat-labs/open-chat/pull/9772))
+- Await work inside timers rather than spawning a task from them ([#9971](https://github.com/open-chat-labs/open-chat/pull/9971))
+- Stop tracking the async work in progress, since nothing reads it any more ([#9972](https://github.com/open-chat-labs/open-chat/pull/9972))
 
 ### Removed
 
 - Remove `c2c_remove_user` now that the UserIndex sends `UserDeleted` events to `c2c_user_index` instead ([#9676](https://github.com/open-chat-labs/open-chat/pull/9676))
+- Remove the `UserIdMigrated` event ([#9922](https://github.com/open-chat-labs/open-chat/pull/9922))
 
 ## [[2.0.2078](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2078-online_users)] - 2026-09-30
 

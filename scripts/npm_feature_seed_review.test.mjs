@@ -3684,6 +3684,40 @@ test("all literal direct import forms reject unreviewed dependency roots", () =>
     ),
   );
 });
+test("upstream shared-components alias is internal without exempting unknown aliases or packages", () => {
+  const names = new Set();
+  const importForms = [
+    (specifier) => `import value from "${specifier}";`,
+    (specifier) => `export { value } from "${specifier}";`,
+    (specifier) => `import "${specifier}";`,
+    (specifier) => `const value = import("${specifier}");`,
+    (specifier) => `const value = require("${specifier}");`,
+  ];
+  for (const makeImport of importForms) {
+    for (const specifier of [
+      "@shared_components/icons",
+      "@shared_components/Translatable.svelte",
+    ]) {
+      assert.doesNotThrow(() =>
+        assertReviewedFeatureImports(makeImport(specifier), names),
+      );
+    }
+    for (const specifier of [
+      "@shared_components_extra/icons",
+      "@shared_component/icons",
+      "@shared-components/icons",
+      "@unknown/icons",
+      "unreviewed/subpath",
+    ]) {
+      assert.throws(
+        () => assertReviewedFeatureImports(makeImport(specifier), names),
+        /dedicated feature import has no reviewed root:/u,
+        specifier,
+      );
+    }
+  }
+});
+
 test("all dedicated model build and runtime helpers participate in ownership discovery", () => {
   const expected = readdirSync(resolve(root, "frontend/app"))
     .filter(

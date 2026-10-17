@@ -3,16 +3,16 @@
     import { namedAccountsStore, OpenChat, publish } from "@client";
     import { getContext, onMount } from "svelte";
     import { i18nKey } from "../../../i18n/i18n";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Accounts from "./Accounts.svelte";
     import OverallBalance from "./OverallBalance.svelte";
     import TokenToggle from "./TokenToggle.svelte";
-    import type { ConversionToken } from "./walletState.svelte";
+    import type { ConversionToken } from "@shared_components/home/wallet/walletState.svelte";
 
     const client = getContext<OpenChat>("client");
 
     let selectedConversion: ConversionToken = $state("usd");
-    let conversionOptions = [
+    const conversionOptions = [
         { id: "usd", label: "USD" },
         { id: "icp", label: "ICP" },
         { id: "btc", label: "BTC" },

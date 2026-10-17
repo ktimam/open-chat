@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { flushSync, mount, tick, unmount } from "svelte";
-import { get, type Writable } from "svelte/store";
+import { get, type Writable } from "@client/utils/stores";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MainMenu from "../components/home/nav/MainMenu.svelte";
 import AppSettings from "../components_mobile/home/user_profile/AppSettings.svelte";
@@ -19,8 +19,9 @@ const calls = vi.hoisted(() => ({
 }));
 
 vi.mock("@client", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return {
+        ...(await import("@client/utils/stores")),
         OpenChat: class {},
         anonUserStore: writable(false),
         currentUserIdStore: writable("synthetic-user"),
@@ -38,14 +39,14 @@ vi.mock("../utils/mainAppsNavigation", () => ({
     navigateToMainApps: calls.navigateToMainApps,
 }));
 vi.mock("../utils/privateAppWorkspace", async () => ({
-    privateAppWorkspaceState: (await import("svelte/store")).writable({}),
+    privateAppWorkspaceState: (await import("@client/utils/stores")).writable({}),
 }));
 vi.mock("../utils/localAppChatState", async () => ({
     localAppChatConfiguration: {
         enabled: calls.enabled,
         setEnabled: calls.setEnabled,
     },
-    localAppChatRevision: (await import("svelte/store")).writable(0),
+    localAppChatRevision: (await import("@client/utils/stores")).writable(0),
 }));
 vi.mock("@utils/navigation", () => ({ navigate: vi.fn() }));
 vi.mock("@src/i18n/i18n", () => ({ i18nKey: (key: string) => key }));
@@ -56,10 +57,7 @@ vi.mock("../components/Menu.svelte", async () => ({
 vi.mock("../components/MenuItem.svelte", async () => ({
     default: (await import("./PrivateAppsNavigation.spec.shell.svelte")).default,
 }));
-vi.mock("../components/Translatable.svelte", async () => ({
-    default: (await import("./PrivateAppsNavigation.spec.shell.svelte")).default,
-}));
-vi.mock("../components_mobile/Translatable.svelte", async () => ({
+vi.mock("@shared_components/Translatable.svelte", async () => ({
     default: (await import("./PrivateAppsNavigation.spec.shell.svelte")).default,
 }));
 vi.mock("../components_mobile/LinkedCard.svelte", async () => ({

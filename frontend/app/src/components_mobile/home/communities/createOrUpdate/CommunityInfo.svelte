@@ -15,7 +15,9 @@
         TextArea,
         UserChip,
     } from "component-lib";
-    import { publish, type OpenChat } from "@client";
+    import { publish, type CommunityIdentifier, type OpenChat } from "@client";
+    import { toastStore } from "@src/stores/toast";
+    import { navigate } from "@utils/navigation";
     import { getContext, tick } from "svelte";
     import AccountGroup from "svelte-material-icons/AccountGroup.svelte";
     import AccountMultiple from "svelte-material-icons/AccountMultiple.svelte";
@@ -33,7 +35,7 @@
     import EditableImageWrapper from "../../../EditableImageWrapper.svelte";
     import LinkedCard from "../../../LinkedCard.svelte";
     import Setting from "../../../Setting.svelte";
-    import Translatable from "../../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AccessGateChip from "../../access_gates/AccessGateChip.svelte";
     import LanguageSelector from "../../LanguageSelector.svelte";
     import SlidingPageContent from "../../SlidingPageContent.svelte";
@@ -42,18 +44,53 @@
         MAX_NAME_LENGTH,
         MIN_NAME_LENGTH,
         updateCommunityState,
-    } from "./community.svelte";
+    } from "@shared_components/home/communities/createOrUpdate/community.svelte";
 
     const client = getContext<OpenChat>("client");
     const gradient =
         "linear-gradient(90deg, var(--validation-warning) 0%, var(--primary) 30%, var(--primary) 70%, var(--tertiary) 100%)";
 
-    let ucs = updateCommunityState;
+    const ucs = updateCommunityState;
 
     let selectedLanguage = $derived(
         supportedLanguages.find((l) => l.code === ucs.candidate.primaryLanguage),
     );
     let confirmExit = $state(false);
+
+    async function save(yes: boolean = true) {
+        const outcome = await ucs.saveCommunity(client, yes);
+        switch (outcome.kind) {
+            case "needs_confirmation":
+            case "declined":
+            case "invalid":
+                break;
+            case "success":
+                toastStore.showSuccessToast(i18nKey("communities.saved"));
+                publish("closeModalStack");
+                break;
+            case "unchanged":
+                publish("closeModalStack");
+                break;
+            case "failed":
+                toastStore.showFailureToast(outcome.message);
+                break;
+            case "created_without_invites":
+                toastStore.showFailureToast(outcome.message);
+                openCreatedCommunity(outcome.id);
+                break;
+            case "created":
+                toastStore.showSuccessToast(i18nKey("communities.created"));
+                openCreatedCommunity(outcome.id);
+                break;
+            default:
+                outcome satisfies never;
+        }
+    }
+
+    function openCreatedCommunity(id: CommunityIdentifier) {
+        navigate(`/community/${id.communityId}`);
+        publish("closeModalStack");
+    }
 </script>
 
 {#snippet rulesError()}
@@ -65,7 +102,13 @@
 {#if ucs.showingVerificationWarning}
     <AreYouSure
         message={i18nKey("verified.nameChangeWarning", undefined, ucs.candidate.level, true)}
-        action={(yes) => ucs.saveCommunity(client, yes)} />
+        action={save} />
+{/if}
+
+{#if ucs.confirming}
+    <AreYouSure
+        message={i18nKey("confirmMakeGroupPrivate", undefined, ucs.candidate.level, true)}
+        action={save} />
 {/if}
 
 {#if confirmExit}
@@ -130,7 +173,7 @@
                 </Container>
             {/snippet}
         </EditableImageWrapper>
-        <Form onSubmit={() => ucs.saveCommunity(client)}>
+        <Form onSubmit={() => save()}>
             <Container direction={"vertical"} gap={"lg"}>
                 <Input
                     minlength={MIN_NAME_LENGTH}
@@ -295,7 +338,7 @@
                 <CommonButton
                     disabled={!ucs.valid}
                     loading={ucs.busy}
-                    onClick={() => ucs.saveCommunity(client)}
+                    onClick={() => save()}
                     size={"medium"}
                     mode={"active"}>
                     {#snippet icon(color, size)}
@@ -314,9 +357,10 @@
     </Container>
     {#if ucs.editMode}
         <FloatingButton
+            disabled={!ucs.valid || !ucs.hasChanges()}
             loading={ucs.busy}
             pos={{ bottom: "lg", right: "lg" }}
-            onClick={() => ucs.saveCommunity(client)}>
+            onClick={() => save()}>
             {#snippet icon(color)}
                 <Save {color} />
             {/snippet}

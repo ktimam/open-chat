@@ -1,7 +1,14 @@
 import type { CustomEmoji, PremiumItem } from "@client";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
+// These tests import the module under test inside each test, so the first import's transform time
+// counts against the timeout. Under a loaded CI runner that can pass the 5s default.
+vi.setConfig({ testTimeout: 20_000 });
+
 const constructed = vi.fn();
+// how many of the next Databases fail their first load, like the real one does
+// when IndexedDB is empty and the emoji CDN errors
+const failingLoads = { remaining: 0 };
 
 const { customEmojis, premiumItemsStore } = vi.hoisted(() => ({
     customEmojis: new Map<string, CustomEmoji>(),
@@ -20,17 +27,23 @@ beforeEach(() => {
 
 vi.mock("emoji-picker-element", () => {
     class Database {
+        private readonly _ready: Promise<void>;
         constructor() {
             constructed();
+            this._ready =
+                failingLoads.remaining-- > 0
+                    ? Promise.reject(new Error("Failed to fetch: emoji data: 500"))
+                    : Promise.resolve();
+            this._ready.catch(() => undefined);
         }
         ready() {
-            return Promise.resolve();
+            return this._ready;
         }
         getPreferredSkinTone() {
-            return Promise.resolve(0);
+            return this._ready.then(() => 0);
         }
         getEmojiBySearchQuery() {
-            return Promise.resolve([]);
+            return this._ready.then(() => [{ unicode: "😀", version: 1, shortcodes: ["grin"] }]);
         }
         getEmojiByUnicodeOrName() {
             return Promise.resolve(undefined);
@@ -206,5 +219,39 @@ describe("the emoji Database", () => {
         premiumItemsStore.value.clear();
         expect(searchCustomEmojis("PARTY")).toEqual([]);
         expect(constructed).not.toHaveBeenCalled();
+    });
+
+    // Invariant: a Database whose first load failed is not reused, so emoji search
+    // works again once the emoji data can be fetched, without restarting the app.
+    test("is rebuilt after its first load fails, so search recovers", async () => {
+        stubIndexedDb("loads");
+        failingLoads.remaining = 1;
+        const { searchAllEmojis } = await import("./emojis");
+
+        expect(await searchAllEmojis("grin")).toEqual([]);
+        await flush();
+        expect(await searchAllEmojis("grin")).toEqual([
+            { kind: "native", unicode: "😀", code: "grin" },
+        ]);
+        expect(constructed).toHaveBeenCalledTimes(2);
+    });
+
+    // Invariant: a Database whose first load failed is replaced only when a caller next
+    // asks for one, never by itself, so a CDN outage can't start a loop of reloads.
+    test("is not rebuilt after a failed load until a caller asks for it", async () => {
+        stubIndexedDb("loads");
+        failingLoads.remaining = 3;
+        const { getEmojiDatabase } = await import("./emojis");
+
+        // fake timers so a rebuild scheduled with a delay is caught too
+        vi.useFakeTimers();
+        try {
+            getEmojiDatabase();
+            await vi.runAllTimersAsync();
+        } finally {
+            vi.useRealTimers();
+        }
+
+        expect(constructed).toHaveBeenCalledTimes(1);
     });
 });

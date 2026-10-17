@@ -106,7 +106,6 @@ import {
     GroupCreateAiAppChatLinkTokenResponse,
     GroupCreateAiAppCardConfirmationGrantArgs,
     GroupCreateAiAppCardConfirmationGrantResponse,
-    GroupRegisterProposalVoteArgs,
     GroupRegisterProposalVoteV2Args,
     GroupRegisterWebhookArgs,
     GroupRegisterWebhookResponse,
@@ -1029,24 +1028,6 @@ export class GroupClient
                 ),
             GroupThreadPreviewsArgs,
             GroupThreadPreviewsResponse,
-        );
-    }
-
-    registerProposalVote(
-        groupId: string,
-        messageIdx: number,
-        adopt: boolean,
-    ): Promise<RegisterProposalVoteResponse> {
-        return this.update(
-            groupId,
-            "register_proposal_vote",
-            {
-                adopt,
-                message_index: messageIdx,
-            },
-            unitResult,
-            GroupRegisterProposalVoteArgs,
-            UnitResult,
         );
     }
 

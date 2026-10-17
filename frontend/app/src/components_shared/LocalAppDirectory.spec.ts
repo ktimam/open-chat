@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { webcrypto } from "node:crypto";
 import { flushSync, mount, tick, unmount } from "svelte";
-import { get, type Writable } from "svelte/store";
+import { get, type Writable } from "@client/utils/stores";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LocalAppDirectory from "./LocalAppDirectory.svelte";
 import AiAppModal from "../components/home/AiAppModal.svelte";
@@ -30,11 +30,12 @@ const calls = vi.hoisted(() => ({
     toastFailure: vi.fn(),
 }));
 vi.mock("../utils/privateAppWorkspace", async () => ({
-    privateAppWorkspaceState: (await import("svelte/store")).writable({}),
+    privateAppWorkspaceState: (await import("@client/utils/stores")).writable({}),
     privateAppWorkspace: calls,
 }));
 vi.mock("@utils/mainAppsNavigation", () => ({ navigateToMainApps: calls.navigate }));
-vi.mock("@client", async () => ({ mobileWidth: (await import("svelte/store")).writable(false) }));
+vi.mock("@client", async () => ({
+        ...(await import("@client/utils/stores")), mobileWidth: (await import("@client/utils/stores")).writable(false) }));
 vi.mock("@utils/aiAppSurfaces", () => ({ homeSurfaceOpening: calls.homeSurface }));
 vi.mock("@src/i18n/i18n", () => ({ i18nKey: (key: string) => key }));
 vi.mock("@src/stores/toast", () => ({
@@ -52,10 +53,7 @@ vi.mock("../components/Overlay.svelte", async () => ({
 vi.mock("../components/ModalContent.svelte", async () => ({
     default: (await import("./LocalAppDirectory.spec.shell.svelte")).default,
 }));
-vi.mock("../components/Translatable.svelte", async () => ({
-    default: (await import("./LocalAppDirectory.spec.shell.svelte")).default,
-}));
-vi.mock("../components_mobile/Translatable.svelte", async () => ({
+vi.mock("@shared_components/Translatable.svelte", async () => ({
     default: (await import("./LocalAppDirectory.spec.shell.svelte")).default,
 }));
 vi.mock("../components/home/communities/explore/AiAppIcon.svelte", async () => ({

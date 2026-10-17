@@ -23,10 +23,10 @@ describe("opaque per-chat launch-token client plumbing", () => {
         );
         expect(client).toContain('kind: "cancelAiAppChatLinkToken", token: token.slice()');
         expect(worker).toContain(
-            'case "createAiAppChatLinkToken": return agent.createAiAppChatLinkToken( payload.chatId, payload.chatName, payload.appId, payload.appRevision, );',
+            "createAiAppChatLinkToken: (payload, agent) => { return agent.createAiAppChatLinkToken( payload.chatId, payload.chatName, payload.appId, payload.appRevision, );",
         );
         expect(worker).toContain(
-            'case "cancelAiAppChatLinkToken": return agent.cancelAiAppChatLinkToken(payload.token);',
+            "cancelAiAppChatLinkToken: (payload, agent) => { return agent.cancelAiAppChatLinkToken(payload.token);",
         );
     });
 
@@ -87,7 +87,7 @@ describe("privacy-safe card-provenance failure plumbing", () => {
         const agent = source("../openchat-agent/src/services/openchatAgent.ts");
         const client = source("../openchat-client/src/openchat.ts");
 
-        expect(shared).toContain("T extends CreateAiAppCardProvenance ? AiAppCardProvenanceResult");
+        expect(shared).toContain("createAiAppCardProvenance: AiAppCardProvenanceResult;");
         expect(agent).toContain('if (offline()) return Promise.resolve({ kind: "offline" });');
         expect(client).toContain('.catch(() => ({ kind: "transport_error" }));');
     });

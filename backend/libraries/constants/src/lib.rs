@@ -2,6 +2,15 @@ use candid::Principal;
 use types::{CanisterId, Cycles, Milliseconds, TimestampMillis, UserId};
 
 pub const USER_LIMIT: usize = 300_000;
+// Limits on what each user can accumulate in their state, so that no one user's state can grow
+// without bound. Each is well above what a user would reach in practice.
+pub const MAX_PINNED_CHATS: usize = 100; // In each of the lists of direct chats, groups and a community's channels
+pub const MAX_FAVOURITE_CHATS: usize = 100;
+pub const MAX_SAVED_CRYPTO_ACCOUNTS: usize = 100;
+pub const MAX_MESSAGE_REMINDERS: usize = 100; // Pending at once
+pub const MAX_WALLET_TOKENS: usize = 500;
+pub const MAX_TOKEN_SWAPS: usize = 10_000; // Recorded by a user who swaps straight from their wallet
+pub const MAX_TOKEN_SYMBOL_LENGTH: usize = 50; // Of each token in a swap a user records
 // Largest CHIT a single game event may move in either direction. Enforced by the user canister on
 // every `c2c_game_chit` call, and by whatever configures a game, so a proposal cannot set a price
 // or a reward the user canister will refuse.
@@ -12,6 +21,8 @@ pub const HOUR_IN_MS: Milliseconds = MINUTE_IN_MS * 60;
 pub const DAY_IN_MS: Milliseconds = HOUR_IN_MS * 24;
 pub const WEEK_IN_MS: Milliseconds = DAY_IN_MS * 7;
 pub const NANOS_PER_MILLISECOND: u64 = 1_000_000;
+// The longest a P2P swap may stay open, from when it is created until it expires
+pub const P2P_SWAP_MAX_EXPIRY: Milliseconds = 90 * DAY_IN_MS;
 pub const ONE_MB: u64 = 1024 * 1024;
 pub const ONE_GB: u64 = 1024 * ONE_MB;
 pub const CHUNK_STORE_CHUNK_SIZE: usize = ONE_MB as usize;
@@ -70,6 +81,8 @@ pub const MEMO_TRANSLATION_PAYMENT: [u8; 7] = [0x4f, 0x43, 0x5f, 0x54, 0x52, 0x4
 pub const MEMO_GROUP_IMPORT_INTO_COMMUNITY: [u8; 6] = [0x4f, 0x43, 0x5f, 0x47, 0x32, 0x43]; // OC_G2C
 pub const MEMO_LIST_TOKEN: [u8; 6] = [0x4f, 0x43, 0x5f, 0x54, 0x4f, 0x4b]; // OC_TOK
 pub const MEMO_STREAK_INSURANCE: [u8; 6] = [0x4f, 0x43, 0x5f, 0x49, 0x4e, 0x53]; // OC_INS
+pub const MEMO_SOL_DEPOSIT: [u8; 6] = [0x4f, 0x43, 0x5f, 0x53, 0x4f, 0x4c]; // OC_SOL
+pub const MEMO_SOL_DEPOSIT_FEE: [u8; 9] = [0x4f, 0x43, 0x5f, 0x53, 0x4f, 0x4c, 0x46, 0x45, 0x45]; // OC_SOLFEE
 
 pub const LIFETIME_DIAMOND_TIMESTAMP: TimestampMillis = 30000000000000; // This timestamp is in the year 2920
 

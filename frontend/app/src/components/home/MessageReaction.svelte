@@ -7,7 +7,7 @@
     import { i18nKey } from "../../i18n/i18n";
     import { getEmojiDatabase } from "../../utils/emojis";
     import Tooltip from "../tooltip/Tooltip.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -22,7 +22,7 @@
 
     let reactionCode = $state("unknown");
     let longPressed: boolean = $state(false);
-    let customEmoji = $state(getCustomEmoji(reaction));
+    const customEmoji = $state(getCustomEmoji(reaction));
 
     onMount(async () => {
         reactionCode = (await buildReactionCode(reaction)) ?? "unknown";
@@ -54,7 +54,7 @@
             | NativeEmoji
             | undefined;
         if (!emoji) return reaction;
-        let code =
+        const code =
             emoji?.shortcodes !== undefined
                 ? `:${emoji.shortcodes[emoji.shortcodes.length - 1]}:`
                 : `"${emoji?.annotation}"`;

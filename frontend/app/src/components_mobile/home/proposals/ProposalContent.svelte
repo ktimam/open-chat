@@ -8,6 +8,7 @@
         ColourVars,
         Column,
         CommonButton2,
+        IconButton,
         Row,
         Sheet,
         Subtitle,
@@ -18,24 +19,24 @@
         type OpenChat,
         type ProposalContent,
         ProposalDecisionStatus,
-        type RegisterProposalVoteResponse,
-        currentUserIdStore,
         proposalTopicsStore,
+        proposalVotesStore,
     } from "@client";
-    import { ErrorCode, isMultiUserCanisterUser, type ReadonlyMap } from "@shared";
+    import { type ReadonlyMap } from "@shared";
     import { getContext } from "svelte";
     import { _ } from "svelte-i18n";
     import ChevronRight from "svelte-material-icons/ChevronRight.svelte";
     import Alert from "svelte-material-icons/ShieldAlert.svelte";
     import InfoSlabBoxOut from "svelte-material-icons/InformationOutline.svelte";
     import AccountMultiple from "svelte-material-icons/AccountMultipleOutline.svelte";
+    import CopyIcon from "svelte-material-icons/ContentCopy.svelte";
     import { i18nKey } from "../../../i18n/i18n";
     import { NamedNeurons } from "../../../stores/namedNeurons";
-    import { proposalVotes } from "../../../stores/proposalVotes";
     import { now } from "../../../stores/time";
     import { toastStore } from "../../../stores/toast";
     import { round2 } from "../../../utils/math";
-    import Translatable from "../../Translatable.svelte";
+    import { copyToClipboard } from "../../../utils/urls";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
     import ProposalVoteButton from "./ProposalVoteButton.svelte";
     import ProposalVotingProgress from "./ProposalVotingProgress.svelte";
@@ -73,11 +74,11 @@
     );
     let isNns = $derived(content.proposal.kind === "nns");
     let voteStatus = $derived(
-        $proposalVotes.get(messageId) ??
+        $proposalVotesStore.get(messageId) ??
             (content.myVote !== undefined ? (content.myVote ? "adopted" : "rejected") : undefined),
     );
     let proposal = $derived(content.proposal);
-    let statusColour: Record<ProposalDecisionStatus, string> = {
+    const statusColour: Record<ProposalDecisionStatus, string> = {
         0: ColourVars.surfaceDisabled, // unspecified
         1: ColourVars.validationError, // failed
         2: ColourVars.validationWarning, // open
@@ -123,71 +124,40 @@
 
     let showDetails = $state(false);
 
-    function noEligibleNeuronsMessage(): string {
-        // Users in a MultiUser canister vote with the neurons hot-keyed to their own principal,
-        // everyone else with those hot-keyed to their User canister, ie. their user id
-        return isMultiUserCanisterUser($currentUserIdStore)
-            ? $_("proposal.noEligibleNeuronsPrincipalMessage", {
-                  values: { principal: client.OcIdentityPrincipal },
-              })
-            : $_("proposal.noEligibleNeuronsMessage", {
-                  values: { userId: $currentUserIdStore },
-              });
+    // Users vote with the neurons hot-keyed to their own principal
+    let votingHotkey = $derived(client.OcIdentityPrincipal);
+
+    function copyVotingHotkey() {
+        copyToClipboard(votingHotkey).then((success) => {
+            // Close the sheet, otherwise it hides the toast
+            showNeuronInfo = false;
+            if (success) {
+                toastStore.showSuccessToast(i18nKey("votingHotkeyCopiedToClipboard"));
+            } else {
+                toastStore.showFailureToast(
+                    i18nKey("failedToCopyToClipboard", { account: votingHotkey }),
+                );
+            }
+        });
     }
 
-    function onVote(adopt: boolean) {
-        if (votingDisabled || (chatId.kind !== "group_chat" && chatId.kind !== "channel")) {
-            return;
+    async function onVote(adopt: boolean) {
+        if (votingDisabled) return;
+
+        const outcome = await client.voteOnProposal(chatId, messageIndex, messageId, content, adopt);
+        switch (outcome.kind) {
+            case "voted":
+            case "skipped":
+                break;
+            case "no_eligible_neurons":
+                showNeuronInfo = true;
+                break;
+            case "failed":
+                toastStore.showFailureToast(outcome.message);
+                break;
+            default:
+                outcome satisfies never;
         }
-
-        const mId = messageId;
-        proposalVotes.insert(mId, adopt ? "adopting" : "rejecting");
-
-        let success = false;
-        client
-            .registerProposalVote(
-                chatId,
-                messageIndex,
-                content.governanceCanisterId,
-                proposal.id,
-                isNns,
-                adopt,
-            )
-            .then((resp) => {
-                if (resp.kind === "success") {
-                    success = true;
-                    proposalVotes.insert(mId, adopt ? "adopted" : "rejected");
-                    client.getProposalVoteDetails(
-                        messageId,
-                        content.governanceCanisterId,
-                        proposal.id,
-                        isNns,
-                    );
-                } else if (resp.kind === "error" && resp.code === ErrorCode.NoEligibleNeurons) {
-                    showNeuronInfo = true;
-                } else {
-                    const err = registerProposalVoteErrorMessage(resp);
-                    if (err) toastStore.showFailureToast(i18nKey("proposal." + err));
-                }
-            })
-            .catch((err) => {
-                client.logError("Unable to vote on proposal", err);
-                toastStore.showFailureToast(i18nKey("proposal.voteFailed"));
-            })
-            .finally(() => {
-                if (!success) {
-                    proposalVotes.delete(mId);
-                }
-            });
-    }
-
-    function registerProposalVoteErrorMessage(
-        resp: RegisterProposalVoteResponse,
-    ): string | undefined {
-        if (resp.kind === "error" && resp.code === ErrorCode.NoChange) return "alreadyVoted";
-        if (resp.kind === "error" && resp.code === ErrorCode.ProposalNotAcceptingVotes)
-            return "proposalNotAcceptingVotes";
-        return "voteFailed";
     }
 
     function expand() {
@@ -513,7 +483,23 @@
                 <Translatable resourceKey={i18nKey("proposal.noEligibleNeurons")} />
             </Title>
             <Body colour="textSecondary">
-                <Markdown inline={true} text={noEligibleNeuronsMessage()} />
+                <Markdown inline={true} text={$_("proposal.noEligibleNeuronsPrincipalIntro")} />
+            </Body>
+            <Column gap="xs">
+                <Body colour="textSecondary">
+                    <Translatable resourceKey={i18nKey("proposal.noEligibleNeuronsPrincipalLabel")} />
+                </Body>
+                <Row gap="sm" crossAxisAlignment="center">
+                    <Body>{votingHotkey}</Body>
+                    <IconButton size="md" onclick={copyVotingHotkey}>
+                        {#snippet icon(color)}
+                            <CopyIcon {color} title={$_("copyToClipboard")} />
+                        {/snippet}
+                    </IconButton>
+                </Row>
+            </Column>
+            <Body colour="textSecondary">
+                <Markdown inline={true} text={$_("proposal.noEligibleNeuronsMoreInfo")} />
             </Body>
         </Column>
     </Sheet>

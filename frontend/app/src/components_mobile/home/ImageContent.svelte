@@ -21,7 +21,7 @@
         publicImageDisplayUrl,
         shouldLoadNativePublicImageThroughWorker,
     } from "../../utils/publicImageDisplay";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import MessageRenderer from "./MessageRenderer.svelte";
 
     const client = getContext<OpenChat>("client");

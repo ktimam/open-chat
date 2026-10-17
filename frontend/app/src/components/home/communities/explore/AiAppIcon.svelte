@@ -32,7 +32,7 @@
     );
     // Reset the failed flag when the URL changes (the same component instance is reused per app).
     $effect(() => {
-        iconUrl;
+        void iconUrl;
         failed = false;
         remoteAllowed = false;
     });

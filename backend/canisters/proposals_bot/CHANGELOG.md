@@ -6,9 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased]
 
+## [[2.0.2147](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2147-proposals_bot)] - 2026-10-16
+
+### Changed
+
+- Await work inside timers rather than spawning a task from them ([#9971](https://github.com/open-chat-labs/open-chat/pull/9971))
+- Stop tracking the async work in progress, since nothing reads it any more ([#9972](https://github.com/open-chat-labs/open-chat/pull/9972))
+
+### Fixed
+
+- Retry creating a nervous system's proposals group if it fails ([#9901](https://github.com/open-chat-labs/open-chat/pull/9901))
+
+## [[2.0.2107](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2107-proposals_bot)] - 2026-10-07
+
 ### Changed
 
 - Run the repeating jobs on `PerRoundTimer` rather than `set_timer_interval` ([#9772](https://github.com/open-chat-labs/open-chat/pull/9772))
+- Instantiate the msgpack (de)serializers of widely shared types once, in `types`, cutting the code by 162KB ([#9804](https://github.com/open-chat-labs/open-chat/pull/9804))
+- Bump the rmp-serde fork to one which reads numbers before visiting them, cutting the code by 101KB ([#9808](https://github.com/open-chat-labs/open-chat/pull/9808))
+- Disable a nervous system whose group or community has been deleted, now that its canister is left uninstalled ([#9812](https://github.com/open-chat-labs/open-chat/pull/9812))
 
 ## [[2.0.2083](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2083-proposals_bot)] - 2026-10-02
 

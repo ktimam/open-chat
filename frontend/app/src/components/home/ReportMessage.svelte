@@ -12,7 +12,7 @@
     import ModalContent from "../ModalContent.svelte";
     import Overlay from "../Overlay.svelte";
     import Select from "../Select.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
 
     interface Props {
@@ -28,9 +28,9 @@
     const client = getContext<OpenChat>("client");
 
     let deleteMessage = $state(false);
-    let busy = false;
+    const busy = false;
     let selectedReasonIndex = $state(-1);
-    let reasons = [
+    const reasons = [
         "report.pleaseSelect",
         "report.threat",
         "report.child",

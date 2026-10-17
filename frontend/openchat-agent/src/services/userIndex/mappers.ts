@@ -31,7 +31,6 @@ import type {
     SuspensionAction,
     SuspensionDetails,
     UnsuspendUserResponse,
-    UserMigrationResponse,
     UsersApiResponse,
     UserSummary,
     UserSummaryUpdate,
@@ -92,7 +91,6 @@ import type {
     UserIndexSubmitProofOfUniquePersonhoodResponse,
     UserIndexSuspendUserResponse,
     UserIndexUnsuspendUserResponse,
-    UserIndexUserMigrationResponse,
     UserIndexUserRegistrationCanisterResponse,
     UserIndexUsersResponse,
     AiActionDefinition as TAiActionDefinition,
@@ -255,8 +253,7 @@ export function currentUserSummary(
         maxStreak: value.max_streak,
         backgroundId: value.profile_background_id,
         hideOnlineStatus: value.hide_online_status ?? false,
-        // Also kept on the cached current user, which a summary under a new id (the user having been
-        // migrated during the session) replaces, so that the next session maps them from the start
+        // Also kept on the cached current user, which the summary is merged into
         previousUserIds: mapOptional(value.previous_user_ids, (ids) =>
             ids.map(principalBytesToString),
         ),
@@ -336,49 +333,6 @@ export function userRegistrationCanisterResponse(
         return principalBytesToString(value.Success);
     }
     throw new Error(`Unexpected UserRegistrationCanisterResponse type received: ${value}`);
-}
-
-export function userMigrationResponse(
-    value: UserIndexUserMigrationResponse,
-): UserMigrationResponse {
-    if (value === "NotFound") {
-        return { kind: "not_found" };
-    }
-    const status = value.Success;
-    if (status === "Queued") {
-        return { kind: "queued" };
-    }
-    if ("Requested" in status) {
-        return {
-            kind: "requested",
-            multiUserCanisterId: principalBytesToString(status.Requested.multi_user_canister_id),
-            timestamp: status.Requested.timestamp,
-        };
-    }
-    if ("Started" in status) {
-        const { major, minor, patch } = status.Started.wasm_version;
-        return {
-            kind: "started",
-            multiUserCanisterId: principalBytesToString(status.Started.multi_user_canister_id),
-            timestamp: status.Started.timestamp,
-            userBytes: status.Started.user_bytes,
-            wasmVersion: `${major}.${minor}.${patch}`,
-        };
-    }
-    if ("Imported" in status) {
-        return {
-            kind: "imported",
-            multiUserCanisterId: principalBytesToString(status.Imported.multi_user_canister_id),
-            timestamp: status.Imported.timestamp,
-            newUserId: principalBytesToString(status.Imported.new_user_id),
-        };
-    }
-    return {
-        kind: "failed",
-        multiUserCanisterId: principalBytesToString(status.Failed.multi_user_canister_id),
-        timestamp: status.Failed.timestamp,
-        error: ocError(status.Failed.error),
-    };
 }
 
 export function currentUserResponse(value: UserIndexCurrentUserResponse): CurrentUserResponse {

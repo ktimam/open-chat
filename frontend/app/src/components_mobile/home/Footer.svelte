@@ -79,7 +79,7 @@
     }: Props = $props();
 
     let ephemeralMessageEvent = $state<EphemeralMessageEvent>();
-    //@ts-ignore
+    // @ts-expect-error bind:this sets it after mount
     let messageEntry: MessageEntry;
 
     let inputTrayVisible = $state(false);
@@ -109,7 +109,7 @@
             client
                 .messageContentFromFile(file, context)
                 .then((content) => {
-                    let permission = client.contentTypeToPermission(content.kind);
+                    const permission = client.contentTypeToPermission(content.kind);
                     if (client.canSendMessage(context.chatId, mode, permission)) {
                         onFileSelected(content, context);
                     } else {

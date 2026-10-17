@@ -7,7 +7,7 @@
     import ErrorMessage from "../../ErrorMessage.svelte";
     import AccountInfo from "../AccountInfo.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
-    import type { TokenState } from "./walletState.svelte";
+    import type { TokenState } from "@shared_components/home/wallet/walletState.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -17,7 +17,7 @@
 
     let { tokenState }: Props = $props();
 
-    let error: string | undefined = $state(undefined);
+    const error: string | undefined = $state(undefined);
 
     let title = $derived(i18nKey(`cryptoAccount.receiveToken`, { symbol: tokenState.symbol }));
 

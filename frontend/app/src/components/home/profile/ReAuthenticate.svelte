@@ -10,15 +10,15 @@
     } from "@client";
     import { getContext, onMount } from "svelte";
     import { i18nKey } from "../../../i18n/i18n";
-    import { configKeys } from "../../../utils/config";
+    import { configKeys } from "@shared";
     import {
         EmailPollerError,
         EmailPollerSuccess,
         EmailSigninHandler,
     } from "../../../utils/signin";
     import ErrorMessage from "../../ErrorMessage.svelte";
-    import Translatable from "../../Translatable.svelte";
-    import EmailSigninFeedback from "../EmailSigninFeedback.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
+    import EmailSigninFeedback from "@shared_components/home/EmailSigninFeedback.svelte";
     import ChooseSignInOption from "./ChooseSignInOption.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -30,14 +30,14 @@
             key: ECDSAKeyIdentity;
             delegation: DelegationChain;
             provider: AuthProvider;
-            signInProofJwt: string;
+            signInProofJwt: string | undefined;
         }) => void;
     }
 
     let { message, onSuccess, autoSelect = false }: Props = $props();
 
     let error: string | undefined = $state();
-    let emailSigninHandler = new EmailSigninHandler(client, "account_linking", false);
+    const emailSigninHandler = new EmailSigninHandler(client, "account_linking", false);
     let emailInvalid = $state(false);
     let email = $state("");
     let authStep:

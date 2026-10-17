@@ -25,10 +25,11 @@
     import { now500 } from "../../stores/time";
     import { toastStore } from "../../stores/toast";
     import ButtonGroup from "../ButtonGroup.svelte";
+    import { prizeClaimStep } from "@shared_components/home/prize/prizeClaim";
     import Diamond from "../icons/Diamond.svelte";
-    import SpinningToken from "../icons/SpinningToken.svelte";
+    import SpinningToken from "@shared_components/icons/SpinningToken.svelte";
     import SecureButton from "../SecureButton.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Badges from "./profile/Badges.svelte";
     import ChitEarnedBadge from "./profile/ChitEarnedBadge.svelte";
     import ReAuthenticateModal from "./profile/ReAuthenticateModal.svelte";
@@ -49,19 +50,27 @@
     let progressWidth = $state(0);
     let mouseEvent = $state<MouseEvent>();
 
-    async function claim(e: MouseEvent, auth: { signInProofJwt: string } | undefined) {
-        const signInProof = auth?.signInProofJwt;
-        if (signInProof === undefined && content.requiresCaptcha) {
+    async function claim(e: MouseEvent, auth: { signInProofJwt: string | undefined } | undefined) {
+        const step = prizeClaimStep(
+            content.requiresCaptcha,
+            auth !== undefined ? { proof: auth.signInProofJwt } : undefined,
+        );
+        if (step.kind === "authenticate") {
             mouseEvent = e;
             showAuthentication = true;
             return;
         }
 
         showAuthentication = false;
+        if (step.kind === "failed") {
+            toastStore.showFailureToast(step.message);
+            return;
+        }
+
         if (e.isTrusted && chatId.kind !== "direct_chat" && !me && userEligible) {
             claimsStore.add(messageId);
             client
-                .claimPrize(chatId, messageId, e, signInProof)
+                .claimPrize(chatId, messageId, e, step.signInProof)
                 .then((success) => {
                     if (!success) {
                         toastStore.showFailureToast(i18nKey("prizes.claimFailed"));
@@ -78,11 +87,7 @@
     function onStreakClick() {
         publish("claimDailyChit");
     }
-    let logo = $derived(
-        [...$cryptoLookup.values()].find(
-            (t) => t.symbol.toLowerCase() === content.token.toLowerCase(),
-        )?.logo ?? "",
-    );
+    let logo = $derived($cryptoLookup.get(content.ledger)?.logo ?? "");
     let total = $derived(content.prizesRemaining + content.prizesPending + content.winnerCount);
     let percentage = $derived((content.winnerCount / total) * 100);
     let claimedByYou = $derived(content.userIsWinner);
@@ -123,7 +128,7 @@
         key: ECDSAKeyIdentity;
         delegation: DelegationChain;
         provider: AuthProvider;
-        signInProofJwt: string;
+        signInProofJwt: string | undefined;
     }) {
         if (mouseEvent !== undefined) {
             claim(mouseEvent, detail);

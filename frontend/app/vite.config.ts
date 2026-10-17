@@ -9,10 +9,14 @@ import { createHtmlPlugin } from "vite-plugin-html";
 import dfxJson from "../../dfx.json";
 import {
     __dirname,
+    APP_FONTS_URL,
+    fontsLink,
     generateCspForScripts,
     initEnv,
     sassModulesAndMixins,
     stylesDir,
+    WEB_FONTS_URL,
+    webLayoutFlag,
 } from "./rollup.extras.mjs";
 import { ocPackageAliases } from "./oc-package-aliases.mjs";
 import { handleDevelopmentServiceWorkerRequest } from "./devServiceWorkerCleanup";
@@ -61,6 +65,8 @@ const devTransformersWebGpuRuntimeVersion = createTransformersWebGpuDevRuntimeVe
 initEnv({ websiteVersion: version });
 
 const unofficialLocalClient = process.env.OC_UNOFFICIAL_CLIENT === "true";
+
+const webLayout = webLayoutFlag() === "v3";
 
 const isNativeIos = process.env.OC_APP_TYPE === "ios";
 const isNativeAndroid = process.env.OC_APP_TYPE === "android";
@@ -701,6 +707,10 @@ export default defineConfig({
             devAllowedHost === undefined ? "undefined" : JSON.stringify(devAllowedHost),
         "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(version),
         "import.meta.env.OC_SERVICE_WORKER_PATH": JSON.stringify(serviceWorkerPath),
+        // A build-time constant (see rollup.config.mjs)
+        "import.meta.env.OC_WEB_LAYOUT": JSON.stringify(webLayoutFlag()),
+        "import.meta.env.OC_APP_FONTS_URL": JSON.stringify(APP_FONTS_URL),
+        "import.meta.env.OC_WEB_FONTS_URL": JSON.stringify(WEB_FONTS_URL),
     },
     // Prebundling can otherwise give svelte-material-icons a private Svelte runtime whose DOM
     // getters are still uninitialized when the first mobile icon renders during startup. The
@@ -804,6 +814,7 @@ export default defineConfig({
             entry: "./src/main.ts",
             inject: {
                 data: {
+                    fonts: fontsLink(webLayout),
                     injectScript: inlineScripts.map((s) => `<script>${s}</script>`).join(""),
                     csp: `<meta http-equiv="Content-Security-Policy" content="${generateCspForScripts(
                         inlineScripts,
@@ -820,6 +831,9 @@ export default defineConfig({
         }),
     ],
     resolve: {
+        // @openchat/ui is compiled from source; a local install of its own (openchat-ui/node_modules)
+        // must not bring in a second copy of the svelte runtime.
+        dedupe: ["svelte"],
         alias: [
             ...ocPackageAliases,
             // The Tauri plugin's guest JS is resolved from source (guest-js/)

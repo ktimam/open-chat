@@ -1,6 +1,6 @@
 <script lang="ts">
     import MulticolourText from "@src/components_mobile/MulticolourText.svelte";
-    import { accessApprovalState } from "@src/utils/preview.svelte";
+    import type { GateEvaluation } from "@shared_components/home/access/gateEvaluation.svelte";
     import {
         Avatar,
         Body,
@@ -27,28 +27,29 @@
     import Refresh from "svelte-material-icons/Refresh.svelte";
     import Wallet from "svelte-material-icons/WalletOutline.svelte";
     import { i18nKey, interpolate } from "../../../i18n/i18n";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
-    import { TokenState } from "../wallet/walletState.svelte";
-    import AccessGateExpiry from "./AccessGateExpiry.svelte";
+    import { TokenState } from "@shared_components/home/wallet/walletState.svelte";
+    import AccessGateExpiry from "@shared_components/home/access/AccessGateExpiry.svelte";
 
     const client = getContext<OpenChat>("client");
 
     interface Props {
         gate: PaymentGate & { expiry: bigint | undefined };
+        evaluation: GateEvaluation;
         level: Level;
         onApprovePayment: (args: { ledger: string; amount: bigint; approvalFee: bigint }) => void;
         onClose: () => void;
     }
 
-    let { gate, level, onApprovePayment, onClose }: Props = $props();
+    let { gate, evaluation, level, onApprovePayment, onClose }: Props = $props();
 
     // A gate can name a ledger the registry does not carry. `token.ledger` below then threw and
     // took the app down; and with no decimals or fee we can neither state the amount nor build a
     // valid approval, so the payment must not be offered at all.
     let token = $derived($enhancedCryptoLookup.get(gate.ledgerCanister));
     let tokenState = $derived(new TokenState(token));
-    let refreshingBalance = $state(false);
+    const refreshingBalance = $state(false);
     let totalAmount = $derived(tokenState.formatTokens(gate.amount));
     // Integer arithmetic: BigInt(Number(amount) * 0.98) throws a RangeError for any amount that
     // is not a multiple of 50, because the product is not an integer (12345678n throws;
@@ -59,7 +60,7 @@
     let toOC = $derived(tokenState.formatTokens(gate.amount - ownerShare));
 
     let cryptoBalance = $derived(
-        accessApprovalState.balanceAfterCurrentCommitments(
+        evaluation.balanceAfterCurrentCommitments(
             tokenState.ledger,
             tokenState.cryptoBalance,
         ),

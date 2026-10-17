@@ -1,14 +1,15 @@
 <script lang="ts">
+    import { walletApprovalFee } from "@client";
     import { BigButton, Container } from "component-lib";
     import ChatPlus from "svelte-material-icons/ChatPlusOutline.svelte";
     import Wallet from "svelte-material-icons/WalletOutline.svelte";
     import { i18nKey } from "../../../i18n/i18n";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
     import SendToAddress from "./SendToAddress.svelte";
     import SendToUser from "./SendToUser.svelte";
     import TokenCard from "./TokenCard.svelte";
-    import { TokenState } from "./walletState.svelte";
+    import { TokenState } from "@shared_components/home/wallet/walletState.svelte";
 
     interface Props {
         tokenState: TokenState;
@@ -18,6 +19,17 @@
     let { tokenState, onClose }: Props = $props();
 
     let mode = $state<"user" | "address">("user");
+    // Sending to a user sends them a message, whose transfer is pulled from the user's wallet once
+    // they have approved it, so costs the approval's fee as well.
+    // Sending to an address is a withdrawal, which costs a single transfer's fee. The token's page
+    // shares the TokenState, so it goes back to a single transfer's fee once this closes.
+    $effect(() => {
+        tokenState.transferFees =
+            mode === "user"
+                ? tokenState.transferFee + walletApprovalFee(tokenState.transferFee)
+                : undefined;
+        return () => (tokenState.transferFees = undefined);
+    });
     let title = $derived(i18nKey("cryptoAccount.sendToken", { symbol: tokenState.symbol }));
 </script>
 

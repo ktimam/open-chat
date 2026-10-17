@@ -8,7 +8,7 @@
     import ChevronDown from "svelte-material-icons/ChevronDown.svelte";
     import Refresh from "svelte-material-icons/Refresh.svelte";
     import TokenSelector from "./wallet/TokenSelector.svelte";
-    import { TokenState } from "./wallet/walletState.svelte";
+    import { TokenState } from "@shared_components/home/wallet/walletState.svelte";
     import { getProxyAdjustedBlobUrl } from "../../utils/media";
 
     const client = getContext<OpenChat>("client");
@@ -19,6 +19,9 @@
         filter?: (details: EnhancedTokenDetails) => boolean;
         onSelect?: (ledger: string, urlFormat: string) => void;
         draftAmount?: bigint;
+        // What the draft costs in fees, if not a single transfer's fee, so that the balance shown
+        // is what remains once it is paid
+        fees?: bigint;
         showRefresh?: boolean;
         // Hides the OpenChat balance (and its refresh), for when the payment is coming from
         // somewhere else and the balance is not the one being spent. Their space is kept so the
@@ -32,6 +35,7 @@
         onSelect,
         width = "fill",
         draftAmount,
+        fees,
         showRefresh = false,
         hideBalance = false,
     }: Props = $props();
@@ -46,6 +50,12 @@
     $effect(() => {
         if (draftAmount !== undefined && tokenState !== undefined) {
             tokenState.draftAmount = draftAmount;
+        }
+    });
+
+    $effect(() => {
+        if (tokenState !== undefined) {
+            tokenState.transferFees = fees;
         }
     });
 </script>

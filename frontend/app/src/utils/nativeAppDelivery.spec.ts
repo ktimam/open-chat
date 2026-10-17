@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { get } from "svelte/store";
+import { get } from "@client/utils/stores";
 import { createNativeAppDelivery, nativeDeliveryAllowed } from "./nativeAppDelivery";
 import type { LocalDraftDeliveryRequest } from "./localAppDrafts";
 import { encryptedRequestFixture } from "./localAppEncryption.testFixtures";

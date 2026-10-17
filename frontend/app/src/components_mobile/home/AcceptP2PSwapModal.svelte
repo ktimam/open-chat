@@ -1,10 +1,10 @@
 <script lang="ts">
     import { Body, Column, CommonButton, Row, Sheet, Subtitle } from "component-lib";
     import type { OpenChat, SignerWallet, TokenInfo } from "@client";
-    import { cryptoBalanceStore } from "@client";
+    import { cryptoBalanceStore, walletApprovalFee } from "@client";
     import { getContext } from "svelte";
     import { i18nKey } from "../../i18n/i18n";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AccountInfo from "./AccountInfo.svelte";
     import ExternalWalletApproval from "./ExternalWalletApproval.svelte";
     import SourceWalletSelector from "./SourceWalletSelector.svelte";
@@ -26,9 +26,8 @@
     let { token0, token1, amount0, amount1, onClose, onAccept }: Props = $props();
     let ledger1 = $derived(token1.ledger);
 
-    let refreshing = false;
-    let error: string | undefined = undefined;
-    //@ts-ignore
+    const refreshing = false;
+    const error: string | undefined = undefined;
     let balanceWithRefresh: BalanceWithRefresh;
     // The external wallet the swap will be funded from, or undefined for the user's own OpenChat
     // account, which is where it has always been funded from
@@ -66,12 +65,18 @@
     // has never heard of.
     let symbol0 = $derived(token0.symbol);
     let symbol1 = $derived(token1.symbol);
-    let transferFees = $derived(BigInt(2) * token1.fee);
+    // Token1 is deposited in the escrow canister along with the fee for paying it out, so the
+    // deposit costs two fees
+    let depositFees = $derived(BigInt(2) * token1.fee);
+    // The wallet also pays for the approval it makes before the deposit is pulled from it
+    let approvalFee = $derived(walletApprovalFee(token1.fee));
+    let transferFees = $derived(depositFees + approvalFee);
     // An OpenChat balance which cannot cover the swap is no obstacle when an external wallet is
     // paying instead
     let insufficient = $derived(
-        sourceWallet === undefined && cryptoBalance <= amount1 + transferFees,
+        sourceWallet === undefined && cryptoBalance < amount1 + transferFees,
     );
+    let feeCount = $derived(approvalFee > 0n ? 3 : 2);
     let valid = $derived(error === undefined && !insufficient);
     let amount0Text = $derived(client.formatTokens(amount0, token0.decimals));
     let amount1Text = $derived(client.formatTokens(amount1 + transferFees, token1.decimals));
@@ -105,6 +110,7 @@
                         resourceKey={i18nKey("p2pSwap.insufficientBalanceMessage", {
                             amount: amount1Text,
                             token: symbol1,
+                            fees: feeCount,
                         })} />
                 </Body>
                 <AccountInfo ledger={ledger1} />
@@ -116,6 +122,7 @@
                             token: symbol1,
                             amountOther: amount0Text,
                             tokenOther: symbol0,
+                            fees: feeCount,
                         })} />
                 </Body>
             {/if}
@@ -125,7 +132,7 @@
                     wallet={sourceWallet}
                     ledger={ledger1}
                     amount={amount1}
-                    fees={transferFees} />
+                    fees={depositFees} />
             {/if}
         </div>
         <Row gap={"md"} mainAxisAlignment={"end"} crossAxisAlignment={"center"}>

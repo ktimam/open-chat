@@ -1,4 +1,4 @@
-import { get, writable } from "svelte/store";
+import { get, writable } from "@client/reactiveStores";
 import { privateAppWorkspace, privateAppWorkspaceState } from "./privateAppWorkspace";
 import { LocalAppChatConfiguration, type LocalAppSuggestion } from "./localAppChatConfiguration";
 

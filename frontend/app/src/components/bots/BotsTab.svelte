@@ -21,7 +21,7 @@
     import { getContext } from "svelte";
     import Search from "../Search.svelte";
     import Tabs, { type Tab } from "../Tabs.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import BotMember from "./BotMember.svelte";
     import WebhookMember from "./WebhookMember.svelte";
     import BotInstaller from "./install/BotInstaller.svelte";
@@ -52,7 +52,7 @@
 
     let selectedTab = $state(0);
     let showingBotInstaller: SelectedBot | undefined = $state(undefined);
-    let installingBot: ExternalBot | undefined = undefined;
+    const installingBot: ExternalBot | undefined = undefined;
     let botContainer = $derived(
         collection.kind === "channel"
             ? ({ kind: "community", communityId: collection.id.communityId } as CommunityIdentifier)

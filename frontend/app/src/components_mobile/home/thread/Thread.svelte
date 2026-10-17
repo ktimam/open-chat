@@ -60,7 +60,7 @@
     let { rootEvent, chat }: Props = $props();
 
     let chatEventList: ChatEventList | undefined = $state();
-    //@ts-ignore
+    // @ts-expect-error bind:this sets it after mount
     let memeBuilder: MemeBuilder = $state();
     let creatingCryptoTransfer: { ledger: string; amount: bigint } | undefined = $state(undefined);
     let buildingMeme = $state(false);
@@ -82,6 +82,7 @@
     let editingEvent = $derived($selectedThreadDraftMessageStore?.editingEvent);
     let canSendAny = $derived(client.canSendMessage(chat.id, "thread"));
     let canReact = $derived(client.canReactToMessages(chat.id));
+    let canTipMessages = $derived(client.canTipMessages(chat.id));
     let atRoot = $derived($threadEventsStore.length === 0 || $threadEventsStore[0]?.index === 0);
     let events = $derived(atRoot ? [rootEvent, ...$threadEventsStore] : $threadEventsStore);
     const grouper = new TimelineGrouper();
@@ -150,7 +151,7 @@
 
     function onSendMessage(detail: [string | undefined, User[], boolean]) {
         if (!canSendAny) return;
-        let [text, mentioned, blockLevelMarkdown] = detail;
+        const [text, mentioned, blockLevelMarkdown] = detail;
         if (editingEvent !== undefined) {
             client
                 .editMessageWithAttachment(
@@ -303,6 +304,7 @@
     <CryptoTransferBuilder
         {chat}
         ledger={creatingCryptoTransfer.ledger}
+        draftAmount={creatingCryptoTransfer.amount}
         defaultReceiver={defaultCryptoTransferReceiver()}
         {messageContext}
         onClose={() => {
@@ -372,6 +374,7 @@
                         editing={editingEvent === evt}
                         canSendAny
                         {canReact}
+                        {canTipMessages}
                         canInvite={false}
                         canReplyInThread={false}
                         collapsed={false}

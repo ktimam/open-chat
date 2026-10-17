@@ -10,8 +10,8 @@
     import EyeOff from "svelte-material-icons/EyeOffOutline.svelte";
     import Eye from "svelte-material-icons/EyeOutline.svelte";
     import Reload from "svelte-material-icons/Reload.svelte";
-    import Translatable from "../../Translatable.svelte";
-    import type { ConversionToken } from "./walletState.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
+    import type { ConversionToken } from "@shared_components/home/wallet/walletState.svelte";
     import BalanceActions from "./BalanceActions.svelte";
 
     interface Props {

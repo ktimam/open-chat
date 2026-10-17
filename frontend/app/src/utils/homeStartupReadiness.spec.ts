@@ -9,8 +9,9 @@ import HomeRouteV1 from "../components/home/HomeRoute.svelte";
 import HomeRouteV2 from "../components_mobile/home/HomeRoute.svelte";
 
 vi.mock("@client", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return {
+        ...(await import("@client/utils/stores")),
         anonUserStore: writable(true),
         chatsInitialisedStore: writable(false),
         identityStateStore: writable({ kind: "anon" }),

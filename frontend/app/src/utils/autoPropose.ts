@@ -21,9 +21,9 @@ import {
     type OpenChat,
 } from "@client";
 import { matchesKeyword } from "./keywordMatch";
-import { writable } from "svelte/store";
+import { writable } from "@client/reactiveStores";
 import { autoProposeSuggestions as autoProposeEnabled } from "../stores/settings";
-import { configKeys } from "./config";
+import { configKeys } from "@shared";
 import {
     resolveCandidates,
     type AiActionCandidate,
@@ -287,6 +287,7 @@ export function muteAutoProposeInChat(chatId: ChatIdentifier): void {
     revokePrivateAutoProposeRuntime();
     // Muting also clears anything already suggested in that chat.
     autoProposeSuggestions.update((map) => {
+        const next = new Map(map);
         for (const [messageId, suggestions] of map) {
             if (
                 suggestions.some(
@@ -294,10 +295,10 @@ export function muteAutoProposeInChat(chatId: ChatIdentifier): void {
                         suggestion.chatKey === chatKey && suggestion.viewerId === viewerId,
                 )
             ) {
-                map.delete(messageId);
+                next.delete(messageId);
             }
         }
-        return map;
+        return next;
     });
 }
 

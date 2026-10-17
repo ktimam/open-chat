@@ -4,9 +4,16 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 // The real theme module drags in component-lib's svelte components (which vitest's
 // svelte plugin can't preprocess) and needs matchMedia. The action only reads
 // `theme.accent`, so a stub is enough.
-vi.mock("../theme/themes", async () => {
-    const { readable } = await import("svelte/store");
-    return { currentTheme: readable({ accent: "#22a7f2" }) };
+vi.mock("../theme/themes", () => {
+    const theme = { accent: "#22a7f2" };
+    return {
+        currentTheme: {
+            subscribe(run: (value: typeof theme) => void) {
+                run(theme);
+                return () => {};
+            },
+        },
+    };
 });
 
 import { editingLabel, editmode, i18nKey } from "../i18n/i18n";
@@ -151,37 +158,24 @@ describe("translatable action", () => {
         expect(markerCount()).toBe(3);
     });
 
-    test("no marker for a dialect of english", async () => {
-        await locale.set("en-GB");
+    // The toggle for edit mode isn't offered for a language we have no translations for, so
+    // nothing is editable in one whatever svelte-i18n holds for it
+    test("no marker for an unsupported language (sv)", async () => {
+        addMessages("sv", { some: { thing: "ja" } });
+        await locale.set("sv");
         const node = mount("some.thing");
         editmode.set(true);
         expect(marker(node)).toBeNull();
     });
 
-    // The toggle for edit mode isn't offered for a language we have no translations for, so
-    // nothing is editable in one whatever svelte-i18n holds for it
-    test.each(["sv", "sv-SE"])(
-        "no marker for an unsupported language (%s)",
-        async (unsupported) => {
-            addMessages("sv", { some: { thing: "ja" } });
-            await locale.set(unsupported);
-            const node = mount("some.thing");
-            editmode.set(true);
-            expect(marker(node)).toBeNull();
-        },
-    );
-
-    // Chinese and Japanese are "cn" and "jp" to OpenChat
-    test.each(["cn", "jp"])(
-        "a marker for a language under OpenChat's own code (%s)",
-        async (code) => {
-            addMessages(code, { some: { thing: "yes" } });
-            await locale.set(code);
-            const node = mount("some.thing");
-            editmode.set(true);
-            expect(marker(node)).not.toBeNull();
-        },
-    );
+    // Chinese is "cn" to OpenChat
+    test("a marker for a language under OpenChat's own code (cn)", async () => {
+        addMessages("cn", { some: { thing: "yes" } });
+        await locale.set("cn");
+        const node = mount("some.thing");
+        editmode.set(true);
+        expect(marker(node)).not.toBeNull();
+    });
 
     test("an undefined key means the action does nothing at all", async () => {
         await locale.set("fr");

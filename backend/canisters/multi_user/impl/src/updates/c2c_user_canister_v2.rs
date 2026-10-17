@@ -9,15 +9,14 @@ use chat_events::MessageContentInternal;
 use constants::HOUR_IN_MS;
 use direct_chat::DirectChat;
 use local_user_index_canister::is_user_or_multi_user_canister::Response as CanisterKind;
-use rand::RngExt;
-use types::{Achievement, CallKind, CanisterId, TimestampMillis, UserId, UserType};
-use user_canister::c2c_user_canister_v2::*;
-use user_canister::{
+use multi_user_canister::c2c_user_canister_v2::*;
+use multi_user_canister::{
     DeleteUndeleteMessagesArgs as C2CDeleteUndeleteMessagesArgs, EditMessageArgs as C2CEditMessageArgs, SendMessagesArgs,
     SetEventsTtl, StartVideoCallArgs, TipMessageArgs as C2CTipMessageArgs, ToggleReactionArgs, UserCanisterEvent,
 };
+use rand::RngExt;
+use types::{Achievement, CallKind, TimestampMillis, UserId};
 use user_core::updates::c2c_user_canister::{self, can_act_for};
-use utils::migrated_user_ids::MigratedUserIds;
 
 #[update(msgpack = true)]
 #[trace]
@@ -26,9 +25,9 @@ async fn c2c_user_canister_v2(args: Args) -> Response {
 }
 
 async fn c2c_user_canister_v2_impl(args: Args) -> Response {
-    // As in the User canister, the caller must be a User or MultiUser canister, and each event is
-    // only applied if it is from a user that kind of canister can act for
-    let caller_kind = verify_caller(&args).await;
+    // The caller must be a MultiUser canister, and each event is only applied if it is from one of
+    // its users
+    let caller_kind = verify_caller().await;
     if caller_kind == CanisterKind::Neither {
         return Response::Success;
     }
@@ -47,16 +46,12 @@ async fn c2c_user_canister_v2_impl(args: Args) -> Response {
                 sender,
                 recipient,
                 event,
-                sender_previous_user_ids,
             } = event.value;
             if !can_act_for(caller_kind, sender, caller) {
                 continue;
             }
             // Events for a user who isn't in this canister can never be applied, so are dropped
             if let Some(recipient_index) = state.index_of_local_user(recipient) {
-                if caller_kind == CanisterKind::MultiUserCanister {
-                    migrate_sender_user_id(recipient_index, sender, &sender_previous_user_ids, state);
-                }
                 apply_event(event, sender, recipient_index, state);
             }
         }
@@ -66,20 +61,19 @@ async fn c2c_user_canister_v2_impl(args: Args) -> Response {
 }
 
 // Which kind of canister the caller is. A MultiUser canister the LocalUserIndex has already
-// confirmed is cached, and a User canister whose user one of the recipients has a chat with is
-// known. Any other caller is checked with the LocalUserIndex, which knows every user as soon as they
-// register, and cached if it is a MultiUser canister.
-async fn verify_caller(args: &Args) -> CanisterKind {
+// confirmed is cached. Any other caller is checked with the LocalUserIndex, which knows every user as
+// soon as they register, and cached if it is a MultiUser canister.
+async fn verify_caller() -> CanisterKind {
     let (caller, local_user_index_canister_id, known) = read_state(|state| {
         let caller = state.env.caller();
         (
             caller,
             state.data.local_user_index_canister_id,
-            known_caller_kind(caller, args, state),
+            state.data.known_multi_user_canisters.contains(&caller),
         )
     });
-    if let Some(kind) = known {
-        return kind;
+    if known {
+        return CanisterKind::MultiUserCanister;
     }
 
     // Every LocalUserIndex holds all users, so asking this canister's own avoids a cross-subnet call
@@ -99,53 +93,10 @@ async fn verify_caller(args: &Args) -> CanisterKind {
     kind
 }
 
-fn known_caller_kind(caller: CanisterId, args: &Args, state: &RuntimeState) -> Option<CanisterKind> {
-    if state.data.known_multi_user_canisters.contains(&caller) {
-        return Some(CanisterKind::MultiUserCanister);
-    }
-    let caller_user_id = UserId::from(caller);
-    let has_chat_with_caller = args.events.iter().any(|e| {
-        state
-            .with_user(e.value.recipient, |user| {
-                user.direct_chats
-                    .get(&caller_user_id.into())
-                    .is_some_and(|chat| chat.user_type == UserType::User)
-            })
-            .unwrap_or_default()
-    });
-    has_chat_with_caller.then_some(CanisterKind::UserCanister)
-}
-
-// Moves what the user at `recipient_index` holds under the sender's previous ids, such as their chat
-// with the sender and any block of them, onto the sender's id. A sender migrated to a MultiUser
-// canister may get here before the notice of their new id, which would otherwise leave their events
-// to start a second chat, or get past a block held under their previous id.
-pub(crate) fn migrate_sender_user_id(
-    recipient_index: u16,
-    sender: UserId,
-    sender_previous_user_ids: &[UserId],
-    state: &mut RuntimeState,
-) {
-    if sender_previous_user_ids.is_empty() {
-        return;
-    }
-    let now = state.env.now();
-    state
-        .data
-        .migrated_user_ids
-        .insert_previous_ids(sender_previous_user_ids, sender);
-    let migrated_user_ids = &state.data.migrated_user_ids;
-    state.data.users.with_user_mut(recipient_index, |user| {
-        user.migrate_sender_user_id(sender, sender_previous_user_ids, migrated_user_ids, now)
-    });
-}
-
-// Applies an event from `sender` to the user at `recipient_index`, as the User canister's
-// `c2c_user_canister` does, unless the recipient has blocked the sender. Events from users in other
-// canisters arrive via `c2c_user_canister_v2`, while those from users in this canister are applied
-// straight away (see `RuntimeState::send_user_canister_event`), so an event has the same effect
-// whichever canister its sender is in. Events for features the MultiUser canister doesn't support
-// yet are dropped.
+// Applies an event from `sender` to the user at `recipient_index`, unless the recipient has blocked
+// the sender. Events from users in other canisters arrive via `c2c_user_canister_v2`, while those
+// from users in this canister are applied straight away (see `RuntimeState::send_user_canister_event`),
+// so an event has the same effect whichever canister its sender is in.
 pub(crate) fn apply_event(event: UserCanisterEvent, sender: UserId, recipient_index: u16, state: &mut RuntimeState) {
     if is_blocked(recipient_index, sender, state) {
         return;
@@ -159,26 +110,34 @@ pub(crate) fn apply_event(event: UserCanisterEvent, sender: UserId, recipient_in
         UserCanisterEvent::UndeleteMessages(args) => undelete_messages(*args, sender, recipient_index, now, state),
         UserCanisterEvent::ToggleReaction(args) => toggle_reaction(*args, sender, recipient_index, now, state),
         UserCanisterEvent::MarkMessagesRead(args) => {
-            with_chat_mut(recipient_index, sender, state, |chat, _| {
+            with_chat_mut(recipient_index, sender, state, |chat| {
                 chat.mark_read_by_them_up_to(args.read_up_to, now)
             });
         }
         UserCanisterEvent::SetEventsTtl(args) => set_events_ttl(*args, sender, recipient_index, now, state),
-        UserCanisterEvent::SetReferralStatus(status) => state.set_referral_status(recipient_index, sender, &[], *status, now),
-        UserCanisterEvent::SetReferralStatusV2(args) => {
-            state.set_referral_status(recipient_index, sender, &args.previous_user_ids, args.status, now)
-        }
+        UserCanisterEvent::SetReferralStatus(status) => state.set_referral_status(recipient_index, sender, *status, now),
+        UserCanisterEvent::SetReferralStatusV2(args) => state.set_referral_status(recipient_index, sender, args.status, now),
         UserCanisterEvent::StartVideoCall(args) => start_video_call(*args, sender, recipient_index, state),
         UserCanisterEvent::JoinVideoCall(args) => {
-            with_chat_mut(recipient_index, sender, state, |chat, _| {
+            with_chat_mut(recipient_index, sender, state, |chat| {
                 c2c_user_canister::join_video_call(chat, sender, args.message_id, now)
             });
         }
         UserCanisterEvent::TipMessage(args) => tip_message(*args, sender, recipient_index, now, state),
         UserCanisterEvent::P2PSwapStatusChange(args) => {
-            state.data.users.with_user_mut(recipient_index, |user| {
-                c2c_user_canister::p2p_swap_change_status(user, sender, *args, now)
-            });
+            let message_id = args.message_id;
+            let ended = args.status.has_ended();
+            let applied = state
+                .data
+                .users
+                .with_user_mut(recipient_index, |user| {
+                    c2c_user_canister::p2p_swap_change_status(user, sender, *args, now)
+                })
+                .unwrap_or_default();
+            // The change is applied to the swap in the chat's main timeline
+            if applied && ended {
+                state.cancel_mark_p2p_swap_expired_job(recipient_index, sender, None, message_id);
+            }
         }
     }
 }
@@ -192,21 +151,18 @@ fn is_blocked(recipient_index: u16, sender: UserId, state: &RuntimeState) -> boo
 }
 
 // Runs `f` against the copy of the chat with `sender` held by the user at `recipient_index`, if they
-// have one, along with the latest ids of migrated users, which the chat's events are checked against
+// have one
 fn with_chat_mut<R>(
     recipient_index: u16,
     sender: UserId,
     state: &mut RuntimeState,
-    f: impl FnOnce(&mut DirectChat, &MigratedUserIds) -> R,
+    f: impl FnOnce(&mut DirectChat) -> R,
 ) -> Option<R> {
-    let migrated_user_ids = &state.data.migrated_user_ids;
     state
         .data
         .users
         .with_user_mut(recipient_index, |user| {
-            user.direct_chats
-                .get_mut(&sender.into())
-                .map(|chat| f(chat, migrated_user_ids))
+            user.direct_chats.get_mut(&sender.into()).map(|mut chat| f(&mut chat))
         })
         .flatten()
 }
@@ -239,8 +195,8 @@ fn edit_message(
     now: TimestampMillis,
     state: &mut RuntimeState,
 ) {
-    with_chat_mut(recipient_index, sender, state, |chat, migrated_user_ids| {
-        c2c_user_canister::edit_message(chat, sender, args, now, migrated_user_ids)
+    with_chat_mut(recipient_index, sender, state, |chat| {
+        c2c_user_canister::edit_message(chat, sender, args, now)
     });
 }
 
@@ -251,12 +207,10 @@ fn delete_messages(
     now: TimestampMillis,
     state: &mut RuntimeState,
 ) {
-    let Some((thread_root_message_index, deleted)) =
-        with_chat_mut(recipient_index, sender, state, |chat, migrated_user_ids| {
-            c2c_user_canister::delete_messages(chat, sender, args, now, migrated_user_ids)
-        })
-        .flatten()
-    else {
+    let Some((thread_root_message_index, deleted)) = with_chat_mut(recipient_index, sender, state, |chat| {
+        c2c_user_canister::delete_messages(chat, sender, args, now)
+    })
+    .flatten() else {
         return;
     };
 
@@ -270,12 +224,10 @@ fn undelete_messages(
     now: TimestampMillis,
     state: &mut RuntimeState,
 ) {
-    let Some((thread_root_message_index, undeleted)) =
-        with_chat_mut(recipient_index, sender, state, |chat, migrated_user_ids| {
-            c2c_user_canister::undelete_messages(chat, sender, args, now, migrated_user_ids)
-        })
-        .flatten()
-    else {
+    let Some((thread_root_message_index, undeleted)) = with_chat_mut(recipient_index, sender, state, |chat| {
+        c2c_user_canister::undelete_messages(chat, sender, args, now)
+    })
+    .flatten() else {
         return;
     };
 
@@ -288,8 +240,8 @@ fn undelete_messages(
     );
 }
 
-// As in the User canister, a reaction added to the recipient's own message notifies them, appears
-// in their message activity feed and earns them an achievement
+// A reaction added to the recipient's own message notifies them, appears in their message activity
+// feed and earns them an achievement
 fn toggle_reaction(
     args: ToggleReactionArgs,
     sender: UserId,
@@ -297,8 +249,8 @@ fn toggle_reaction(
     now: TimestampMillis,
     state: &mut RuntimeState,
 ) {
-    let Some(reaction) = with_chat_mut(recipient_index, sender, state, |chat, migrated_user_ids| {
-        c2c_user_canister::toggle_reaction(chat, sender, args, now, migrated_user_ids)
+    let Some(reaction) = with_chat_mut(recipient_index, sender, state, |chat| {
+        c2c_user_canister::toggle_reaction(chat, sender, args, now)
     })
     .flatten() else {
         return;
@@ -320,8 +272,8 @@ fn toggle_reaction(
     state.award_achievement_and_notify(recipient_index, Achievement::HadMessageReactedTo, now);
 }
 
-// Records in the initiator's copy of the chat the call the callee's copy holds, as the User canister
-// does on the `StartVideoCall` event
+// Records in the initiator's copy of the chat the call the callee's copy holds, on the
+// `StartVideoCall` event
 fn start_video_call(args: StartVideoCallArgs, callee: UserId, initiator_index: u16, state: &mut RuntimeState) {
     let initiator = state.user_id(initiator_index);
     handle_start_video_call(
@@ -336,12 +288,12 @@ fn start_video_call(args: StartVideoCallArgs, callee: UserId, initiator_index: u
     );
 }
 
-// As in the User canister, a tip on the recipient's message notifies them, appears in their message
-// activity feed and earns them an achievement
+// A tip on the recipient's message notifies them, appears in their message activity feed and earns
+// them an achievement
 fn tip_message(args: C2CTipMessageArgs, sender: UserId, recipient_index: u16, now: TimestampMillis, state: &mut RuntimeState) {
     let recipient = state.user_id(recipient_index);
-    let Some(received) = with_chat_mut(recipient_index, sender, state, |chat, migrated_user_ids| {
-        c2c_user_canister::tip_message(chat, sender, recipient, args, now, migrated_user_ids)
+    let Some(received) = with_chat_mut(recipient_index, sender, state, |chat| {
+        c2c_user_canister::tip_message(chat, sender, recipient, args, now)
     })
     .flatten() else {
         return;

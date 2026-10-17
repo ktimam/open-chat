@@ -1,20 +1,9 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { fileURLToPath } from "node:url";
+import { ocPackageAliases } from "./app/oc-package-aliases.mjs";
 import { defineConfig } from "vitest/config";
 
-// Resolve the former sub-packages from TypeScript source (bare import -> source
-// entry point, subpath -> package src/). Mirrors the aliases used by the dev
-// server and the production build.
 const src = (p: string) => fileURLToPath(new URL(p, import.meta.url));
-const pkgAliases = [
-    ["@shared", "openchat-shared", "src/index.ts"],
-    ["@client", "openchat-client", "src/index.ts"],
-    ["@agent", "openchat-agent", "src/index.ts"],
-    ["@worker", "openchat-worker", "src/worker.ts"],
-].flatMap(([alias, dir, entry]) => [
-    { find: new RegExp(`^${alias}/(.*)$`), replacement: src(`./${dir}/src/$1`) },
-    { find: new RegExp(`^${alias}$`), replacement: src(`./${dir}/${entry}`) },
-]);
 
 export default defineConfig({
     // Use the app's svelte config so .svelte specs get the scss preprocessor.
@@ -23,7 +12,8 @@ export default defineConfig({
         alias: [
             { find: "@dfinity/agent", replacement: "@icp-sdk/core/agent" },
             { find: "@dfinity/auth-client", replacement: "@icp-sdk/auth/client" },
-            ...pkgAliases,
+            // The former sub-packages, resolved from TypeScript source like the app's builds
+            ...ocPackageAliases,
             // The Tauri plugin's guest JS is resolved from source (guest-js/)
             // rather than its built dist-js output, like the sub-packages above.
             {
@@ -57,17 +47,19 @@ export default defineConfig({
         environment: "jsdom",
         include: [
             "app/src/**/*.{test,spec}.ts",
-            "app/rollup-plugin-wasm-url*.{test,spec}.ts",
-            "app/localAppRelayBuild.spec.ts",
+            "app/*.{test,spec}.ts",
             "openchat-service-worker/src/local_app_relay.spec.ts",
             "openchat-worker/src/existingAccountPolicy.spec.ts",
             "component-lib/src/**/*.{test,spec}.ts",
+            "openchat-ui/src/**/*.{test,spec}.ts",
             "openchat-shared/src/**/*.{test,spec}.ts",
             "openchat-client/src/**/*.{test,spec}.ts",
             "openchat-agent/src/**/*.{test,spec}.ts",
             "src-tauri/tests/**/*.{test,spec}.ts",
+            "eslint-rules/**/*.{test,spec}.ts",
         ],
-        exclude: ["**/node_modules/**", "**/lib/**"],
+        // build output of the sub-packages (openchat-*/lib); openchat-ui/src/lib is source and is tested
+        exclude: ["**/node_modules/**", "*/lib/**"],
         server: {
             deps: {
                 // Inline svelte-i18n together with its intl-messageformat /

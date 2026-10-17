@@ -30,7 +30,7 @@
     import LinkOff from "svelte-material-icons/LinkOff.svelte";
     import LinkVariant from "svelte-material-icons/LinkVariant.svelte";
     import OpenInNew from "svelte-material-icons/OpenInNew.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AiAppLinkSheet from "../AiAppLinkSheet.svelte";
     import AiAppSurfaceSheet from "../AiAppSurfaceSheet.svelte";
     import Separator from "../Separator.svelte";

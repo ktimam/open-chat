@@ -1,4 +1,4 @@
-use crate::updates::c2c_delete_community::commit;
+use crate::updates::c2c_delete_community::{commit, remove_files};
 use crate::{RuntimeState, mutate_state};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
@@ -16,7 +16,13 @@ use types::OCResult;
 #[update(msgpack = true)]
 #[trace]
 fn c2c_notify_community_uninstalled(args: Args) -> Response {
-    mutate_state(|state| c2c_notify_community_uninstalled_impl(args, state)).into()
+    let community_id = args.community_id;
+    mutate_state(|state| {
+        c2c_notify_community_uninstalled_impl(args, state)?;
+        remove_files(community_id, state);
+        Ok(())
+    })
+    .into()
 }
 
 fn c2c_notify_community_uninstalled_impl(args: Args, state: &mut RuntimeState) -> OCResult {
@@ -91,16 +97,6 @@ mod tests {
         assert!(matches!(result, Err(error) if error.matches_code(OCErrorCode::InitiatorNotAuthorized)));
         assert!(state.data.private_communities.get(&community_id()).is_some());
         assert!(state.data.deleted_communities.get(&community_id()).is_none());
-    }
-
-    #[test]
-    fn unknown_community_is_not_found() {
-        let mut state = setup_runtime_state(local_user_index());
-        let community_id = Principal::from_slice(&[4]).into();
-
-        let result = c2c_notify_community_uninstalled_impl(Args { community_id }, &mut state);
-
-        assert!(matches!(result, Err(error) if error.matches_code(OCErrorCode::CommunityNotFound)));
     }
 
     fn setup_runtime_state(caller: Principal) -> RuntimeState {

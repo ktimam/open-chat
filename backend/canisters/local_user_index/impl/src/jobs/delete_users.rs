@@ -1,5 +1,5 @@
 use crate::updates::c2c_notify_low_balance::top_up_and_retry_if_out_of_cycles;
-use crate::{CanisterToRefund, RuntimeState, UserIndexEvent, UserToDelete, jobs, mutate_state};
+use crate::{RuntimeState, UserIndexEvent, UserToDelete, mutate_state};
 use constants::SECOND_IN_MS;
 use ic_cdk_timers::TimerId;
 use std::cell::Cell;
@@ -13,7 +13,7 @@ thread_local! {
 
 pub(crate) fn start_job_if_required(state: &RuntimeState, delay: Option<Milliseconds>) -> bool {
     if TIMER_ID.get().is_none() && !state.data.users_to_delete_queue.is_empty() {
-        let timer_id = ic_cdk_timers::set_timer(Duration::from_millis(delay.unwrap_or_default()), async { run() });
+        let timer_id = ic_cdk_timers::set_timer(Duration::from_millis(delay.unwrap_or_default()), run());
         TIMER_ID.set(Some(timer_id));
         true
     } else {
@@ -21,12 +21,12 @@ pub(crate) fn start_job_if_required(state: &RuntimeState, delay: Option<Millisec
     }
 }
 
-fn run() {
+async fn run() {
     trace!("'delete_users' running");
     TIMER_ID.set(None);
 
     if let Some(user) = mutate_state(get_next) {
-        utils::async_work::spawn_tracked(process_user(user));
+        process_user(user).await;
     }
 }
 
@@ -46,20 +46,8 @@ async fn process_user(user: UserToDelete) {
                 let removed = state.data.local_users.remove(&user_id);
                 state.data.daily_puzzle_engine.remove_user(user_id);
                 // Only decrement once, even if a duplicate DeleteUser event queued the user twice
-                if removed && user_id.index() != 0 {
+                if removed {
                     state.data.local_multi_user_canisters.on_user_removed(&user_id.canister_id());
-                }
-
-                // The user's canister has been uninstalled but still holds its cycles
-                if removed && user_id.index() == 0 {
-                    state.data.cycles_refund_queue.push_back(CanisterToRefund {
-                        canister_id: user_id.canister_id(),
-                        attempt: 0,
-                        retry_after: 0,
-                        delete_canister: false,
-                        return_to_pool: false,
-                    });
-                    jobs::refund_cycles::start_job_if_required(state, None);
                 }
 
                 let now = state.env.now();
@@ -87,29 +75,25 @@ async fn process_user_inner(user: &UserToDelete) -> Result<DeleteUserSuccess, C2
     let user_id = user.user_id;
     let canister_id = user_id.canister_id();
 
-    let args = user_canister::c2c_groups_and_communities::Args { user_id };
-    let (groups, communities) = top_up_and_retry_if_out_of_cycles(canister_id, || {
-        user_canister_c2c_client::c2c_groups_and_communities(canister_id, &args)
+    let args = multi_user_canister::c2c_groups_and_communities::Args { user_id };
+    let response = top_up_and_retry_if_out_of_cycles(canister_id, || {
+        multi_user_canister_c2c_client::c2c_groups_and_communities(canister_id, &args)
     })
-    .await
-    .map(|r| (r.groups, r.communities))?;
+    .await?;
 
-    if user_id.index() == 0 {
-        utils::canister::uninstall(canister_id).await?;
-    } else {
-        // A user held in a MultiUser canister shares it with other users, so only they are removed
-        let args = multi_user_canister::c2c_delete_user::Args { user_id };
-        top_up_and_retry_if_out_of_cycles(canister_id, || {
-            multi_user_canister_c2c_client::c2c_delete_user(canister_id, &args)
-        })
-        .await?;
-    }
+    // The user shares their MultiUser canister with other users, so only they are removed
+    let args = multi_user_canister::c2c_delete_user::Args { user_id };
+    top_up_and_retry_if_out_of_cycles(canister_id, || {
+        multi_user_canister_c2c_client::c2c_delete_user(canister_id, &args)
+    })
+    .await?;
 
     Ok(DeleteUserSuccess::Deleted(
-        groups
+        response
+            .groups
             .into_iter()
             .map(|g| g.into())
-            .chain(communities.into_iter().map(|c| c.into()))
+            .chain(response.communities.into_iter().map(|c| c.into()))
             .collect(),
     ))
 }

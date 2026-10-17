@@ -24,7 +24,7 @@
     import MenuItem from "../../MenuItem.svelte";
     import MultiToggle, { type Option } from "../../MultiToggle.svelte";
     import Overlay from "../../Overlay.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import BalanceWithRefresh from "../BalanceWithRefresh.svelte";
     import AccountTransactions from "./AccountTransactions.svelte";
     import ReceiveCrypto from "./ReceiveCrypto.svelte";
@@ -134,7 +134,7 @@
         {:else if actionMode === "send"}
             <SendCrypto ledger={selectedLedger} onClose={hideManageModal} />
         {:else if actionMode === "swap"}
-            <SwapCrypto bind:ledgerIn={selectedLedger} onClose={hideManageModal} />
+            <SwapCrypto ledgerIn={selectedLedger} onClose={hideManageModal} />
         {:else if actionMode === "transactions"}
             <AccountTransactions
                 ledger={selectedLedger}

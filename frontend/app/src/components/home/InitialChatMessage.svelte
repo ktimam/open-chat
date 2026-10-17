@@ -20,7 +20,7 @@
     import WithVerifiedBadge from "../icons/WithVerifiedBadge.svelte";
     import ProposalBot from "@shared_components/ProposalBot.svelte";
     import Robot from "@shared_components/Robot.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -47,7 +47,7 @@
 
     let state = $derived.by<State>(() => {
         switch (chat.kind) {
-            case "direct_chat":
+            case "direct_chat": {
                 const them = $allUsersStore.get(chat.them.userId);
                 const s: State = {
                     title: i18nKey(client.displayName(them)),
@@ -67,6 +67,7 @@
                               grantedPermissions: perm,
                           },
                       };
+            }
             default:
                 return {
                     title: i18nKey("group.welcome", { groupName: chat.name }),

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { get, writable } from "svelte/store";
+import { get, writable } from "@client/utils/stores";
 import { scopedAppFixture } from "./localAppChatRoutes.testFixtures";
 import type { PrivateAppWorkspaceState } from "./privateAppWorkspace";
 import type { LocalAppCatalog } from "./localAppCatalog";

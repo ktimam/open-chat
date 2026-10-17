@@ -1,11 +1,12 @@
 <script lang="ts">
+    import type { IconComponent } from "@src/utils/iconComponent";
     import { Body, ColourVars, Container, Switch } from "component-lib";
     import { i18nKey, type ExternalBotPermissions, type Level } from "@client";
     import AccountGroup from "svelte-material-icons/AccountGroup.svelte";
     import ChatOutline from "svelte-material-icons/ChatOutline.svelte";
     import ForumOutline from "svelte-material-icons/ForumOutline.svelte";
     import { togglePermission } from "../../../utils/bots";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     interface Props {
         level: Level;
@@ -16,7 +17,7 @@
     let { granted = $bindable(), requested, level }: Props = $props();
 </script>
 
-{#snippet permHeader(title: string, Icon: any)}
+{#snippet permHeader(title: string, Icon: IconComponent)}
     <Container gap={"sm"} crossAxisAlignment={"center"}>
         <Icon color={ColourVars.textSecondary} />
         <Body fontWeight={"bold"} colour={"textSecondary"}>

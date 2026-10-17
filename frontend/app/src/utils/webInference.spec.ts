@@ -2,7 +2,7 @@ import type { ModelFile, ModelModality } from "@shared";
 import { webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
-import { get } from "svelte/store";
+import { get } from "@client/utils/stores";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import catalogDefaults from "../../public/model-catalog.json";
 import { applyWebGpuModelCatalog } from "./webGpuModelCatalog";

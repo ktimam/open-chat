@@ -24,7 +24,7 @@
     import { i18nKey } from "../../i18n/i18n";
     import { now } from "../../stores/time";
     import WithVerifiedBadge from "../icons/WithVerifiedBadge.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import ChatSubtext from "./ChatSubtext.svelte";
     import CurrentChatMenu from "./CurrentChatMenu.svelte";
     import Badges from "./profile/Badges.svelte";
@@ -83,7 +83,7 @@
 
     function normaliseChatSummary(_now: number, chatSummary: ChatSummary, typing: TypersByKey) {
         switch (chatSummary.kind) {
-            case "direct_chat":
+            case "direct_chat": {
                 const them = $allUsersStore.get(chatSummary.them.userId);
                 return {
                     name: client.displayName(them),
@@ -102,6 +102,7 @@
                     eventsTTL: chatSummary.eventsTTL,
                     uniquePerson: them?.isUniquePerson ?? false,
                 };
+            }
             default:
                 return {
                     name: chatSummary.name,

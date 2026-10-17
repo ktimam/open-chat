@@ -36,14 +36,14 @@
     import Button from "../Button.svelte";
     import ButtonGroup from "../ButtonGroup.svelte";
     import FilteredUsername from "@shared_components/FilteredUsername.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import ChatListSearch from "./ChatListSearch.svelte";
     import ChatListSectionButton from "./ChatListSectionButton.svelte";
     import ChatSummary from "./ChatSummary.svelte";
     import BrowseChannels from "./communities/details/BrowseChannels.svelte";
     import DirectAndGroupChatsHeader from "./communities/DirectAndGroupChatsHeader.svelte";
     import FavouriteChatsHeader from "./communities/FavouriteChatsHeader.svelte";
-    import PreviewWrapper from "./communities/PreviewWrapper.svelte";
+    import { communityPreviewState } from "@src/utils/preview.svelte";
     import SelectedCommunityHeader from "./communities/SelectedCommunityHeader.svelte";
     import Badges from "./profile/Badges.svelte";
     import SearchResult from "./SearchResult.svelte";
@@ -335,23 +335,18 @@
     </div>
     <ActiveCallSummary />
     {#if showPreview}
-        <PreviewWrapper>
-            {#snippet children(joiningCommunity, joinCommunity)}
-                <div class="join">
-                    <ButtonGroup align="center">
-                        <Button secondary small onClick={cancelPreview}>
-                            <Translatable resourceKey={i18nKey("leave")} />
-                        </Button>
-                        <Button
-                            loading={joiningCommunity}
-                            disabled={joiningCommunity}
-                            onClick={joinCommunity}
-                            ><Translatable
-                                resourceKey={i18nKey("communities.joinCommunity")} /></Button>
-                    </ButtonGroup>
-                </div>
-            {/snippet}
-        </PreviewWrapper>
+        <div class="join">
+            <ButtonGroup align="center">
+                <Button secondary small onClick={cancelPreview}>
+                    <Translatable resourceKey={i18nKey("leave")} />
+                </Button>
+                <Button
+                    loading={communityPreviewState.joining}
+                    disabled={communityPreviewState.joining}
+                    onClick={() => communityPreviewState.joinCommunity(client)}
+                    ><Translatable resourceKey={i18nKey("communities.joinCommunity")} /></Button>
+            </ButtonGroup>
+        </div>
     {/if}
 {/if}
 

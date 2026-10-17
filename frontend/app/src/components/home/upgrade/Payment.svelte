@@ -8,9 +8,12 @@
         cryptoLookup,
         E8S_PER_TOKEN,
         mobileWidth,
+        pinNumberFailureFromError,
+        walletApprovalFee,
     } from "@client";
     import { getContext, onMount } from "svelte";
     import { i18nKey } from "../../../i18n/i18n";
+    import { pinNumberErrorMessageStore } from "../../../stores/pinNumber";
     import { toastStore } from "../../../stores/toast";
     import type { RemoteData } from "../../../utils/remoteData";
     import Button from "../../Button.svelte";
@@ -18,11 +21,11 @@
     import ErrorMessage from "../../ErrorMessage.svelte";
     import Diamond from "../../icons/Diamond.svelte";
     import Loading from "@shared_components/Loading.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AccountInfo from "../AccountInfo.svelte";
     import ExternalWalletApproval from "../ExternalWalletApproval.svelte";
     import Congratulations from "./Congratulations.svelte";
-    import Expiry from "./Expiry.svelte";
+    import Expiry from "@shared_components/home/upgrade/Expiry.svelte";
     import Footer from "./Footer.svelte";
 
     interface Props {
@@ -162,13 +165,25 @@
                 if (resp.kind === "success") {
                     confirmed = true;
                     onSuccess?.(resp.proof);
+                } else if (resp.kind === "error" && pinNumberFailureFromError(resp) !== undefined) {
+                    toastStore.showFailureToast(pinNumberErrorMessageStore);
                 } else {
-                    const errorKey = "upgrade.paymentFailed";
-                    error = errorKey;
-                    toastStore.showFailureToast(i18nKey(errorKey));
+                    paymentFailed();
+                }
+            })
+            // Dismissing the PIN prompt cancels the payment, which isn't a failure
+            .catch((err) => {
+                if (err !== "cancelled") {
+                    paymentFailed(err);
                 }
             })
             .finally(() => (confirming = false));
+    }
+
+    function paymentFailed(err?: unknown) {
+        const errorKey = "upgrade.paymentFailed";
+        error = errorKey;
+        toastStore.showFailureToast(i18nKey(errorKey), err);
     }
 
     onMount(() => {
@@ -185,11 +200,15 @@
                 diamondFees = { kind: "error", error: err };
             });
     });
-    let icpBalance = $derived(accountBalance / E8S_PER_TOKEN); //balance in the user's account expressed as ICP
     let tokenDetails = $derived($cryptoLookup.get(ledger)!);
     let toPayE8s = $derived(amountInE8s(tokenDetails.symbol, diamondFees, selectedOption));
-    let toPay = $derived(amount(toPayE8s));
-    let insufficientFunds = $derived(toPay - icpBalance > 0.0001); //we need to account for the fact that js cannot do maths
+    // What the payment takes from the user's OpenChat wallet, which is all that is checked here:
+    // the price, which includes the transfer's fee, and the approval the user makes before the
+    // price is pulled from it
+    let toPayWithFeesE8s = $derived(toPayE8s + walletApprovalFee(tokenDetails.transferFee));
+    let toPay = $derived(amount(toPayWithFeesE8s));
+    // Compared in e8s, since any tolerance for floating point error would be enough to hide an ICP fee
+    let insufficientFunds = $derived(toPayWithFeesE8s > BigInt(accountBalance));
     let selectedDuration = $derived(indexToDuration[selectedOption?.index ?? 0] ?? "one_month");
 </script>
 

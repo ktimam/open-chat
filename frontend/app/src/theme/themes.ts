@@ -1,3 +1,4 @@
+import { configKeys } from "@shared";
 import { theme as neon } from "component-lib";
 import { activeThemeV2Id, initThemeV2 } from "./themeV2";
 import { derived, readable, writable } from "svelte/store";
@@ -92,6 +93,17 @@ export function writeNativeCssVariables() {
     neon.writeCssVariables();
 }
 
+// The new web UI (src/web) takes its colours and type from @openchat/ui's tokens, and only
+// uses component-lib's layout primitives (Container, Row, Column). Those only need the sizing
+// variables, so the colour variables, whose names overlap the new tokens, are left out.
+export function writeLayoutCssVariables() {
+    [
+        ...neon.spacings.cssVariables(),
+        ...neon.borderRadius.cssVariables(),
+        ...neon.borderWidth.cssVariables(),
+    ].forEach((v) => v.write());
+}
+
 export function setNativeTheme() {
     initThemeV2();
     // Keep the v1-derived css variables (still used in places by the v2
@@ -128,23 +140,38 @@ export function clearStartupBackground(): void {
 }
 
 export const themeOverride = writable<string>(undefined);
-export const themeType = createLocalStorageStore("openchat_theme", "system");
+export const themeType = createLocalStorageStore(configKeys.theme, "system");
 export const preferredDarkThemeName = createLocalStorageStore("openchat_dark_theme", "dark");
 export const preferredLightThemeName = createLocalStorageStore("openchat_light_theme", "white");
 
-export const preferredDarkTheme = derived(preferredDarkThemeName, (darkName) => themes[darkName]);
-export const preferredLightTheme = derived(preferredLightThemeName, (lightName) => {
-    if (lightName === "light") {
-        // we have renamed "light" to "blue"
-        lightName = "blue";
-    }
-    return themes[lightName];
-});
+// A stored name can outlive its theme, so one we don't have falls back to the default of its mode
+// rather than leaving the app with no theme at all, which crashes it on every load (Rollbar #32044)
+function darkThemeName(name: string): string {
+    return themes[name] !== undefined ? name : "dark";
+}
+
+function lightThemeName(name: string): string {
+    // we have renamed "light" to "blue"
+    if (name === "light") name = "blue";
+    return themes[name] !== undefined ? name : "white";
+}
+
+export const preferredDarkTheme = derived(
+    preferredDarkThemeName,
+    (darkName) => themes[darkThemeName(darkName)],
+);
+export const preferredLightTheme = derived(
+    preferredLightThemeName,
+    (lightName) => themes[lightThemeName(lightName)],
+);
 
 export const currentThemeName = derived(
     [themeType, preferredDarkThemeName, preferredLightThemeName, osDarkStore, themeOverride],
-    ([$themeType, preferredDark, preferredLight, prefersDark, override]) => {
+    ([$themeType, storedDark, storedLight, prefersDark, override]) => {
         if (override !== undefined) return override;
+
+        const preferredDark = darkThemeName(storedDark);
+        const preferredLight = lightThemeName(storedLight);
 
         let themeName = "white";
         if ($themeType === "system") {
@@ -192,4 +219,13 @@ export const currentTheme = derived(currentThemeName, (name) => {
     writeCssVars("--", theme);
     rememberThemeMode(theme.mode);
     return theme;
+});
+
+// Only the current theme's mode, for the new web UI (src/web). It takes its colours from
+// @openchat/ui's tokens, so unlike `currentTheme` this doesn't write the v1 theme's variables
+// onto <html>, where their names (--accent, --bg…) would override the tokens.
+export const currentThemeMode = derived(currentThemeName, (name): Theme["mode"] => {
+    const mode = themes[name]?.mode ?? "dark";
+    rememberThemeMode(mode);
+    return mode;
 });

@@ -2,7 +2,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { flushSync, mount, tick, unmount } from "svelte";
-import { fromStore, writable } from "svelte/store";
+import { writable } from "@client/utils/stores";
+import { reactiveTestStore as fromStore } from "../utils/reactiveStore.testFixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalAppAction } from "../utils/localAppCatalog";
 import type { LocalDraftSchema } from "../utils/localAppDrafts";

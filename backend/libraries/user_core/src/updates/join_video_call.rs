@@ -1,21 +1,21 @@
 use crate::User;
+use multi_user_canister::join_video_call::Args;
 use oc_error_codes::OCErrorCode;
 use types::{
     CallDismissalKind, DirectCallDismissedNotification, DirectChatUserNotificationPayload, OCResult, TimestampMillis, UserId,
     VideoCallPresence,
 };
-use user_canister::join_video_call::Args;
 
 // Records the user joining the call in their chat. On success the caller tells the other user's
 // canister and awards the `JoinedCall` achievement.
 pub fn join_video_call(user: &mut User, args: &Args, my_user_id: UserId, now: TimestampMillis) -> OCResult {
     user.verify_not_suspended()?;
 
-    if user.blocked_users.contains(&args.user_id) {
+    if user.has_blocked(args.user_id) {
         return Err(OCErrorCode::TargetUserBlocked.into());
     }
 
-    let chat = user
+    let mut chat = user
         .direct_chats
         .get_mut(&args.user_id.into())
         .ok_or(OCErrorCode::ChatNotFound)?;

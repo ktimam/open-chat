@@ -11,7 +11,7 @@ use std::time::Duration;
 use types::Milliseconds;
 
 // Use this to process events where events are grouped into batches based on their key.
-// Eg. sending events to User canisters (in this case the User canisterId would be the key).
+// Eg. sending events to users' canisters (in this case the canister id would be the key).
 #[expect(clippy::type_complexity)]
 pub struct GroupedTimerJobQueue<T: TimerJobItemGroup> {
     inner: Rc<Mutex<GroupedTimerJobQueueInner<T::SharedState, T::Key, T::Item>>>,
@@ -119,12 +119,6 @@ impl<T: TimerJobItemGroup> GroupedTimerJobQueue<T> {
     // Whether a batch for `grouping_key` is being processed
     pub fn is_in_progress(&self, grouping_key: &T::Key) -> bool {
         self.within_lock(|i| i.in_progress.contains(grouping_key))
-    }
-
-    // Whether no items are queued or being processed. Unlike `is_empty`, this includes items queued
-    // for a key whose batch is already being processed.
-    pub fn is_idle(&self) -> bool {
-        self.within_lock(|i| i.items_map.is_empty() && i.in_progress.is_empty())
     }
 
     fn within_lock<F: FnOnce(&mut GroupedTimerJobQueueInner<T::SharedState, T::Key, T::Item>) -> R, R>(&self, f: F) -> R {

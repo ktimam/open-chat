@@ -25,7 +25,7 @@
     import Input from "../../Input.svelte";
     import Legend from "../../Legend.svelte";
     import Select from "../../Select.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
     import CredentialSelector from "./CredentialSelector.svelte";
 
@@ -185,7 +185,7 @@
     let minBalance = $derived(amountFromText(minBalanceText, candidateTokenDetails));
     let minChitEarned = $derived.by(() => {
         try {
-            const cleaned = minChitEarnedText.replace(/[_\,]/g, "");
+            const cleaned = minChitEarnedText.replace(/[_,]/g, "");
             return Number(cleaned);
         } catch (_) {
             return undefined;

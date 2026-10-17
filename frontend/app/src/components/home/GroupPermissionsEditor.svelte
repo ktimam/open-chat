@@ -23,7 +23,7 @@
         embeddedContent,
     }: Props = $props();
 
-    let items = embeddedContent
+    const items = embeddedContent
         ? [i18nKey("permissions.general")]
         : [
               i18nKey("permissions.general"),
@@ -31,7 +31,7 @@
               i18nKey("permissions.thread"),
           ];
     let selectedTab = $state(items[0].key);
-    let roles = [...chatRoles];
+    const roles = [...chatRoles];
     let overrideChatMessages = $state(permissions.threadPermissions !== undefined);
 
     $effect(() => {
@@ -89,6 +89,10 @@
             {roles}
             label={i18nKey("permissions.reactToMessages")}
             bind:rolePermission={permissions.reactToMessages} />
+        <SelectPermissionRole
+            {roles}
+            label={i18nKey("permissions.tipMessages")}
+            bind:rolePermission={permissions.tipMessages} />
         <SelectPermissionRole
             {roles}
             label={i18nKey("permissions.mentionAllMembers", { mention: "@everyone" })}

@@ -2,12 +2,12 @@
     import { i18nKey } from "@src/i18n/i18n";
     import { BodySmall, CommonButton, Container, Form, Input, Sheet, Title } from "component-lib";
     import Save from "svelte-material-icons/ContentSaveOutline.svelte";
-    import Translatable from "../../../Translatable.svelte";
-    import { updateCommunityState } from "./community.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
+    import { updateCommunityState } from "@shared_components/home/communities/createOrUpdate/community.svelte";
 
     const MAX_LENGTH = 40;
     const MIN_LENGTH = 3;
-    let ucs = updateCommunityState;
+    const ucs = updateCommunityState;
 
     interface Props {
         channelName: string;

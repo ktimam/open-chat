@@ -22,8 +22,8 @@
     import { getContext } from "svelte";
     import { _ } from "svelte-i18n";
     import Save from "svelte-material-icons/ContentSaveOutline.svelte";
-    import Translatable from "../../Translatable.svelte";
-    import type { UpdateGroupOrCommunityState } from "../groupOrCommunity.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
+    import type { UpdateGroupOrCommunityState } from "@shared_components/home/groupOrCommunity.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
     import AboutPaymentGate from "./AboutPaymentGate.svelte";
     import SelectBinding from "./SelectBinding.svelte";

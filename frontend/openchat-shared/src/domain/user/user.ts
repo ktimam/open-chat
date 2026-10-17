@@ -1,5 +1,7 @@
 import { type ReadonlyMap } from "../../utils";
+import type { ResourceKey } from "../../utils/i18n";
 import type { MultiUserChat, PinNumberFailures } from "../chat";
+import type { CommunitySummary } from "../community";
 import type { DataContent } from "../data/data";
 import type { OCError } from "../error";
 import type {
@@ -160,12 +162,12 @@ export type CreateGroup = {
 
 export type JoinCommunity = {
     kind: "join_community";
+    community: CommunitySummary;
 };
 
 export type JoinGroup = {
     kind: "join_group";
     group: MultiUserChat;
-    select: boolean;
 };
 
 export type IdentityState =
@@ -279,8 +281,8 @@ export const ANON_DISPLAY_NAME = "Guest user";
 export const ANON_AVATAR_URL = "/assets/anon.svg";
 
 type CurrentUserCommon = DataContent & {
-    // The ids the user had before being migrated to a MultiUser canister, which events from before
-    // then still refer to them by
+    // The ids the user had before being migrated to a MultiUser canister, whose wallets may still
+    // hold funds, and are in their transaction history
     previousUserIds?: string[];
     username: string;
     isPlatformOperator: boolean;
@@ -414,6 +416,17 @@ export type InvalidCurrency = { kind: "invalid_currency" };
 
 export type SetBioResponse = Success | OCError | Offline;
 
+/** i18n keys of the reasons the backend rejected profile fields, shown under each field */
+export type ProfileFieldErrors = { username?: string; displayName?: string; bio?: string };
+
+export type SaveProfileOutcome = {
+    // the original profile with every field the backend accepted applied
+    profile: PublicProfile;
+    errors: ProfileFieldErrors;
+    // set when a change could not be saved for a reason the user can't fix in the form
+    failure?: ResourceKey;
+};
+
 export type RegisterUserResponse =
     | {
           kind: "success";
@@ -471,34 +484,10 @@ export type PayForDiamondMembershipResponse =
     | OCError
     | Offline;
 
-export type SetUserUpgradeConcurrencyResponse = "success" | "offline";
-
 export type CreateMultiUserCanisterResponse =
     | { kind: "success"; canisterId: string }
     | { kind: "local_user_index_not_found" }
     | InternalError;
-
-export type UsersToMigrate =
-    | { kind: "longest_offline"; count: number }
-    | { kind: "specific"; userIds: string[] };
-
-// Users who can't be migrated, or who are already queued or being migrated, are left out of `queued`
-export type MigrateUsersResponse = { kind: "success"; queued: string[] } | OCError;
-
-export type UserMigrationStatus =
-    | { kind: "queued" }
-    | { kind: "requested"; multiUserCanisterId: string; timestamp: bigint }
-    | {
-          kind: "started";
-          multiUserCanisterId: string;
-          timestamp: bigint;
-          userBytes: bigint;
-          wasmVersion: string;
-      }
-    | { kind: "imported"; multiUserCanisterId: string; timestamp: bigint; newUserId: string }
-    | { kind: "failed"; multiUserCanisterId: string; timestamp: bigint; error: OCError };
-
-export type UserMigrationResponse = UserMigrationStatus | { kind: "not_found" } | OCError;
 
 // A balance left behind in the wallet of a canister the user had before being migrated to a
 // MultiUser canister. Only that canister can move it, so it isn't in the user's wallet until the
@@ -512,7 +501,8 @@ export type FundsInPreviousWallet = {
 export type MoveFundsResult =
     // `amount` arrived in the user's wallet, the ledger having charged `fee` on top
     | { kind: "moved"; amount: bigint; fee: bigint; blockIndex: bigint }
-    // The balance didn't exceed the fee, so there was nothing to move
+    // The balance, less the fee and any fee the ledger burns, didn't exceed the fee, so there was
+    // nothing to move
     | { kind: "nothing_to_move" }
     // A transfer which timed out may still have been made, in which case the balance is gone from
     // the previous wallet
@@ -565,6 +555,15 @@ export type InsufficientPayment = {
     kind: "insufficient_payment";
 };
 
+// A step of a swap the user makes straight from their wallet, reported as the step starts, ahead of
+// how the swap ended. The withdrawal is the DEX paying the output, `amountOut`, to the wallet.
+export type SwapFromWalletStep =
+    | { step: "approve" }
+    | { step: "swap" }
+    | { step: "withdraw"; amountOut: bigint };
+
+export type SwapTokensStep = { kind: "swap_step" } & SwapFromWalletStep;
+
 export type SwapTokensResponse =
     | {
           kind: "success";
@@ -575,31 +574,6 @@ export type SwapTokensResponse =
       }
     | PinNumberFailures
     | InternalError
-    | OCError;
-
-export type Result<T> =
-    | {
-          kind: "ok";
-          value: T;
-      }
-    | {
-          kind: "error";
-          error: string;
-      };
-
-export type TokenSwapStatusResponse =
-    | {
-          kind: "success";
-          started: bigint;
-          depositAccount?: Result<null>;
-          transfer?: Result<bigint>;
-          notifyDex?: Result<null>;
-          amountSwapped?: Result<Result<bigint>>;
-          withdrawnFromDex?: Result<bigint>;
-      }
-    | {
-          kind: "not_found";
-      }
     | OCError;
 
 export type ApproveTransferResponse = Success | OCError | InternalError;

@@ -16,14 +16,14 @@ export const LOCAL_APP_RELAY_HEADERS = Object.freeze({
 export function localAppRelayOrigin(directoryUrl = "") {
     if (directoryUrl === "") return undefined;
     if (typeof directoryUrl !== "string") throw new Error("Invalid configured app relay origin");
-    const url = new URL(directoryUrl);
+    const url = new globalThis.URL(directoryUrl);
     if (
         url.href !== directoryUrl ||
         url.username ||
         url.password ||
         url.search ||
         url.hash ||
-        !/^[A-Za-z0-9:/._\[\]-]+$/.test(url.origin) ||
+        !/^[A-Za-z0-9:/._[\]-]+$/.test(url.origin) ||
         (url.protocol !== "https:" &&
             !(
                 url.protocol === "http:" &&

@@ -8,6 +8,7 @@ use std::fmt::{Debug, Formatter};
 use types::{CanisterId, Cycles, SignedDelegation, UserId};
 
 mod account_linking_tests;
+mod alchemy_api_key_tests;
 mod batched_summary_and_event_tests;
 mod bot_tests;
 mod call_push_tests;
@@ -21,7 +22,6 @@ mod communities;
 mod cycles_dispenser_tests;
 mod cycles_refunder_tests;
 mod cycles_top_up_tests;
-mod daily_puzzle_engine_tests;
 mod daily_puzzle_flow_tests;
 mod daily_puzzle_tests;
 mod delete_direct_chat_tests;
@@ -42,6 +42,7 @@ mod game_chit_tests;
 mod gated_group_tests;
 mod group_and_community_verification_tests;
 mod identity_tests;
+mod index_upgrade_tests;
 mod join_group_tests;
 mod member_search_tests;
 mod members_paging_tests;
@@ -50,7 +51,6 @@ mod message_activity_tests;
 mod moderation_tests;
 mod multi_user_canister_tests;
 mod notification_tests;
-mod old_local_group_index_tests;
 mod online_users_tests;
 mod p2p_swap_tests;
 mod pin_number_tests;
@@ -75,11 +75,9 @@ mod suspend_user_tests;
 mod swap_tokens_tests;
 mod threads_read_tests;
 mod tip_message_tests;
+mod translations_tests;
 mod update_group_tests;
 mod update_profile_tests;
-mod upgrade_from_prod_tests;
-mod user_canister_cycles_tests;
-mod user_migration_tests;
 mod utils;
 mod video_call_tests;
 mod wasms;
@@ -89,6 +87,9 @@ pub struct TestEnv {
     pub env: PocketIc,
     pub canister_ids: CanisterIds,
     pub controller: Principal,
+    // A user made a platform operator as the environment was set up, for making the calls only
+    // platform operators can make
+    pub platform_operator: Principal,
 }
 
 #[derive(Debug)]

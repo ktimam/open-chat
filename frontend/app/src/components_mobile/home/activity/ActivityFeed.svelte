@@ -14,7 +14,7 @@
     import { getContext } from "svelte";
     import { _ } from "svelte-i18n";
     import { i18nKey } from "../../../i18n/i18n";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import VirtualList from "@shared_components/VirtualList.svelte";
     import FancyLoader from "../../icons/FancyLoader.svelte";
     import NothingToSee from "../NothingToSee.svelte";
@@ -30,7 +30,7 @@
         | { kind: "event"; formattedTime: string; event: MessageActivityEvent }
         | { kind: "header"; formattedTime: string; timestamp: bigint };
 
-    let formatHeaderTime = (timestamp: bigint): string =>
+    const formatHeaderTime = (timestamp: bigint): string =>
         client.getSmartDateHeader(timestamp, $_("today"), $_("yesterday"));
 
     let activityItems: ActivityItem[] = $derived(

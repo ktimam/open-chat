@@ -35,6 +35,7 @@
         cryptoLookup,
         LocalStorageStore,
         mobileWidth,
+        walletApprovalFee,
     } from "@client";
     import { getContext } from "svelte";
     import { _ } from "svelte-i18n";
@@ -54,7 +55,7 @@
     import Range from "../Range.svelte";
     import Select from "../Select.svelte";
     import TextArea from "../TextArea.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AccountInfo from "./AccountInfo.svelte";
     import BalanceWithRefresh from "./BalanceWithRefresh.svelte";
     import CryptoSelector from "./CryptoSelector.svelte";
@@ -106,7 +107,7 @@
     let minChitEarned = $state<number>($prizeConfig.minChitEarned);
     let streakOnly = $derived(minStreak > 0);
     let chitOnly = $derived(minChitEarned > 0);
-    let refreshing = false;
+    const refreshing = false;
     let error: string | undefined = $state(undefined);
     let message = $state("");
     let toppingUp = $state(false);
@@ -128,7 +129,10 @@
     let transferFee = $derived(tokenDetails.transferFee);
     let transferFees = $derived(transferFee * BigInt(numberOfWinners ?? 0));
     let prizeFees = $derived(transferFees + (draftAmount * OC_FEE_PERCENTAGE) / 100n);
-    let totalFees = $derived(transferFee + prizeFees);
+    // What the transfer of the prize's fund costs in fees, which includes the approval the wallet
+    // makes before the fund is pulled from it
+    let fundFees = $derived(transferFee + walletApprovalFee(transferFee));
+    let totalFees = $derived(fundFees + prizeFees);
     let multiUserChat = $derived(chat.kind === "group_chat" || chat.kind === "channel");
     let remainingBalance = $state(0n);
     $effect(() => {
@@ -145,7 +149,7 @@
     );
     let valid = $derived(error === undefined && tokenInputState === "ok" && !tokenChanging);
     // An empty OpenChat account is only a dead end while the user is paying from it
-    let zero = $derived(cryptoBalance <= transferFee && !tokenChanging && !payFromWallet);
+    let zero = $derived(cryptoBalance <= fundFees && !tokenChanging && !payFromWallet);
     let errorMessage = $derived(error !== undefined ? i18nKey(error) : $pinNumberErrorMessageStore);
 
     $effect(() => {
@@ -285,7 +289,7 @@
         tokenChanging = false;
         if (remainingBalance < 0 && !payFromWallet) {
             remainingBalance = BigInt(0);
-            draftAmount = cryptoBalance - transferFee;
+            draftAmount = cryptoBalance - fundFees;
             if (draftAmount < 0) {
                 draftAmount = BigInt(0);
             }

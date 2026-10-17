@@ -21,7 +21,7 @@
     import { _ } from "svelte-i18n";
     import ErrorMessage from "../ErrorMessage.svelte";
     import FindUser from "../FindUser.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import UsernameInput from "../UsernameInput.svelte";
     import UserPill from "../UserPill.svelte";
 
@@ -37,8 +37,8 @@
     let showGuidelines = $state(false);
     let username = $state("");
     let usernameValid = $state(false);
-    let usernameStore = createLocalStorageStore("openchat_candidate_username", "");
-    let checkingUsername: boolean = $state(false);
+    const usernameStore = createLocalStorageStore("openchat_candidate_username", "");
+    const checkingUsername: boolean = $state(false);
     let email = $state("");
     let emailValid = $derived(email.length === 0 || EmailValidator.validate(email));
     let busy = $state(false);

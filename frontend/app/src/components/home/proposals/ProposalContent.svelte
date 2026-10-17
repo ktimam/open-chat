@@ -4,27 +4,28 @@
         type OpenChat,
         type ProposalContent,
         ProposalDecisionStatus,
-        type RegisterProposalVoteResponse,
-        currentUserIdStore,
+        iconSize,
         proposalTopicsStore,
+        proposalVotesStore,
     } from "@client";
-    import { ErrorCode, isMultiUserCanisterUser, type ReadonlyMap } from "@shared";
+    import { type ReadonlyMap } from "@shared";
     import { getContext } from "svelte";
     import { _ } from "svelte-i18n";
     import ExpandIcon from "svelte-material-icons/ArrowExpandDown.svelte";
     import ChevronDown from "svelte-material-icons/ChevronDown.svelte";
+    import CopyIcon from "svelte-material-icons/ContentCopy.svelte";
     import Launch from "svelte-material-icons/Launch.svelte";
     import OpenInNew from "svelte-material-icons/OpenInNew.svelte";
     import { i18nKey } from "../../../i18n/i18n";
     import { NamedNeurons } from "../../../stores/namedNeurons";
-    import { proposalVotes } from "../../../stores/proposalVotes";
     import { rtlStore } from "../../../stores/rtl";
     import { now } from "../../../stores/time";
     import { toastStore } from "../../../stores/toast";
     import { round2 } from "../../../utils/math";
+    import { copyToClipboard } from "../../../utils/urls";
     import ModalContent from "../../ModalContent.svelte";
     import Overlay from "../../Overlay.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
     import ProposalProgressLayout from "./ProposalProgressLayout.svelte";
     import ProposalVoteButton from "./ProposalVoteButton.svelte";
@@ -61,16 +62,19 @@
     let showNeuronInfo = $state(false);
     let showPayload = $state(false);
 
-    function noEligibleNeuronsMessage(): string {
-        // Users in a MultiUser canister vote with the neurons hot-keyed to their own principal,
-        // everyone else with those hot-keyed to their User canister, ie. their user id
-        return isMultiUserCanisterUser($currentUserIdStore)
-            ? $_("proposal.noEligibleNeuronsPrincipalMessage", {
-                  values: { principal: client.OcIdentityPrincipal },
-              })
-            : $_("proposal.noEligibleNeuronsMessage", {
-                  values: { userId: $currentUserIdStore },
-              });
+    // Users vote with the neurons hot-keyed to their own principal
+    let votingHotkey = $derived(client.OcIdentityPrincipal);
+
+    function copyVotingHotkey() {
+        copyToClipboard(votingHotkey).then((success) => {
+            if (success) {
+                toastStore.showSuccessToast(i18nKey("votingHotkeyCopiedToClipboard"));
+            } else {
+                toastStore.showFailureToast(
+                    i18nKey("failedToCopyToClipboard", { account: votingHotkey }),
+                );
+            }
+        });
     }
 
     function toggleSummary() {
@@ -79,54 +83,23 @@
         }
     }
 
-    function onVote(adopt: boolean) {
-        if (votingDisabled || (chatId.kind !== "group_chat" && chatId.kind !== "channel")) {
-            return;
+    async function onVote(adopt: boolean) {
+        if (votingDisabled) return;
+
+        const outcome = await client.voteOnProposal(chatId, messageIndex, messageId, content, adopt);
+        switch (outcome.kind) {
+            case "voted":
+            case "skipped":
+                break;
+            case "no_eligible_neurons":
+                showNeuronInfo = true;
+                break;
+            case "failed":
+                toastStore.showFailureToast(outcome.message);
+                break;
+            default:
+                outcome satisfies never;
         }
-
-        const mId = messageId;
-        proposalVotes.insert(mId, adopt ? "adopting" : "rejecting");
-
-        let success = false;
-        client
-            .registerProposalVote(
-                chatId,
-                messageIndex,
-                content.governanceCanisterId,
-                proposal.id,
-                isNns,
-                adopt,
-            )
-            .then((resp) => {
-                if (resp.kind === "success") {
-                    success = true;
-                    proposalVotes.insert(mId, adopt ? "adopted" : "rejected");
-                    client.getProposalVoteDetails(messageId, content.governanceCanisterId, proposal.id, isNns);
-                } else if (resp.kind === "error" && resp.code === ErrorCode.NoEligibleNeurons) {
-                    showNeuronInfo = true;
-                } else {
-                    const err = registerProposalVoteErrorMessage(resp);
-                    if (err) toastStore.showFailureToast(i18nKey("proposal." + err));
-                }
-            })
-            .catch((err) => {
-                client.logError("Unable to vote on proposal", err);
-                toastStore.showFailureToast(i18nKey("proposal.voteFailed"));
-            })
-            .finally(() => {
-                if (!success) {
-                    proposalVotes.delete(mId);
-                }
-            });
-    }
-
-    function registerProposalVoteErrorMessage(
-        resp: RegisterProposalVoteResponse,
-    ): string | undefined {
-        if (resp.kind === "error" && resp.code === ErrorCode.NoChange) return "alreadyVoted";
-        if (resp.kind === "error" && resp.code === ErrorCode.ProposalNotAcceptingVotes)
-            return "proposalNotAcceptingVotes";
-        return "voteFailed";
     }
 
     function onClick() {
@@ -164,7 +137,7 @@
     );
     let isNns = $derived(content.proposal.kind === "nns");
     let voteStatus = $derived(
-        $proposalVotes.get(messageId) ??
+        $proposalVotesStore.get(messageId) ??
             (content.myVote !== undefined ? (content.myVote ? "adopted" : "rejected") : undefined),
     );
     let proposal = $derived(content.proposal);
@@ -311,7 +284,23 @@
                 <Translatable resourceKey={i18nKey("proposal.noEligibleNeurons")} />
             {/snippet}
             {#snippet body()}
-                <Markdown text={noEligibleNeuronsMessage()} />
+                <div class="no-neurons">
+                    <Markdown text={$_("proposal.noEligibleNeuronsPrincipalIntro")} />
+                    <div>
+                        <Translatable resourceKey={i18nKey("proposal.noEligibleNeuronsPrincipalLabel")} />
+                        <div class="voting-hotkey">
+                            <span class="voting-hotkey-text">{votingHotkey}</span>
+                            <button
+                                type="button"
+                                aria-label={$_("copyToClipboard")}
+                                onclick={copyVotingHotkey}
+                                class="copy">
+                                <CopyIcon size={$iconSize} color={"var(--icon-txt)"} />
+                            </button>
+                        </div>
+                    </div>
+                    <Markdown text={$_("proposal.noEligibleNeuronsMoreInfo")} />
+                </div>
             {/snippet}
         </ModalContent>
     </Overlay>
@@ -333,6 +322,32 @@
 {/if}
 
 <style lang="scss">
+    .no-neurons {
+        display: flex;
+        flex-direction: column;
+        gap: $sp4;
+    }
+
+    .voting-hotkey {
+        display: flex;
+        gap: $sp3;
+        align-items: center;
+
+        // Wraps at the principal's hyphens rather than mid-group
+        .voting-hotkey-text {
+            overflow-wrap: anywhere;
+        }
+
+        .copy {
+            display: flex;
+            flex-shrink: 0;
+            padding: 0;
+            border: none;
+            background: none;
+            cursor: pointer;
+        }
+    }
+
     .header {
         margin-bottom: toRem(4);
 

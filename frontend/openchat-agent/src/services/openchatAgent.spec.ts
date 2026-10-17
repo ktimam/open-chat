@@ -1,12 +1,18 @@
+import { AnonymousIdentity, HttpAgent } from "@icp-sdk/core/agent";
 import { Principal } from "@icp-sdk/core/principal";
 import {
     APPROVAL_VALIDITY_MS,
     ErrorCode,
     indexedUserId,
     LEDGER_CANISTER_CHAT,
+    LEDGER_CANISTER_CKBTC,
+    LEDGER_CANISTER_CKSOL,
+    Lazy,
     spenderSubaccount,
     Stream,
     type CryptocurrencyContent,
+    type CryptocurrencyDetails,
+    type DexSwapResult,
     type EventWrapper,
     type Message,
     type MessageContent,
@@ -15,12 +21,19 @@ import {
     type PendingCryptocurrencyWithdrawal,
     type PrizeContentInitial,
     type TokenInfo,
+    type UnfinishedTokenSwap,
 } from "@shared";
-import { beforeEach, describe, expect, test, vi } from "vitest";
-import { AsyncMessageContextMap } from "../utils/messageContext";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { CkbtcMinterClient } from "./ckbtcMinter/ckbtcMinter.client";
+import { CksolMinterClient } from "./cksolMinter/cksolMinter.client";
+import { OneSecMinterClient } from "./oneSecMinter/oneSecMinter.client";
 import { OpenChatAgent } from "./openchatAgent";
 
 const ICP_LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai";
+// The device's clock while a payment is made, which is also the time on the IC unless a test says
+// otherwise, so a payment is stamped with it
+const NOW_MS = 1_791_565_000_000;
+const NOW_NANOS = BigInt(NOW_MS) * 1_000_000n;
 const FEE = 10n;
 const CHAT_FEE = 1_000n;
 const ICP: TokenInfo = { ledger: ICP_LEDGER, symbol: "ICP", decimals: 8, fee: FEE };
@@ -29,7 +42,7 @@ const THEM = "rrkah-fqaaa-aaaaa-aaaaq-cai";
 const MULTI_USER_CANISTER = Principal.fromText("dfdal-2uaaa-aaaaa-qaama-cai");
 const MULTI_USER_CANISTER_USER = indexedUserId(MULTI_USER_CANISTER, 3);
 const OTHER_MULTI_USER_CANISTER_USER = indexedUserId(MULTI_USER_CANISTER, 4);
-const USER_CANISTER_USER = "renrk-eyaaa-aaaaa-aaada-cai";
+const OLD_USER_ID = "renrk-eyaaa-aaaaa-aaada-cai";
 const EXTERNAL_ACCOUNT = "rno2w-sqaaa-aaaaa-aaacq-cai";
 const DIRECT = { kind: "direct_chat", userId: THEM } as const;
 const GROUP = { kind: "group_chat", groupId: "rdmx6-jaaaa-aaaaa-aaadq-cai" } as const;
@@ -47,7 +60,7 @@ function transfer(fromAccount?: string): PendingCryptocurrencyTransfer {
         recipient: THEM,
         amountE8s: 100n,
         feeE8s: FEE,
-        createdAtNanos: 0n,
+        createdAtNanos: NOW_NANOS,
         fromAccount,
     };
 }
@@ -93,13 +106,21 @@ function message(content: MessageContent): EventWrapper<Message> {
     return { event: { content } } as EventWrapper<Message>;
 }
 
-// The payments the user's canister pulls from the user's wallet, each of which a user in a
-// MultiUser canister has to approve it for first
+const PIN_INCORRECT = { kind: "error", code: ErrorCode.PinIncorrect, message: "0" } as const;
+
+// The payments the user's canister pulls from the user's wallet, each of which the user has to
+// approve it for first
 describe("OpenChatAgent paying from the user's wallet", () => {
     let approvals: unknown[][];
-    let approveResponse: "success" | "insufficient_funds" | "failure" | "throws";
+    let approveResponse: "success" | "insufficient_funds" | "failure";
+    // Each PIN checked, with how many approvals had been made by then
+    let pinChecks: [string, number][];
+    let pinCheckResponse: "success" | "incorrect";
     let calls: string[];
     let callArgs: unknown[][];
+    // How far the IC's clock is ahead of the device's, and each ledger whose subnet it was read from
+    let timeDiffMsecs: number;
+    let syncedWith: string[];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let agent: any;
 
@@ -113,6 +134,13 @@ describe("OpenChatAgent paying from the user's wallet", () => {
             };
         agent = Object.create(OpenChatAgent.prototype);
         agent.identity = { getPrincipal: () => ME };
+        agent._agent = {
+            syncTime: (canisterId: Principal) => {
+                syncedWith.push(canisterId.toText());
+                return Promise.resolve();
+            },
+            getTimeDiffMsecs: () => timeDiffMsecs,
+        };
         agent._registryValue = {
             tokenDetails: [
                 { ledger: ICP_LEDGER, transferFee: FEE },
@@ -122,16 +150,21 @@ describe("OpenChatAgent paying from the user's wallet", () => {
         agent._ledgerClient = {
             approveSpending: (...args: unknown[]) => {
                 approvals.push(args);
-                return approveResponse === "throws"
-                    ? Promise.reject(new Error("The ledger couldn't be reached"))
-                    : Promise.resolve(approveResponse);
+                return Promise.resolve(approveResponse);
             },
         };
         agent._userClient = {
             userId,
+            checkPinNumber: (pin: string) => {
+                pinChecks.push([pin, approvals.length]);
+                switch (pinCheckResponse) {
+                    case "success":
+                        return Promise.resolve({ kind: "success" });
+                    case "incorrect":
+                        return Promise.resolve(PIN_INCORRECT);
+                }
+            },
             sendMessage: called("sendMessage"),
-            sendMessageWithTransferToGroup: called("sendMessageWithTransferToGroup"),
-            sendMessageWithTransferToChannel: called("sendMessageWithTransferToChannel"),
             tipMessage: called("tipMessage"),
             acceptP2PSwap: called("acceptP2PSwap"),
             payForStreakInsurance: called("payForStreakInsurance"),
@@ -147,14 +180,16 @@ describe("OpenChatAgent paying from the user's wallet", () => {
             tipMessage: called("communityTipMessage"),
         };
         agent._userIndexClient = { payForDiamondMembership: called("payForDiamondMembership") };
+        agent._proposalsBotClient = { get: () => ({ submitProposal: called("submitProposal") }) };
     }
 
     // Sends a message to a group or channel, giving the response once it is final
     const send = (
-        chatId: typeof GROUP | typeof CHANNEL,
+        chatId: typeof DIRECT | typeof GROUP | typeof CHANNEL,
         content: MessageContent,
         threadRootMessageIndex?: number,
         acceptedRules?: { chat: number; community: number },
+        pin?: string,
     ) =>
         new Promise((resolve, reject) =>
             agent
@@ -165,7 +200,7 @@ describe("OpenChatAgent paying from the user's wallet", () => {
                     message(content),
                     acceptedRules,
                     undefined,
-                    undefined,
+                    pin,
                     false,
                 )
                 .subscribe({
@@ -181,15 +216,8 @@ describe("OpenChatAgent paying from the user's wallet", () => {
         ["a swap offer", swapOffer, 120n],
     ];
 
-    const sendDirectMessage = (content: MessageContent) =>
-        agent.sendDirectMessage(
-            DIRECT,
-            message(content),
-            undefined,
-            undefined,
-            undefined,
-            () => {},
-        );
+    const sendDirectMessage = (content: MessageContent, pin?: string) =>
+        agent.sendDirectMessage(DIRECT, message(content), undefined, undefined, pin, () => {});
 
     // Every payment, with what it takes from the wallet
     const payments: [string, (fromAccount?: string) => Promise<unknown>, string, bigint][] = [
@@ -231,15 +259,76 @@ describe("OpenChatAgent paying from the user's wallet", () => {
         ],
     ];
 
+    // Every payment made with a PIN, and whether the PIN is passed on to the canister which pulls
+    // the payment, so that it checks it again. A group or community has no way to check it.
+    const paymentsWithPin: [string, (pin: string) => Promise<unknown>, boolean][] = [
+        ["crypto sent in a direct chat", (pin) => sendDirectMessage(crypto(), pin), true],
+        ["swap offered in a direct chat", (pin) => sendDirectMessage(swapOffer(), pin), true],
+        [
+            "tip in a direct chat",
+            (pin) => agent.tipMessage({ chatId: DIRECT }, 1n, transfer(), 8, pin),
+            true,
+        ],
+        [
+            "swap accepted in a group",
+            (pin) => agent.acceptP2PSwap(GROUP, undefined, 1n, ICP, 100n, pin, false, undefined),
+            true,
+        ],
+        ["streak insurance", (pin) => agent.payForStreakInsurance(1, 5_000n, pin), true],
+        [
+            "Diamond membership",
+            (pin) =>
+                agent.payForDiamondMembership(
+                    "",
+                    ICP_LEDGER,
+                    "one_month",
+                    false,
+                    100n,
+                    undefined,
+                    pin,
+                ),
+            false,
+        ],
+        ...transferMessages.flatMap(([what, content]) =>
+            (
+                [
+                    ["a group", GROUP],
+                    ["a channel", CHANNEL],
+                ] as const
+            ).map(([where, chatId]): (typeof paymentsWithPin)[number] => [
+                `${what} sent in ${where}`,
+                (pin) => send(chatId, content(), undefined, undefined, pin),
+                false,
+            ]),
+        ),
+        ...(
+            [
+                ["a group", GROUP],
+                ["a channel", CHANNEL],
+            ] as const
+        ).map(([where, chatId]): (typeof paymentsWithPin)[number] => [
+            `tip in ${where}`,
+            (pin) => agent.tipMessage({ chatId }, 1n, transfer(), 8, pin, "me", undefined, true),
+            false,
+        ]),
+    ];
+
     beforeEach(() => {
         approvals = [];
         approveResponse = "success";
+        pinChecks = [];
+        pinCheckResponse = "success";
         calls = [];
         callArgs = [];
+        timeDiffMsecs = 0;
+        syncedWith = [];
+        vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
         vi.spyOn(console, "warn").mockImplementation(() => {});
     });
 
-    describe("by a user in a MultiUser canister", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    describe("by a user", () => {
         beforeEach(() => setup(MULTI_USER_CANISTER_USER));
 
         const spender = { owner: MULTI_USER_CANISTER, subaccount: spenderSubaccount(ME) };
@@ -249,6 +338,55 @@ describe("OpenChatAgent paying from the user's wallet", () => {
 
             expect(approvals).toEqual([[ledger, spender, amount, FEE, APPROVAL_VALIDITY_MS]]);
             expect(calls.length).toEqual(1);
+            expect(pinChecks).toEqual([]);
+        });
+
+        test.each(paymentsWithPin)(
+            "%s has its PIN checked before it is approved",
+            async (_, pay, passedOn) => {
+                await pay("1234");
+
+                expect(pinChecks).toEqual([["1234", 0]]);
+                expect(approvals.length).toEqual(1);
+                expect(calls.length).toEqual(1);
+                if (passedOn) {
+                    expect(callArgs[0]).toContain("1234");
+                }
+            },
+        );
+
+        test("a payment is neither approved nor made with the wrong PIN", async () => {
+            pinCheckResponse = "incorrect";
+
+            const response = await sendDirectMessage(crypto(), "0000");
+
+            expect([response].flat()[0]).toEqual(PIN_INCORRECT);
+            expect(approvals).toEqual([]);
+            expect(calls).toEqual([]);
+        });
+
+        test("nothing has its PIN checked while the ledger's fee isn't known", async () => {
+            agent._registryValue = undefined;
+
+            await agent.payForDiamondMembership(
+                "",
+                ICP_LEDGER,
+                "one_month",
+                false,
+                100n,
+                undefined,
+                "1234",
+            );
+
+            expect(pinChecks).toEqual([]);
+            expect(approvals).toEqual([]);
+        });
+
+        test("a payment from another account has no PIN checked, since it isn't approved", async () => {
+            await agent.tipMessage({ chatId: DIRECT }, 1n, transfer(EXTERNAL_ACCOUNT), 8, "1234");
+
+            expect(pinChecks).toEqual([]);
+            expect(calls).toEqual(["tipMessage"]);
         });
 
         test("streak insurance is approved first, with no fee since it is burned", async () => {
@@ -269,19 +407,6 @@ describe("OpenChatAgent paying from the user's wallet", () => {
 
         test.each(payments)("%s is not made if it can't be approved", async (_, pay) => {
             approveResponse = "failure";
-
-            const response = await pay();
-
-            expect([response].flat()[0]).toEqual({
-                kind: "error",
-                code: ErrorCode.ApprovalFailed,
-                message: undefined,
-            });
-            expect(calls).toEqual([]);
-        });
-
-        test.each(payments)("%s is not made if the ledger can't be reached", async (_, pay) => {
-            approveResponse = "throws";
 
             const response = await pay();
 
@@ -325,7 +450,7 @@ describe("OpenChatAgent paying from the user's wallet", () => {
             expect(calls).toEqual([]);
         });
 
-        test("crypto for another user in a MultiUser canister is approved and sent like any other", async () => {
+        test("crypto for another user in the same canister is approved and sent like any other", async () => {
             await sendDirectMessage(crypto(undefined, OTHER_MULTI_USER_CANISTER_USER));
 
             expect(approvals).toEqual([[ICP_LEDGER, spender, 110n, FEE, APPROVAL_VALIDITY_MS]]);
@@ -548,42 +673,49 @@ describe("OpenChatAgent paying from the user's wallet", () => {
         });
     });
 
-    describe("by a user alone in their canister", () => {
-        beforeEach(() => setup(USER_CANISTER_USER));
+    // A ledger rejects a transfer created more than a minute in its future, which each transfer
+    // stamped by a device whose clock is fast would be
+    describe("from a device whose clock is ahead of the IC's", () => {
+        const AHEAD_MS = 160_000;
+        const icNow = BigInt(NOW_MS - AHEAD_MS) * 1_000_000n;
 
-        test.each(payments)("%s needs no approval", async (_, pay) => {
-            await pay();
+        // The stamp on the transfer in the message sent
+        const stampSent = () => {
+            const event = callArgs[0].find(
+                (arg) => (arg as EventWrapper<Message> | undefined)?.event?.content !== undefined,
+            ) as EventWrapper<Message>;
+            return (event.event.content as { transfer: PendingCryptocurrencyTransfer }).transfer
+                .createdAtNanos;
+        };
 
-            expect(approvals).toEqual([]);
-            expect(calls.length).toEqual(1);
+        beforeEach(() => {
+            timeDiffMsecs = -AHEAD_MS;
         });
 
-        test.each(transferMessages)(
-            "%s in a group is sent via their canister, which makes the transfer",
-            async (_, content) => {
-                await send(GROUP, content());
+        test.each([
+            ["crypto in a direct chat", MULTI_USER_CANISTER_USER, DIRECT, crypto],
+            ["crypto in a group", MULTI_USER_CANISTER_USER, GROUP, crypto],
+            ["a prize in a channel", MULTI_USER_CANISTER_USER, CHANNEL, prize],
+        ] as const)(
+            "%s is stamped with the time on the ledger's subnet",
+            async (_, userId, chatId, content) => {
+                setup(userId);
 
-                expect(approvals).toEqual([]);
-                expect(calls).toEqual(["sendMessageWithTransferToGroup"]);
-            },
-        );
+                await send(chatId, content());
 
-        test.each(transferMessages)(
-            "%s in a channel is sent via their canister, which makes the transfer",
-            async (_, content) => {
-                await send(CHANNEL, content());
-
-                expect(approvals).toEqual([]);
-                expect(calls).toEqual(["sendMessageWithTransferToChannel"]);
+                expect(stampSent()).toEqual(icNow);
+                expect(syncedWith).toEqual([ICP_LEDGER]);
             },
         );
 
         test.each([
-            ["group", GROUP],
-            ["channel", CHANNEL],
+            ["group", GROUP, "groupTipMessage"],
+            ["channel", CHANNEL, "communityTipMessage"],
         ] as const)(
-            "a tip in a %s is given via their canister, which makes the transfer",
-            async (_, chatId) => {
+            "a tip in a %s, pulled from the wallet by it, is stamped with the time on the ledger's subnet",
+            async (_, chatId, call) => {
+                setup(MULTI_USER_CANISTER_USER);
+
                 await agent.tipMessage(
                     { chatId },
                     1n,
@@ -595,16 +727,39 @@ describe("OpenChatAgent paying from the user's wallet", () => {
                     true,
                 );
 
-                expect(approvals).toEqual([]);
-                expect(calls).toEqual(["tipMessage"]);
+                expect(calls).toEqual([call]);
+                expect((callArgs[0][3] as PendingCryptocurrencyTransfer).createdAtNanos).toEqual(
+                    icNow,
+                );
+                expect(syncedWith).toEqual([ICP_LEDGER]);
             },
         );
 
-        test("streak insurance needs no approval", async () => {
-            await agent.payForStreakInsurance(1, 5_000n, undefined);
+        test("the fee for a proposal is stamped with the time on the ledger's subnet", async () => {
+            setup(MULTI_USER_CANISTER_USER);
 
-            expect(approvals).toEqual([]);
-            expect(calls).toEqual(["payForStreakInsurance"]);
+            await agent.submitProposal(
+                MULTI_USER_CANISTER_USER,
+                "",
+                {},
+                ICP_LEDGER,
+                "ICP",
+                100n,
+                FEE,
+            );
+
+            expect(calls).toEqual(["submitProposal"]);
+            expect(callArgs[0].at(-1)).toEqual(icNow);
+            expect(syncedWith).toEqual([ICP_LEDGER]);
+        });
+
+        test("a swap offer has nothing to stamp, so the IC isn't asked the time", async () => {
+            setup(MULTI_USER_CANISTER_USER);
+
+            await send(GROUP, swapOffer());
+
+            expect(calls).toEqual(["groupSendMessage"]);
+            expect(syncedWith).toEqual([]);
         });
     });
 });
@@ -618,7 +773,7 @@ describe("OpenChatAgent withdrawing from the user's wallet", () => {
         to: EXTERNAL_ACCOUNT,
         amountE8s: 100n,
         feeE8s: FEE,
-        createdAtNanos: 0n,
+        createdAtNanos: NOW_NANOS,
     };
     const PIN = "1234";
     const LEDGER_RESPONSE = {
@@ -626,18 +781,32 @@ describe("OpenChatAgent withdrawing from the user's wallet", () => {
         code: ErrorCode.InsufficientFunds,
         message: undefined,
     };
-    const CANISTER_RESPONSE = { kind: "error", code: ErrorCode.PinIncorrect, message: undefined };
 
+    let pinChecks: string[];
+    let pinCheckResponse: { kind: "success" } | typeof PIN_INCORRECT;
     let ledgerWithdrawals: unknown[][];
-    let canisterWithdrawals: unknown[][];
+    // How far the IC's clock is ahead of the device's, and each ledger whose subnet it was read from
+    let timeDiffMsecs: number;
+    let syncedWith: string[];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let agent: any;
 
     function setup(userId: string) {
+        pinChecks = [];
+        pinCheckResponse = { kind: "success" };
         ledgerWithdrawals = [];
-        canisterWithdrawals = [];
+        timeDiffMsecs = 0;
+        syncedWith = [];
+        vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
         agent = Object.create(OpenChatAgent.prototype);
         agent.identity = { getPrincipal: () => ME };
+        agent._agent = {
+            syncTime: (canisterId: Principal) => {
+                syncedWith.push(canisterId.toText());
+                return Promise.resolve();
+            },
+            getTimeDiffMsecs: () => timeDiffMsecs,
+        };
         agent._ledgerClient = {
             withdraw: (...args: unknown[]) => {
                 ledgerWithdrawals.push(args);
@@ -646,27 +815,219 @@ describe("OpenChatAgent withdrawing from the user's wallet", () => {
         };
         agent._userClient = {
             userId,
-            withdrawCryptocurrency: (...args: unknown[]) => {
-                canisterWithdrawals.push(args);
-                return Promise.resolve(CANISTER_RESPONSE);
+            checkPinNumber: (pin: string) => {
+                pinChecks.push(pin);
+                return Promise.resolve(pinCheckResponse);
             },
         };
     }
 
-    test("a user in a MultiUser canister sends from their wallet on the ledger, with no PIN", async () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    test("sends from the user's wallet on the ledger, once their PIN is checked", async () => {
         setup(MULTI_USER_CANISTER_USER);
 
         expect(await agent.withdrawCryptocurrency(WITHDRAWAL, PIN)).toBe(LEDGER_RESPONSE);
+        expect(pinChecks).toEqual([PIN]);
         expect(ledgerWithdrawals).toEqual([[WITHDRAWAL]]);
-        expect(canisterWithdrawals).toEqual([]);
     });
 
-    test("a user alone in their canister has it send from its account, with their PIN", async () => {
-        setup(USER_CANISTER_USER);
+    test("sends nothing with the wrong PIN", async () => {
+        setup(MULTI_USER_CANISTER_USER);
+        pinCheckResponse = PIN_INCORRECT;
 
-        expect(await agent.withdrawCryptocurrency(WITHDRAWAL, PIN)).toBe(CANISTER_RESPONSE);
-        expect(canisterWithdrawals).toEqual([[WITHDRAWAL, PIN]]);
+        expect(await agent.withdrawCryptocurrency(WITHDRAWAL, PIN)).toEqual(PIN_INCORRECT);
+        expect(pinChecks).toEqual([PIN]);
         expect(ledgerWithdrawals).toEqual([]);
+        expect(syncedWith).toEqual([]);
+    });
+
+    test("a user without a PIN sends with nothing to check", async () => {
+        setup(MULTI_USER_CANISTER_USER);
+
+        expect(await agent.withdrawCryptocurrency(WITHDRAWAL, undefined)).toBe(LEDGER_RESPONSE);
+        expect(pinChecks).toEqual([]);
+        expect(ledgerWithdrawals).toEqual([[WITHDRAWAL]]);
+    });
+
+    // The ledger rejects a withdrawal created more than a minute in its future
+    test("a withdrawal from a device whose clock is fast is stamped with the time on the ledger's subnet", async () => {
+        setup(MULTI_USER_CANISTER_USER);
+        timeDiffMsecs = -160_000;
+
+        await agent.withdrawCryptocurrency(WITHDRAWAL, PIN);
+
+        expect(ledgerWithdrawals[0][0]).toEqual({
+            ...WITHDRAWAL,
+            createdAtNanos: BigInt(NOW_MS - 160_000) * 1_000_000n,
+        });
+        expect(syncedWith).toEqual([ICP_LEDGER]);
+    });
+});
+
+// BTC, SOL and OneSec withdrawals, which the user makes from their wallet by approving the minter to
+// take the amount, then having it send that much on
+describe("OpenChatAgent withdrawing BTC, SOL and via OneSec", () => {
+    const CKBTC_MINTER = Principal.fromText("mqygn-kiaaa-aaaar-qaadq-cai");
+    const CKSOL_MINTER = Principal.fromText("lh22c-kyaaa-aaaar-qb5nq-cai");
+    const CKSOL_FEE = 500n;
+    const ONE_SEC_MINTER = Principal.fromText("5okwm-giaaa-aaaar-qbn6a-cai");
+    const USDC_LEDGER = "53nhb-haaaa-aaaar-qbn5q-cai";
+    const USDC_FEE = 10_000n;
+    const PIN = "1234";
+
+    let pinChecks: string[];
+    let pinCheckResponse: { kind: "success" } | typeof PIN_INCORRECT;
+    let approvals: unknown[][];
+    let approvalResponse: "success" | "insufficient_funds";
+    let minterCalls: unknown[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let agent: any;
+
+    function minterClient<T>(client: T, method: string, response: unknown): Lazy<T> {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (client as any).service = {
+            [method]: (args: unknown) => {
+                minterCalls.push(args);
+                return Promise.resolve(response);
+            },
+        };
+        return new Lazy(() => client);
+    }
+
+    beforeEach(() => {
+        pinChecks = [];
+        pinCheckResponse = { kind: "success" };
+        approvals = [];
+        approvalResponse = "success";
+        minterCalls = [];
+        const httpAgent = HttpAgent.createSync({ host: "http://localhost" });
+        agent = Object.create(OpenChatAgent.prototype);
+        agent.identity = { getPrincipal: () => ME };
+        agent._registryValue = {
+            tokenDetails: [
+                { ledger: LEDGER_CANISTER_CKBTC, transferFee: FEE },
+                { ledger: LEDGER_CANISTER_CKSOL, transferFee: CKSOL_FEE },
+                { ledger: USDC_LEDGER, transferFee: USDC_FEE },
+            ],
+        };
+        agent._ledgerClient = {
+            approveSpending: (...args: unknown[]) => {
+                approvals.push(args);
+                return Promise.resolve(approvalResponse);
+            },
+        };
+        agent._userClient = {
+            userId: MULTI_USER_CANISTER_USER,
+            checkPinNumber: (pin: string) => {
+                pinChecks.push(pin);
+                return Promise.resolve(pinCheckResponse);
+            },
+        };
+        agent._ckbtcWithdrawalMinterClient = minterClient(
+            new CkbtcMinterClient(new AnonymousIdentity(), httpAgent, true),
+            "retrieve_btc_with_approval",
+            { Ok: { block_index: 1n } },
+        );
+        agent._cksolMinterClient = minterClient(
+            new CksolMinterClient(new AnonymousIdentity(), httpAgent),
+            "withdraw_sol",
+            { Ok: { block_index: 1n } },
+        );
+        agent._oneSecMinterClient = minterClient(
+            new OneSecMinterClient(new AnonymousIdentity(), httpAgent, ONE_SEC_MINTER.toText()),
+            "transfer_icp_to_evm",
+            { Accepted: { id: 1n } },
+        );
+    });
+
+    const withdrawBtc = () => agent.withdrawBtc("bc1qaddress", 60_000n, PIN);
+    const withdrawSol = () => agent.withdrawSol("solanaaddress", 20_000_000n, PIN);
+    const withdrawUsdc = (symbol = "USDC") =>
+        agent.withdrawViaOneSec(USDC_LEDGER, symbol, "Base", "0xabc", 5_000_000n, PIN);
+
+    test("BTC is withdrawn by approving the ckBTC minter to burn the amount, once the PIN is checked", async () => {
+        expect(await withdrawBtc()).toEqual({ kind: "success" });
+        expect(pinChecks).toEqual([PIN]);
+        expect(approvals).toEqual([
+            [LEDGER_CANISTER_CKBTC, { owner: CKBTC_MINTER }, 60_000n, FEE, APPROVAL_VALIDITY_MS],
+        ]);
+        expect(minterCalls).toEqual([
+            { address: "bc1qaddress", amount: 60_000n, from_subaccount: [] },
+        ]);
+    });
+
+    test("SOL is withdrawn by approving the ckSOL minter to burn the amount, once the PIN is checked", async () => {
+        expect(await withdrawSol()).toEqual({ kind: "success" });
+        expect(pinChecks).toEqual([PIN]);
+        expect(approvals).toEqual([
+            [
+                LEDGER_CANISTER_CKSOL,
+                { owner: CKSOL_MINTER },
+                20_000_000n,
+                CKSOL_FEE,
+                APPROVAL_VALIDITY_MS,
+            ],
+        ]);
+        expect(minterCalls).toEqual([
+            { address: "solanaaddress", amount: 20_000_000n, from_subaccount: [] },
+        ]);
+    });
+
+    test("USDC is withdrawn by approving OneSec to take the amount from the wallet, once the PIN is checked", async () => {
+        expect(await withdrawUsdc()).toEqual({ kind: "success" });
+        expect(pinChecks).toEqual([PIN]);
+        expect(approvals).toEqual([
+            [USDC_LEDGER, { owner: ONE_SEC_MINTER }, 5_000_000n, USDC_FEE, APPROVAL_VALIDITY_MS],
+        ]);
+        expect(minterCalls).toEqual([
+            {
+                token: { USDC: null },
+                evm_chain: { Base: null },
+                evm_account: { address: "0xabc" },
+                icp_account: { ICRC: { owner: ME, subaccount: [] } },
+                icp_amount: 5_000_000n,
+                evm_amount: [],
+            },
+        ]);
+    });
+
+    test.each([
+        ["BTC", withdrawBtc],
+        ["SOL", withdrawSol],
+        ["USDC", () => withdrawUsdc()],
+    ])("%s isn't withdrawn with the wrong PIN", async (_, withdraw) => {
+        pinCheckResponse = PIN_INCORRECT;
+
+        expect(await withdraw()).toEqual(PIN_INCORRECT);
+        expect(approvals).toEqual([]);
+        expect(minterCalls).toEqual([]);
+    });
+
+    test.each([
+        ["BTC", withdrawBtc],
+        ["SOL", withdrawSol],
+        ["USDC", () => withdrawUsdc()],
+    ])("%s isn't withdrawn if the wallet can't cover it", async (_, withdraw) => {
+        approvalResponse = "insufficient_funds";
+
+        expect(await withdraw()).toEqual({
+            kind: "error",
+            code: ErrorCode.InsufficientFunds,
+            message: undefined,
+        });
+        expect(minterCalls).toEqual([]);
+    });
+
+    test("a token OneSec isn't used for is refused before anything is approved", async () => {
+        expect(await withdrawUsdc("ICP")).toEqual({
+            kind: "error",
+            code: ErrorCode.CurrencyNotSupported,
+            message: undefined,
+        });
+        expect(pinChecks).toEqual([]);
+        expect(approvals).toEqual([]);
+        expect(minterCalls).toEqual([]);
     });
 });
 
@@ -753,9 +1114,11 @@ describe("OpenChatAgent moving funds from the user's previous wallets", () => {
         return ledgers.map((ledger) => ({ previousUserId, ledger, balance: 1_000_000n }));
     }
 
-    test("finds the balances above the fee on each token in the wallets of previous canisters", async () => {
-        balances.set(`${PREVIOUS}:${ICP_LEDGER}`, FEE + 1n);
-        balances.set(`${PREVIOUS}:${LEDGER_CANISTER_CHAT}`, CHAT_FEE);
+    // The LocalUserIndex only moves an amount which exceeds the fee, so a balance must exceed twice
+    // the fee
+    test("finds the balances above twice the fee on each token in the wallets of previous canisters", async () => {
+        balances.set(`${PREVIOUS}:${ICP_LEDGER}`, 2n * FEE + 1n);
+        balances.set(`${PREVIOUS}:${LEDGER_CANISTER_CHAT}`, 2n * CHAT_FEE);
         balances.set(`${OTHER_PREVIOUS}:${LEDGER_CANISTER_CHAT}`, 5_000n);
 
         // A previous id in a MultiUser canister had no wallet of its own, and the dead ledger's
@@ -767,7 +1130,7 @@ describe("OpenChatAgent moving funds from the user's previous wallets", () => {
         ]);
 
         expect(found).toEqual([
-            { previousUserId: PREVIOUS, ledger: ICP_LEDGER, balance: FEE + 1n },
+            { previousUserId: PREVIOUS, ledger: ICP_LEDGER, balance: 2n * FEE + 1n },
             { previousUserId: OTHER_PREVIOUS, ledger: LEDGER_CANISTER_CHAT, balance: 5_000n },
         ]);
         expect(balanceOwners).toEqual(new Set([PREVIOUS, OTHER_PREVIOUS]));
@@ -976,78 +1339,18 @@ describe("OpenChatAgent moving funds from the user's previous wallets", () => {
     });
 });
 
-// A user migrated to a MultiUser canister is referred to by their earlier id in the events from
-// before then, which the agent replaces with their current id
-describe("OpenChatAgent referring to the user by their current id", () => {
-    const PREVIOUS = USER_CANISTER_USER;
+// The ids the user had before being migrated to a MultiUser canister, whose wallets are in their
+// history (see "OpenChatAgent listing the transactions of each of the user's wallets")
+describe("OpenChatAgent taking the user's previous ids from the current user", () => {
+    const PREVIOUS = OLD_USER_ID;
     const CURRENT = MULTI_USER_CANISTER_USER;
-    const GROUP_ID = { kind: "group_chat", groupId: "rdmx6-jaaaa-aaaaa-aaadq-cai" } as const;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    function agent(previousUserIds: string[]): any {
+    // Runs `getCurrentUser` with the given results, the last being the live one, returning the
+    // mapping after each
+    async function mappingsAfter(results: { userId: string; previousUserIds?: string[] }[]) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const agent = Object.create(OpenChatAgent.prototype) as any;
-        agent._ownLatestUserIds = new Map(previousUserIds.map((id) => [id, CURRENT]));
-        return agent;
-    }
-
-    function sentBy(sender: string): EventWrapper<Message> {
-        return {
-            index: 3,
-            timestamp: 10n,
-            event: {
-                kind: "message",
-                messageId: 1n,
-                messageIndex: 2,
-                sender,
-                content: { kind: "text_content", text: "hello" },
-                reactions: [{ reaction: "👍", userIds: new Set([sender, THEM]) }],
-                tips: { [ICP_LEDGER]: { [sender]: 100n } },
-                edited: false,
-                forwarded: false,
-                deleted: false,
-                blockLevelMarkdown: false,
-                senderContext: undefined,
-                ogPreviews: [],
-                messagePreviews: [],
-            },
-        } as EventWrapper<Message>;
-    }
-
-    function rehydrated(previousUserIds: string[], event: EventWrapper<Message>) {
-        return agent(previousUserIds).rehydrateEvent(
-            event,
-            GROUP_ID,
-            new AsyncMessageContextMap(),
-            { messages: new AsyncMessageContextMap(), previews: new Map() },
-            undefined,
-        );
-    }
-
-    test("an event from before they were migrated is from their current id", () => {
-        expect(rehydrated([PREVIOUS], sentBy(PREVIOUS)).event).toMatchObject({
-            sender: CURRENT,
-            reactions: [{ reaction: "👍", userIds: new Set([CURRENT, THEM]) }],
-            tips: { [ICP_LEDGER]: { [CURRENT]: 100n } },
-        });
-    });
-
-    test("an event from anyone else, or for a user who wasn't migrated, is left as it is", () => {
-        const fromThem = sentBy(THEM);
-        expect(rehydrated([PREVIOUS], fromThem)).toBe(fromThem);
-
-        const fromPrevious = sentBy(PREVIOUS);
-        expect(rehydrated([], fromPrevious)).toBe(fromPrevious);
-    });
-
-    // Runs `getCurrentUser` with the given results, the last being the live one, as the session
-    // `sessionUserId`, returning the mapping after each
-    async function mappingsAfter(
-        sessionUserId: string,
-        results: { userId: string; previousUserIds?: string[] }[],
-    ) {
-        const user = agent([]);
-        user._userClient = { userId: sessionUserId };
+        const user = Object.create(OpenChatAgent.prototype) as any;
+        user._ownLatestUserIds = new Map();
         user._userIndexClient = {
             getCurrentUser: () =>
                 new Stream((resolve) =>
@@ -1072,7 +1375,7 @@ describe("OpenChatAgent referring to the user by their current id", () => {
 
     test("the previous ids are taken from each current user result, the cached one then the live one", async () => {
         // A user cached before their previous ids were, then the live one
-        const { seen } = await mappingsAfter(CURRENT, [
+        const { seen } = await mappingsAfter([
             { userId: CURRENT },
             { userId: CURRENT, previousUserIds: [PREVIOUS] },
         ]);
@@ -1080,110 +1383,13 @@ describe("OpenChatAgent referring to the user by their current id", () => {
         expect(seen).toEqual([new Map(), new Map([[PREVIOUS, CURRENT]])]);
     });
 
-    test("the user's ids are mapped to the one the session is under", async () => {
-        // Before the user client is created, the result's own id
-        const before = await mappingsAfter("anon", [
-            { userId: CURRENT, previousUserIds: [PREVIOUS] },
+    test("a new account on the same principal as a deleted one doesn't take on its earlier ids", async () => {
+        const { seen } = await mappingsAfter([
+            { userId: THEM, previousUserIds: [PREVIOUS] },
+            { userId: CURRENT },
         ]);
-        expect(before.seen).toEqual([new Map([[PREVIOUS, CURRENT]])]);
 
-        // A session carrying on under the earlier id, which the client does if it can't restart
-        // under the latest, has what they did under the latest mapped back to it
-        const stayed = await mappingsAfter(PREVIOUS, [
-            { userId: PREVIOUS },
-            { userId: CURRENT, previousUserIds: [PREVIOUS] },
-        ]);
-        expect(stayed.seen).toEqual([new Map(), new Map([[CURRENT, PREVIOUS]])]);
-
-        // And once the session's user client is created under the latest id, the other way round
-        stayed.user._chatEventsReader = { setUserClient: () => {} };
-        stayed.user.createUserClient(CURRENT);
-        expect(stayed.user._ownLatestUserIds).toEqual(new Map([[PREVIOUS, CURRENT]]));
-    });
-
-    test("an id which isn't one of the user's maps nothing onto the session's", async () => {
-        // eg. a new account on the same principal as a deleted one
-        const { seen } = await mappingsAfter(THEM, [{ userId: THEM }, { userId: CURRENT }]);
-
-        expect(seen).toEqual([new Map(), new Map()]);
-    });
-
-    test("a reply to a message from before they were migrated is from their current id", () => {
-        const missingReplies = new AsyncMessageContextMap<EventWrapper<Message>>();
-        missingReplies.insert(
-            { chatId: GROUP_ID, threadRootMessageIndex: undefined },
-            {
-                ...sentBy(PREVIOUS),
-                index: 7,
-            },
-        );
-        const reply = sentBy(THEM);
-        reply.event.repliesTo = {
-            kind: "raw_reply_context",
-            eventIndex: 7,
-        } as unknown as Message["repliesTo"];
-
-        const replied = agent([PREVIOUS]).rehydrateEvent(
-            reply,
-            GROUP_ID,
-            missingReplies,
-            { messages: new AsyncMessageContextMap(), previews: new Map() },
-            undefined,
-        );
-
-        expect(replied.event.repliesTo).toMatchObject({
-            kind: "rehydrated_reply_context",
-            senderId: CURRENT,
-        });
-    });
-
-    test("a message which failed before they were migrated is from their current id", async () => {
-        const user = agent([PREVIOUS]);
-        const failed = { 2: sentBy(PREVIOUS) };
-        user._chatsDb = {
-            loadFailedMessages: () => Promise.resolve({ toMap: () => new Map([["chat", failed]]) }),
-        };
-
-        const loaded = await user.loadFailedMessages();
-
-        expect(loaded.get("chat")[2].event.sender).toEqual(CURRENT);
-    });
-
-    test("a message deleted or undeleted from before they were migrated refers to their current id", async () => {
-        const user = agent([PREVIOUS]);
-        const content = crypto(undefined, PREVIOUS);
-        user._userClient = {
-            getDeletedMessage: () => Promise.resolve({ kind: "success", content }),
-            undeleteMessage: () =>
-                Promise.resolve({
-                    kind: "success",
-                    message: { ...sentBy(PREVIOUS).event, content },
-                }),
-        };
-        user._groupClient = {
-            getDeletedMessage: () => Promise.resolve({ kind: "success", content }),
-        };
-
-        const direct = await user.getDeletedDirectMessage(THEM, 1n);
-        const group = await user.getDeletedGroupMessage(GROUP_ID, 1n);
-        const undeleted = await user.undeleteMessage({ kind: "direct_chat", userId: THEM }, 1n);
-
-        expect(direct.content.transfer.recipient).toEqual(CURRENT);
-        expect(group.content.transfer.recipient).toEqual(CURRENT);
-        expect(undeleted.message).toMatchObject({
-            sender: CURRENT,
-            content: { transfer: { recipient: CURRENT } },
-        });
-    });
-
-    test("a chat's latest message from before they were migrated is from their current id", () => {
-        const chat = { kind: "direct_chat", them: THEM, latestMessage: sentBy(PREVIOUS) };
-
-        expect(agent([PREVIOUS]).hydrateChatSummary(chat).latestMessage.event.sender).toEqual(
-            CURRENT,
-        );
-        // The other user in the chat is left as they are
-        expect(agent([THEM]).hydrateChatSummary(chat).them).toEqual(THEM);
+        expect(seen).toEqual([new Map([[PREVIOUS, THEM]]), new Map()]);
     });
 });
 
@@ -1199,8 +1405,8 @@ describe("OpenChatAgent approving a spender", () => {
     const GATE_APPROVAL = 1_000n - FEE;
 
     let approvals: unknown[][];
-    let approveResponse: "success" | "insufficient_funds" | "failure";
-    let userCanisterApprovals: unknown[][];
+    let pinChecks: [string, number][];
+    let pinCheckResponse: "success" | "incorrect";
     let submitted: unknown[][];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let agent: any;
@@ -1209,17 +1415,20 @@ describe("OpenChatAgent approving a spender", () => {
         agent = Object.create(OpenChatAgent.prototype);
         agent.identity = { getPrincipal: () => ME };
         agent._registryValue = { tokenDetails: [{ ledger: ICP_LEDGER, transferFee: FEE }] };
+        agent._agent = { syncTime: () => Promise.resolve(), getTimeDiffMsecs: () => 0 };
         agent._ledgerClient = {
             approveSpending: (...args: unknown[]) => {
                 approvals.push(args);
-                return Promise.resolve(approveResponse);
+                return Promise.resolve("success");
             },
         };
         agent._userClient = {
             userId,
-            approveTransfer: (...args: unknown[]) => {
-                userCanisterApprovals.push(args);
-                return Promise.resolve({ kind: "success" });
+            checkPinNumber: (pin: string) => {
+                pinChecks.push([pin, approvals.length]);
+                return Promise.resolve(
+                    pinCheckResponse === "success" ? { kind: "success" } : PIN_INCORRECT,
+                );
             },
         };
         agent._proposalsBotClient = {
@@ -1259,12 +1468,12 @@ describe("OpenChatAgent approving a spender", () => {
 
     beforeEach(() => {
         approvals = [];
-        approveResponse = "success";
-        userCanisterApprovals = [];
+        pinChecks = [];
+        pinCheckResponse = "success";
         submitted = [];
     });
 
-    describe("by a user in a MultiUser canister", () => {
+    describe("by a user", () => {
         beforeEach(() => setup(MULTI_USER_CANISTER_USER));
 
         test.each([
@@ -1285,7 +1494,6 @@ describe("OpenChatAgent approving a spender", () => {
                         Number(FIVE_MINUTES),
                     ],
                 ]);
-                expect(userCanisterApprovals).toEqual([]);
             },
         );
 
@@ -1295,7 +1503,23 @@ describe("OpenChatAgent approving a spender", () => {
             expect(approvals).toEqual([
                 [ICP_LEDGER, proposalsBotSpender, 100n, FEE, Number(FIVE_MINUTES)],
             ]);
-            expect(userCanisterApprovals).toEqual([]);
+        });
+
+        test.each([
+            ["a gate's payment", approveGatePayment],
+            ["a proposal's fee", approveProposalFee],
+        ])("%s has its PIN checked by their canister first", async (_, approve) => {
+            await approve();
+
+            expect(pinChecks).toEqual([["1234", 0]]);
+            expect(approvals.length).toEqual(1);
+        });
+
+        test("a gate's payment isn't approved with the wrong PIN", async () => {
+            pinCheckResponse = "incorrect";
+
+            expect(await approveGatePayment()).toEqual(PIN_INCORRECT);
+            expect(approvals).toEqual([]);
         });
 
         test("with no expiry, the approval lasts only as long as a payment pulled at once needs", async () => {
@@ -1304,15 +1528,6 @@ describe("OpenChatAgent approving a spender", () => {
             expect(approvals).toEqual([
                 [ICP_LEDGER, proposalsBotSpender, 100n, FEE, APPROVAL_VALIDITY_MS],
             ]);
-        });
-
-        test.each([
-            ["insufficient_funds", ErrorCode.InsufficientFunds],
-            ["failure", ErrorCode.ApprovalFailed],
-        ] as const)("an approval which fails with %s is reported", async (response, code) => {
-            approveResponse = response;
-
-            expect(await approveGatePayment()).toEqual({ kind: "error", code, message: undefined });
         });
 
         test("nothing is approved while the ledger's fee isn't known", async () => {
@@ -1324,7 +1539,6 @@ describe("OpenChatAgent approving a spender", () => {
                 message: undefined,
             });
             expect(approvals).toEqual([]);
-            expect(userCanisterApprovals).toEqual([]);
         });
 
         test("a proposal's fee is pulled from their wallet", async () => {
@@ -1334,54 +1548,19 @@ describe("OpenChatAgent approving a spender", () => {
             expect(submitted[0][0]).toEqual(ME.toText());
         });
     });
-
-    describe("by a user alone in their canister", () => {
-        beforeEach(() => setup(USER_CANISTER_USER));
-
-        test.each([
-            ["group", GROUP.groupId],
-            ["community", CHANNEL.communityId],
-        ])(
-            "their canister approves a %s to pull a gate's payment as their member spender, checking their PIN",
-            async (_, canisterId) => {
-                expect(await approveGatePayment(canisterId)).toEqual({ kind: "success" });
-
-                expect(userCanisterApprovals).toEqual([
-                    [memberSpender(canisterId), ICP_LEDGER, GATE_APPROVAL, FIVE_MINUTES, "1234"],
-                ]);
-                expect(approvals).toEqual([]);
-            },
-        );
-
-        test("their canister approves the ProposalsBot to pull a proposal's fee as its own account, checking their PIN", async () => {
-            expect(await approveProposalFee()).toEqual({ kind: "success" });
-
-            expect(userCanisterApprovals).toEqual([
-                [proposalsBotSpender, ICP_LEDGER, 100n, FIVE_MINUTES, "1234"],
-            ]);
-            expect(approvals).toEqual([]);
-        });
-
-        test("a proposal's fee is pulled from their canister's account", async () => {
-            await submitProposal(USER_CANISTER_USER);
-
-            expect(submitted.length).toEqual(1);
-            expect(submitted[0][0]).toEqual(USER_CANISTER_USER);
-        });
-    });
 });
 
 // A user migrated to a MultiUser canister held their funds in their User canister's account until
 // then, and in their principal's account since, so their history is that of both
 describe("OpenChatAgent listing the transactions of each of the user's wallets", () => {
-    const PREVIOUS = USER_CANISTER_USER;
+    const PREVIOUS = OLD_USER_ID;
     const CURRENT = MULTI_USER_CANISTER_USER;
     const LEDGER_INDEX = "qhbym-qaaaa-aaaaa-aaafq-cai";
 
     // The wallets fetched, by their owner, and the user each was named as being
     let fetched: { owner: string; userId: string }[];
 
-    // An agent whose session is under `sessionUserId`, with the user's other ids mapped as given,
+    // An agent whose session is under `sessionUserId`, with the user's earlier ids mapped as given,
     // and whose ledger index holds `history`, by wallet owner, of transaction ids
     function setup(
         sessionUserId: string,
@@ -1438,23 +1617,464 @@ describe("OpenChatAgent listing the transactions of each of the user's wallets",
         expect(fetched).toEqual([{ owner: ME.toText(), userId: CURRENT }]);
     });
 
-    test("a session under the earlier id lists the latest id's wallet too", async () => {
-        const agent = setup(PREVIOUS, [[CURRENT, PREVIOUS]]);
+    test("a session under an id other than the user's latest adds no wallets", async () => {
+        // eg. that of a deleted account, until the session restarts under the new one on the same
+        // principal
+        const agent = setup(THEM, [[PREVIOUS, CURRENT]]);
 
-        await agent.getAccountTransactions(LEDGER_INDEX, PREVIOUS);
+        await agent.getAccountTransactions(LEDGER_INDEX, THEM);
 
-        expect(fetched).toEqual([
-            { owner: PREVIOUS, userId: PREVIOUS },
-            { owner: ME.toText(), userId: PREVIOUS },
+        expect(fetched).toEqual([{ owner: THEM, userId: THEM }]);
+    });
+});
+
+// The user swaps straight from their wallet, which their canister only records as the swap starts
+// and ends
+describe("OpenChatAgent swapping tokens", () => {
+    const POOL = "ne2vj-6yaaa-aaaag-qb3ia-cai";
+    const TACO_EXCHANGE = "qioex-5iaaa-aaaan-q52ba-cai";
+    const ICP_DETAILS = {
+        ledger: ICP_LEDGER,
+        symbol: "ICP",
+        decimals: 8,
+        transferFee: FEE,
+    } as CryptocurrencyDetails;
+    const CHAT_DETAILS = {
+        ledger: LEDGER_CANISTER_CHAT,
+        symbol: "CHAT",
+        decimals: 8,
+        transferFee: CHAT_FEE,
+    } as CryptocurrencyDetails;
+
+    let calls: unknown[][];
+    let approveResponse: "success" | "insufficient_funds" | "failure";
+    let swapResult: () => Promise<DexSwapResult>;
+    let unusedBalances:
+        | { ledger: string; balance: bigint }[]
+        | (() => { ledger: string; balance: bigint }[]);
+    let withdrawSucceeds: boolean;
+    let unfinishedSwaps: UnfinishedTokenSwap[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let agent: any;
+
+    function setup(userId: string) {
+        const called =
+            (name: string, response: unknown = { kind: "success" }) =>
+            (...args: unknown[]) => {
+                calls.push([name, ...args]);
+                return Promise.resolve(response);
+            };
+        agent = Object.create(OpenChatAgent.prototype);
+        agent.identity = { getPrincipal: () => ME };
+        agent._registryValue = {
+            tokenDetails: [
+                { ledger: ICP_LEDGER, transferFee: FEE },
+                { ledger: LEDGER_CANISTER_CHAT, transferFee: CHAT_FEE },
+            ],
+            swapProviders: ["icpswap", "taco"],
+        };
+        agent._dexesAgent = {
+            get: () => ({
+                getSwapPools: () =>
+                    Promise.resolve([
+                        {
+                            dex: "icpswap",
+                            canisterId: POOL,
+                            token0: ICP_LEDGER,
+                            token1: LEDGER_CANISTER_CHAT,
+                        },
+                        {
+                            dex: "taco",
+                            canisterId: TACO_EXCHANGE,
+                            token0: LEDGER_CANISTER_CHAT,
+                            token1: ICP_LEDGER,
+                        },
+                    ]),
+            }),
+        };
+        agent._ledgerClient = {
+            approveSpending: (...args: unknown[]) => {
+                calls.push(["approve", ...args]);
+                return Promise.resolve(approveResponse);
+            },
+        };
+        agent._userClient = {
+            userId,
+            markTokenSwapStarted: called("started"),
+            markTokenSwapCompleted: called("completed"),
+            unfinishedTokenSwaps: () => Promise.resolve(unfinishedSwaps),
+        };
+        agent.icpSwapPoolClient = (canisterId: string, token0: string, token1: string) => ({
+            swapFromWallet: (...args: unknown[]) => {
+                calls.push(["swap", canisterId, ...args]);
+                return swapResult();
+            },
+            unusedBalances: (principal: Principal) => {
+                calls.push(["unusedBalances", canisterId, token0, token1, principal]);
+                return Promise.resolve(
+                    typeof unusedBalances === "function" ? unusedBalances() : unusedBalances,
+                );
+            },
+            withdraw: (...args: unknown[]) => {
+                calls.push(["withdraw", canisterId, ...args]);
+                return Promise.resolve(withdrawSucceeds);
+            },
+        });
+        agent.tacoPoolClient = () => ({
+            swapFromWallet: (...args: unknown[]) => {
+                calls.push(["tacoSwap", ...args]);
+                return swapResult();
+            },
+        });
+    }
+
+    beforeEach(() => {
+        calls = [];
+        approveResponse = "success";
+        swapResult = () => Promise.resolve({ kind: "success", amountOut: 400n });
+        unusedBalances = [];
+        withdrawSucceeds = true;
+        unfinishedSwaps = [];
+        setup(MULTI_USER_CANISTER_USER);
+    });
+
+    // Swaps, giving how the swap ended along with the steps it reported along the way
+    const swapWith = (amountIn: bigint, pin?: string, dex = "icpswap") =>
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        new Promise<{ response: any; steps: string[] }>((resolve, reject) => {
+            const steps: string[] = [];
+            agent.swapTokens(123n, ICP_DETAILS, CHAT_DETAILS, amountIn, 500n, dex, pin).subscribe({
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                onResult: (value: any, final: boolean) => {
+                    if (final) {
+                        resolve({ response: value, steps });
+                    } else {
+                        steps.push(value.step);
+                        withdrawStep = value.step === "withdraw" ? value : withdrawStep;
+                    }
+                },
+                onError: reject,
+            });
+        });
+    const swap = (pin?: string) => swapWith(1_000n, pin);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let withdrawStep: any;
+
+    const exchangeArgs = { dex: "icpswap", swapCanisterId: POOL, zeroForOne: true };
+
+    test("records the swap, approves the pool, swaps, then records how it ended", async () => {
+        const { response, steps } = await swap("1234");
+
+        expect(response).toEqual({ kind: "success", amountOut: 400n });
+        expect(steps).toEqual(["approve", "swap", "withdraw"]);
+        expect(withdrawStep).toEqual({ kind: "swap_step", step: "withdraw", amountOut: 400n });
+        // The PIN is checked as the swap is recorded, so not again for the approval. The
+        // approval's fee and the pool's pull are taken out of the amount swapped, so the swap
+        // takes 1_000 from the wallet in all. Once swapped, the pool is checked for having paid
+        // out the output.
+        expect(calls).toEqual([
+            ["started", 123n, ICP_DETAILS, CHAT_DETAILS, 1_000n, 500n, exchangeArgs, "1234"],
+            [
+                "approve",
+                ICP_LEDGER,
+                { owner: Principal.fromText(POOL) },
+                990n,
+                FEE,
+                APPROVAL_VALIDITY_MS,
+            ],
+            ["swap", POOL, ICP_LEDGER, LEDGER_CANISTER_CHAT, 980n, 500n, FEE, CHAT_FEE],
+            ["completed", 123n, { kind: "swapped", amountOut: 400n }],
+            ["unusedBalances", POOL, ICP_LEDGER, LEDGER_CANISTER_CHAT, ME],
         ]);
     });
 
-    test("ids which aren't mapped onto the session's add no wallets", async () => {
-        // eg. a new account on the same principal as a deleted one
-        const agent = setup(CURRENT, [[PREVIOUS, THEM]]);
+    test("a swap the user's canister won't record, eg. for the wrong PIN, goes no further", async () => {
+        agent._userClient.markTokenSwapStarted = (...args: unknown[]) => {
+            calls.push(["started", ...args]);
+            return Promise.resolve(PIN_INCORRECT);
+        };
 
-        await agent.getAccountTransactions(LEDGER_INDEX, CURRENT);
+        expect(await swap("4321")).toEqual({ response: PIN_INCORRECT, steps: [] });
+        expect(calls.map((c) => c[0])).toEqual(["started"]);
+    });
 
-        expect(fetched).toEqual([{ owner: ME.toText(), userId: CURRENT }]);
+    test("a swap the DEX refuses as the rate has moved is recorded as failed", async () => {
+        const error =
+            '{"InternalError":"Slippage check failed: minimum amount requirement not met"}';
+        swapResult = () => Promise.resolve({ kind: "error", error, rateChanged: true });
+
+        const { response } = await swap();
+        expect(response).toEqual({ kind: "error", code: ErrorCode.SwapFailed, message: error });
+        expect(calls.at(-1)).toEqual(["completed", 123n, { kind: "failed", reason: error }]);
+    });
+
+    test("a swap the DEX refuses for any other reason is recorded as failed", async () => {
+        const error = '{"InternalError":"Wrong fee cache (expected: 20, received: 10)"}';
+        swapResult = () => Promise.resolve({ kind: "error", error, rateChanged: false });
+
+        expect((await swap()).response).toEqual({ kind: "internal_error", error });
+        expect(calls.at(-1)).toEqual(["completed", 123n, { kind: "failed", reason: error }]);
+    });
+
+    test("recording how a swap ended is retried", async () => {
+        let attempts = 0;
+        agent._userClient.markTokenSwapCompleted = (...args: unknown[]) => {
+            calls.push(["completed", ...args]);
+            return ++attempts < 3
+                ? Promise.reject(new Error("offline"))
+                : Promise.resolve({ kind: "success" });
+        };
+
+        expect((await swap()).response).toEqual({ kind: "success", amountOut: 400n });
+        expect(calls.filter((c) => c[0] === "completed")).toHaveLength(3);
+    });
+
+    test("a swap whose outcome is unknown is left unfinished", async () => {
+        swapResult = () => Promise.reject(new Error("timed out"));
+
+        const { response, steps } = await swap();
+        expect(response.kind).toBe("error");
+        expect(response.code).toBe(ErrorCode.Unknown);
+        expect(steps).toEqual(["approve", "swap"]);
+        expect(calls.map((c) => c[0])).toEqual(["started", "approve", "swap"]);
+    });
+
+    test("a swap whose pool can't be approved is recorded as failed", async () => {
+        approveResponse = "insufficient_funds";
+
+        const { response, steps } = await swap();
+        expect(response.code).toBe(ErrorCode.InsufficientFunds);
+        expect(steps).toEqual(["approve"]);
+        expect(calls.map((c) => c[0])).toEqual(["started", "approve", "completed"]);
+        expect(calls.at(-1)?.[2]).toMatchObject({ kind: "failed" });
+    });
+
+    test("too little to cover the fees is refused before anything is recorded", async () => {
+        const { response } = await swapWith(3n * FEE);
+
+        expect(response.code).toBe(ErrorCode.InsufficientFunds);
+        expect(calls).toEqual([]);
+    });
+
+    test("waits for the pool to pay out the output, without withdrawing it", async () => {
+        let checks = 0;
+        unusedBalances = () =>
+            ++checks === 1 ? [{ ledger: LEDGER_CANISTER_CHAT, balance: 5_000n }] : [];
+
+        vi.useFakeTimers();
+        try {
+            const swapped = swap();
+            await vi.runAllTimersAsync();
+            const { response, steps } = await swapped;
+
+            expect(response).toEqual({ kind: "success", amountOut: 400n });
+            expect(steps).toEqual(["approve", "swap", "withdraw"]);
+            expect(calls.filter((c) => c[0] === "unusedBalances")).toHaveLength(2);
+            expect(calls.some((c) => c[0] === "withdraw")).toBe(false);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    // The pool's own withdrawals join the queue it pays out from, so withdrawing the output would
+    // only put it at the back
+    test("leaves the output to the pool if it hasn't paid it out in time", async () => {
+        unusedBalances = [{ ledger: LEDGER_CANISTER_CHAT, balance: 5_000n }];
+
+        vi.useFakeTimers();
+        try {
+            const swapped = swap();
+            await vi.runAllTimersAsync();
+            const { response } = await swapped;
+
+            expect(response).toEqual({ kind: "success", amountOut: 400n });
+            expect(calls.filter((c) => c[0] === "unusedBalances")).toHaveLength(10);
+            expect(calls.some((c) => c[0] === "withdraw")).toBe(false);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    test("a pool whose balances can't be read is left to pay out", async () => {
+        agent.icpSwapPoolClient = () => ({
+            swapFromWallet: () => swapResult(),
+            unusedBalances: () => {
+                calls.push(["unusedBalances"]);
+                return Promise.reject(new Error("unavailable"));
+            },
+        });
+
+        expect((await swap()).response).toEqual({ kind: "success", amountOut: 400n });
+        expect(calls.filter((c) => c[0] === "unusedBalances")).toHaveLength(1);
+    });
+
+    // A DEX which may have gone ahead with a swap it reports as failed, as TACO may with one whose
+    // output fell short of the minimum, reports it as unconfirmed
+    test("a swap the DEX can't confirm is recorded as failed, telling the user to check", async () => {
+        const error = 'SlippageExceeded: {"expected":"500","got":"450"}';
+        swapResult = () => Promise.resolve({ kind: "unconfirmed", error });
+
+        const { response } = await swap();
+        expect(response).toEqual({ kind: "error", code: ErrorCode.Unknown, message: error });
+        expect(calls.at(-1)).toEqual(["completed", 123n, { kind: "failed", reason: error }]);
+    });
+
+    test("swaps via TACO, approving its exchange, which pays out the output itself", async () => {
+        const { response, steps } = await swapWith(1_000n, "1234", "taco");
+
+        expect(response).toEqual({ kind: "success", amountOut: 400n });
+        expect(steps).toEqual(["approve", "swap", "withdraw"]);
+        // TACO pulls 980 for the swap, out of which it takes its own fees, as quoted
+        expect(calls).toEqual([
+            [
+                "started",
+                123n,
+                ICP_DETAILS,
+                CHAT_DETAILS,
+                1_000n,
+                500n,
+                {
+                    dex: "taco",
+                    swapCanisterId: TACO_EXCHANGE,
+                    treasuryCanisterId: "qbnpl-laaaa-aaaan-q52aq-cai",
+                },
+                "1234",
+            ],
+            [
+                "approve",
+                ICP_LEDGER,
+                { owner: Principal.fromText(TACO_EXCHANGE) },
+                990n,
+                FEE,
+                APPROVAL_VALIDITY_MS,
+            ],
+            ["tacoSwap", ICP_LEDGER, LEDGER_CANISTER_CHAT, 980n, 500n],
+            ["completed", 123n, { kind: "swapped", amountOut: 400n }],
+        ]);
+    });
+
+    test("every DEX the Registry lists is offered", () => {
+        expect(agent.swapProviders()).toEqual(["icpswap", "taco"]);
+    });
+
+    describe("recovering unfinished swaps", () => {
+        const unfinished = (swapId: bigint): UnfinishedTokenSwap => ({
+            swapId,
+            started: 0n,
+            inputLedger: LEDGER_CANISTER_CHAT,
+            outputLedger: ICP_LEDGER,
+            exchangeArgs: { dex: "icpswap", swapCanisterId: POOL, zeroForOne: false },
+        });
+
+        test("withdraws what the pool holds for the user, then marks the swap completed", async () => {
+            unfinishedSwaps = [unfinished(1n)];
+            unusedBalances = [
+                { ledger: ICP_LEDGER, balance: 500n },
+                { ledger: LEDGER_CANISTER_CHAT, balance: CHAT_FEE },
+            ];
+
+            await agent.recoverUnfinishedTokenSwaps();
+
+            // The pool's tokens are put back in its order, and a balance too small to cover the
+            // fee is left where it is
+            expect(calls).toEqual([
+                ["unusedBalances", POOL, ICP_LEDGER, LEDGER_CANISTER_CHAT, ME],
+                ["withdraw", POOL, ICP_LEDGER, 500n, FEE],
+                [
+                    "completed",
+                    1n,
+                    {
+                        kind: "failed",
+                        reason: "Never marked as completed, so how it ended isn't known",
+                    },
+                ],
+            ]);
+        });
+
+        test("skips a zero balance, even of a token it doesn't know the fee of", async () => {
+            unfinishedSwaps = [unfinished(1n)];
+            unusedBalances = [{ ledger: THEM, balance: 0n }];
+
+            await agent.recoverUnfinishedTokenSwaps();
+
+            expect(calls.map((c) => c[0])).toEqual(["unusedBalances", "completed"]);
+        });
+
+        test("leaves a swap unfinished if its funds can't be withdrawn", async () => {
+            unfinishedSwaps = [unfinished(1n)];
+            unusedBalances = [{ ledger: ICP_LEDGER, balance: 500n }];
+            withdrawSucceeds = false;
+
+            await agent.recoverUnfinishedTokenSwaps();
+
+            expect(calls.map((c) => c[0])).toEqual(["unusedBalances", "withdraw"]);
+        });
+    });
+});
+
+describe("OpenChatAgent loading exchange rates", () => {
+    const CKUSDC_LEDGER = "xevnm-gaaaa-aaaar-qafnq-cai";
+    const CKUSDT_LEDGER = "cngnf-vqaaa-aaaar-qag4q-cai";
+    const USDC_LEDGER = "53nhb-haaaa-aaaar-qbn5q-cai";
+    const USDT_LEDGER = "ij33n-oiaaa-aaaar-qbooa-cai";
+    // Two tokens in the registry with the symbol TENDY
+    const TENDY_LEDGER = "kylwo-viaaa-aaaaq-aae7a-cai";
+    const OTHER_TENDY_LEDGER = "iozql-7iaaa-aaaah-advvq-cai";
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let agent: any;
+
+    beforeEach(() => {
+        agent = Object.create(OpenChatAgent.prototype);
+        agent._registryValue = { tokenDetails: [] };
+        agent._exchangeRateClients = [
+            {
+                exchangeRates: () =>
+                    Promise.resolve({
+                        [ICP_LEDGER]: { toUSD: 4 },
+                        [CKUSDC_LEDGER]: { toUSD: 1 },
+                        [USDC_LEDGER]: { toUSD: 1 },
+                        [OTHER_TENDY_LEDGER]: { toUSD: 0.26 },
+                    }),
+            },
+            {
+                // The prices on ICPSwap of stablecoins in pools with next to no liquidity
+                exchangeRates: () =>
+                    Promise.resolve({
+                        [ICP_LEDGER]: { toUSD: 6 },
+                        [CKUSDC_LEDGER]: { toUSD: 445 },
+                        [USDC_LEDGER]: { toUSD: 0.55 },
+                        [USDT_LEDGER]: { toUSD: 0.00018 },
+                        [TENDY_LEDGER]: { toUSD: 0.08 },
+                        [OTHER_TENDY_LEDGER]: { toUSD: 0.3 },
+                    }),
+            },
+        ];
+    });
+
+    test("pins stablecoins to $1", async () => {
+        const rates = await agent.exchangeRates();
+
+        expect(rates[CKUSDC_LEDGER]).toEqual({ toUSD: 1 });
+        expect(rates[CKUSDT_LEDGER]).toEqual({ toUSD: 1 });
+        expect(rates[USDC_LEDGER]).toEqual({ toUSD: 1 });
+        expect(rates[USDT_LEDGER]).toEqual({ toUSD: 1 });
+    });
+
+    test("averages the rates of each ledger across the providers", async () => {
+        const rates = await agent.exchangeRates();
+
+        expect(rates[ICP_LEDGER]).toEqual({ toUSD: 5 });
+        expect(rates[TENDY_LEDGER]).toEqual({ toUSD: 0.08 });
+        expect(rates[OTHER_TENDY_LEDGER].toUSD).toBeCloseTo(0.28);
+    });
+
+    test("uses the rates of the providers which respond", async () => {
+        agent._exchangeRateClients[0].exchangeRates = () => Promise.reject(new Error("down"));
+
+        const rates = await agent.exchangeRates();
+
+        expect(rates[ICP_LEDGER]).toEqual({ toUSD: 6 });
+        expect(rates[OTHER_TENDY_LEDGER]).toEqual({ toUSD: 0.3 });
     });
 });

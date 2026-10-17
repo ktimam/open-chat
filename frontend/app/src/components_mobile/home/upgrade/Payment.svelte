@@ -24,12 +24,14 @@
         enhancedCryptoLookup,
         LEDGER_CANISTER_CHAT,
         LEDGER_CANISTER_ICP,
+        pinNumberFailureFromError,
         type DiamondMembershipDuration,
         type DiamondMembershipFees,
         type Level,
         type OpenChat,
         type ResourceKey,
         type SignerWallet,
+        walletApprovalFee,
     } from "@client";
     import { getContext, onMount } from "svelte";
     import { _, locale } from "svelte-i18n";
@@ -40,15 +42,16 @@
     import QrCode from "svelte-material-icons/Qrcode.svelte";
     import Refresh from "svelte-material-icons/Refresh.svelte";
     import { i18nKey, interpolate } from "../../../i18n/i18n";
+    import { pinNumberErrorMessageStore } from "../../../stores/pinNumber";
     import { toastStore } from "../../../stores/toast";
     import type { RemoteData } from "../../../utils/remoteData";
     import Setting from "../../Setting.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AccountInfo from "../AccountInfo.svelte";
     import CryptoSelector from "../CryptoSelector.svelte";
     import ExternalWalletApproval from "../ExternalWalletApproval.svelte";
     import SourceWalletSelector from "../SourceWalletSelector.svelte";
-    import { TokenState } from "../wallet/walletState.svelte";
+    import { TokenState } from "@shared_components/home/wallet/walletState.svelte";
     import SelectMembershipHeader from "./SelectMembershipHeader.svelte";
 
     type Step = "choose" | "confirm";
@@ -185,9 +188,16 @@
                 if (resp.kind === "success") {
                     tokenState.refreshBalance(client);
                     onSuccess?.(resp.proof);
+                } else if (resp.kind === "error" && pinNumberFailureFromError(resp) !== undefined) {
+                    toastStore.showFailureToast(pinNumberErrorMessageStore);
                 } else {
-                    const errorKey = "upgrade.paymentFailed";
-                    toastStore.showFailureToast(i18nKey(errorKey));
+                    toastStore.showFailureToast(i18nKey("upgrade.paymentFailed"));
+                }
+            })
+            // Dismissing the PIN prompt cancels the payment, which isn't a failure
+            .catch((err) => {
+                if (err !== "cancelled") {
+                    toastStore.showFailureToast(i18nKey("upgrade.paymentFailed"), err);
                 }
             })
             .finally(() => (confirming = false));
@@ -211,6 +221,10 @@
     let tokenState = $derived(new TokenState(tokenDetails, "usd"));
     let toPayE8s = $derived(amountInE8s(tokenDetails.symbol, diamondFees, selectedOption));
     let toPay = $derived(amount(toPayE8s));
+    // The price includes the transfer's fee, but the wallet also pays for the approval it makes
+    // before the price is pulled from it
+    let approvalFee = $derived(walletApprovalFee(tokenDetails.transferFee));
+    let toPayWithFees = $derived(amount(toPayE8s + approvalFee));
     let insufficientFundsForSelectedSub = $derived(insufficientFundsForSub(selectedOption.index)); //we need to account for the fact that js cannot do maths
     let insufficientFundsForAnySub = $derived(insufficientFundsForSub(0));
     let insufficientFundsForAllSubs = $derived(insufficientFundsForSub(3));
@@ -222,7 +236,7 @@
 
     function insufficientFundsForSub(index: number): boolean {
         const toPayE8s = amountInE8s(tokenDetails.symbol, diamondFees, options[index]);
-        return toPayE8s - tokenState.remainingBalance > 0.0001;
+        return toPayE8s + approvalFee - tokenState.remainingBalance > 0.0001;
     }
 
     let expiry = $derived.by(() => {
@@ -369,6 +383,17 @@
                         {tokenState.symbol}
                     </Body>
                 </Row>
+                {#if approvalFee > 0n}
+                    <Row mainAxisAlignment={"spaceBetween"}>
+                        <BodySmall colour={"textSecondary"}>
+                            <Translatable resourceKey={i18nKey("Fee")} />
+                        </BodySmall>
+                        <Body width={"hug"} colour={"textPrimary"} fontWeight={"bold"}>
+                            {amount(approvalFee)}
+                            {tokenState.symbol}
+                        </Body>
+                    </Row>
+                {/if}
                 <Row mainAxisAlignment={"spaceBetween"}>
                     <BodySmall colour={"textSecondary"}>
                         <Translatable resourceKey={i18nKey("OC treasury receives (100%)")} />
@@ -494,7 +519,7 @@
                 resourceKey={i18nKey(
                     `Insufficient funds! Top up your ${
                         tokenState.symbol
-                    } account with at least ${`${toPay} ${tokenState.symbol}`} or choose a different token as payment.`,
+                    } account with at least ${`${toPayWithFees} ${tokenState.symbol}`} or choose a different token as payment.`,
                 )} />
         </BodySmall>
     </Row>

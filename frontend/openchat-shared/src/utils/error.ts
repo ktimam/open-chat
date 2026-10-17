@@ -138,6 +138,9 @@ const ENVIRONMENT_NOISE_PATTERNS: RegExp[] = [
     // the site's storage from under an open connection
     /internal error was encountered in the indexed database server/i,
     /database deleted by request of the user/i,
+    // Chrome's form of the same: the site's storage was deleted under an open connection, by the
+    // user clearing site data or the browser evicting it (#29538)
+    /force close delete origin/i,
     // Safari's in-app browser bridge complaining about its own injected script
     /wkwebview api client did not respond to this postmessage/i,
     // The client's clock is wrong, so the replica certificate looks like it is from the future;
@@ -163,12 +166,18 @@ const ENVIRONMENT_NOISE_PATTERNS: RegExp[] = [
     // The IC's Bitcoin canister trapping while the Bitcoin API is switched off: an IC-side
     // incident that every background BTC balance refresh hits until it is switched back on (#31771)
     /bitcoin api is disabled/i,
+    // The same canister trapping while it catches up with the Bitcoin network. None of our
+    // canisters use this text (#31771)
+    /canister state is not fully synced/i,
     // A canister stopped for an upgrade rejects every call until it restarts (#31692, #31764).
     // The upgrader restarts it whether or not the install succeeded, and logs a failed start.
     /error code: IC0508\b/i,
     // emoji-picker-element getting a 5xx back from the jsDelivr CDN for its emoji data (#31998):
     // the CDN's outage, not our code. A 4xx would mean the data URL itself broke, so it reports.
     /emoji-picker-element-data\S*:\s+5\d\d\b/i,
+    // A request reaching the worker before its agent exists or after it has gone, around login
+    // and logout. The worker leaves it unreported, but the caller sees it as a rejection (#9757)
+    /worker has no agent to handle request/i,
 ];
 
 function errorName(error: unknown): string {

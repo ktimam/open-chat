@@ -9,6 +9,11 @@ import type {
     WithdrawBtcResponse,
 } from "./bitcoin";
 import type {
+    CksolMinterDepositInfo,
+    CksolMinterWithdrawalInfo,
+    WithdrawSolResponse,
+} from "./solana";
+import type {
     BotCommandResponse,
     BotDefinition,
     BotDefinitionResponse,
@@ -253,18 +258,14 @@ import type {
     SetDisplayNameResponse,
     SetMessageReminderResponse,
     SetUsernameResponse,
-    SetUserUpgradeConcurrencyResponse,
     CreateMultiUserCanisterResponse,
-    MigrateUsersResponse,
-    UserMigrationResponse,
-    UsersToMigrate,
     FundsInPreviousWallet,
     MoveFundsOutcome,
     SubmitProofOfUniquePersonhoodResponse,
     SubmitProposalResponse,
     SuspendUserResponse,
     SwapTokensResponse,
-    TokenSwapStatusResponse,
+    SwapTokensStep,
     UnpinChatResponse,
     UnsuspendUserResponse,
     User,
@@ -283,7 +284,14 @@ export type CorrelatedWorkerRequest = WorkerRequest & {
     correlationId: number;
 };
 
-export type WorkerRequest =
+// A request is copied to the worker by postMessage, which can't copy a function: a request with a
+// function field fails to compile here instead of throwing DataCloneError when it is sent
+type NoFunctionFields<T> = {
+    [K in keyof T]: NonNullable<T[K]> extends (...args: never[]) => unknown ? never : T[K];
+};
+type Cloneable<T extends NoFunctionFields<T>> = T;
+
+export type WorkerRequest = Cloneable<
     | SetAuthIdentity
     | Logout
     | SetMinLogLevel
@@ -399,13 +407,7 @@ export type WorkerRequest =
     | SetGroupModerationFlags
     | SetGroupUpgradeConcurrency
     | SetCommunityUpgradeConcurrency
-    | SetUserUpgradeConcurrency
     | CreateMultiUserCanister
-    | SetMultiUserCanistersEnabled
-    | MigrateUsers
-    | SetUserMigrationConcurrency
-    | GetUserMigration
-    | CancelUserMigration
     | MarkLocalGroupIndexFull
     | SetDiamondMembershipFees
     | StakeNeuronForSubmittingProposals
@@ -480,7 +482,7 @@ export type WorkerRequest =
     | GetTokenSwaps
     | GetTokenSwapQuotes
     | SwapTokens
-    | TokenSwapStatus
+    | RecoverUnfinishedTokenSwaps
     | ApproveTransfer
     | ApproveAccessGatePayment
     | DeleteDirectChat
@@ -517,11 +519,16 @@ export type WorkerRequest =
     | GetLocalUserIndexForUser
     | GenerateBtcAddress
     | GenerateOneSecAddress
+    | GenerateSolAddress
     | UpdateBtcBalance
+    | UpdateSolBalance
     | WithdrawBtc
+    | WithdrawSol
     | WithdrawViaOneSec
     | GetCkbtcMinterDepositInfo
     | GetCkbtcMinterWithdrawalInfo
+    | GetCksolMinterDepositInfo
+    | GetCksolMinterWithdrawalInfo
     | CurrentUserWebAuthnKey
     | LookupWebAuthnPubKey
     | SetCachedWebAuthnKey
@@ -556,7 +563,6 @@ export type WorkerRequest =
     | UpdateRegisteredBot
     | GetBotDefinition
     | CallBotCommandEndpoint
-    | WithdrawFromIcpSwap
     | RegisterWebhook
     | UpdateWebhook
     | RegenerateWebhook
@@ -586,6 +592,7 @@ export type WorkerRequest =
     | DailyPuzzleRegenerateToday
     | CallPushEnabled
     | SetCallPushEnabled
+    | SetAlchemyApiKey
     | SetPremiumItemCost
     | OneSecEnableForwarding
     | OneSecGetTransferFees
@@ -593,7 +600,8 @@ export type WorkerRequest =
     | OneSecGetForwardingStatus
     | UpdateBlockedUsernamePatterns
     | MarkNotificationSubscriptionActive
-    | AbortInFlightQueries;
+    | AbortInFlightQueries
+>;
 
 // Sent when the app resumes after being suspended, see `abortInFlightQueries` in openchat-agent
 type AbortInFlightQueries = {
@@ -714,6 +722,11 @@ type CallPushEnabled = {
 type SetCallPushEnabled = {
     kind: "setCallPushEnabled";
     enabled: boolean;
+};
+// Platform operators only
+type SetAlchemyApiKey = {
+    kind: "setAlchemyApiKey";
+    apiKey: string | undefined;
 };
 type DailyPuzzleRegenerateToday = {
     kind: "dailyPuzzleRegenerateToday";
@@ -942,7 +955,7 @@ type SaveCryptoAccount = {
 
 type DeleteCryptoAccount = {
     kind: "deleteCryptoAccount";
-    account: string;
+    name: string;
 };
 
 type TipMessage = {
@@ -973,6 +986,7 @@ type GetTokenSwapQuotes = {
     inputTokenLedger: string;
     outputTokenLedger: string;
     amountIn: bigint;
+    outputTokenFee: bigint;
 };
 
 type SwapTokens = {
@@ -986,9 +1000,8 @@ type SwapTokens = {
     pin: string | undefined;
 };
 
-type TokenSwapStatus = {
-    kind: "tokenSwapStatus";
-    swapId: bigint;
+type RecoverUnfinishedTokenSwaps = {
+    kind: "recoverUnfinishedTokenSwaps";
 };
 
 type SetCommunityIndexes = {
@@ -1454,7 +1467,6 @@ type FcmTokenExists = {
 type AddFcmToken = {
     kind: "addFcmToken";
     fcmToken: string;
-    onResponseError?: (error: string | null) => void;
 };
 
 type RemoveFcmToken = {
@@ -1886,40 +1898,9 @@ type SetCommunityUpgradeConcurrency = {
     kind: "setCommunityUpgradeConcurrency";
 };
 
-type SetUserUpgradeConcurrency = {
-    value: number;
-    kind: "setUserUpgradeConcurrency";
-};
-
 type CreateMultiUserCanister = {
     localUserIndexCanisterId: string;
     kind: "createMultiUserCanister";
-};
-
-type SetMultiUserCanistersEnabled = {
-    enabled: boolean;
-    kind: "setMultiUserCanistersEnabled";
-};
-
-type MigrateUsers = {
-    users: UsersToMigrate;
-    kind: "migrateUsers";
-};
-
-type SetUserMigrationConcurrency = {
-    value: number;
-    kind: "setUserMigrationConcurrency";
-};
-
-type GetUserMigration = {
-    userId: string;
-    kind: "userMigration";
-};
-
-type CancelUserMigration = {
-    userId: string;
-    multiUserCanisterId: string;
-    kind: "cancelUserMigration";
 };
 
 type MarkLocalGroupIndexFull = {
@@ -2029,10 +2010,18 @@ type GenerateOneSecAddress = {
     kind: "generateOneSecAddress";
 };
 
+type GenerateSolAddress = {
+    kind: "generateSolAddress";
+};
+
 type UpdateBtcBalance = {
     userId: string;
     bitcoinAddress: string;
     kind: "updateBtcBalance";
+};
+
+type UpdateSolBalance = {
+    kind: "updateSolBalance";
 };
 
 type WithdrawBtc = {
@@ -2040,6 +2029,13 @@ type WithdrawBtc = {
     amount: bigint;
     pin: string | undefined;
     kind: "withdrawBtc";
+};
+
+type WithdrawSol = {
+    address: string;
+    amount: bigint;
+    pin: string | undefined;
+    kind: "withdrawSol";
 };
 
 type WithdrawViaOneSec = {
@@ -2059,6 +2055,14 @@ type GetCkbtcMinterDepositInfo = {
 type GetCkbtcMinterWithdrawalInfo = {
     amount: bigint;
     kind: "ckbtcMinterWithdrawalInfo";
+};
+
+type GetCksolMinterDepositInfo = {
+    kind: "cksolMinterDepositInfo";
+};
+
+type GetCksolMinterWithdrawalInfo = {
+    kind: "cksolMinterWithdrawalInfo";
 };
 
 type CurrentUserWebAuthnKey = {
@@ -2135,15 +2139,6 @@ type DeleteUser = {
     delegation: JsonnableDelegationChain;
 };
 
-type WithdrawFromIcpSwap = {
-    kind: "withdrawFromIcpSwap";
-    userId: string;
-    swapId: bigint;
-    inputToken: boolean;
-    amount: bigint | undefined;
-    fee: bigint | undefined;
-};
-
 type CreateAccountLinkingCode = {
     kind: "createAccountLinkingCode";
 };
@@ -2190,7 +2185,6 @@ export type WorkerError = {
 export type WorkerResponseInner =
     | ModerationConfig
     | CreateMultiUserCanisterResponse
-    | UserMigrationResponse
     | Success
     | OCError
     | ProposedProtectedAction
@@ -2321,7 +2315,7 @@ export type WorkerResponseInner =
     | Set<string>
     | [DexId, bigint][]
     | SwapTokensResponse
-    | TokenSwapStatusResponse
+    | SwapTokensStep
     | DiamondMembershipFees[]
     | AiAppRegistration[]
     | { apps: AiAppRegistration[]; total: number }
@@ -2449,6 +2443,7 @@ type PayForDiamondMembership = {
     recurring: boolean;
     expectedPriceE8s: bigint;
     fromAccount: string | undefined;
+    pin: string | undefined;
     kind: "payForDiamondMembership";
 };
 
@@ -2779,615 +2774,323 @@ export type GetOpenChatIdentitySuccess = {
     ocIdentityExpiry: number;
 };
 
-// prettier-ignore
-export type WorkerResult<T> = T extends Init
-    ? void
-    : T extends SetAuthIdentity
-    ? SetAuthIdentityResponse
-    : T extends Logout
-    ? void
-    : T extends SetMinLogLevel
-    ? void
-    : T extends CreateOpenChatIdentity
-    ? CreateOpenChatIdentityResponse
-    : T extends PinMessage
-    ? PinMessageResponse
-    : T extends LoadSavedCryptoAccounts
-    ? NamedAccount[]
-    : T extends SaveCryptoAccount
-    ? SaveCryptoAccountResponse
-    : T extends DeleteCryptoAccount
-    ? DeleteCryptoAccountResponse
-    : T extends TipMessage
-    ? TipMessageResponse
-    : T extends UnpinMessage
-    ? UnpinMessageResponse
-    : T extends GetUpdates
-    ? SyncSinceResponse | undefined
-    : T extends SyncSince
-    ? SyncSinceResponse
-    : T extends RefreshChat
-    ? boolean
-    : T extends GetBots
-    ? BotsResponse
-    : T extends GetDeletedDirectMessage
-    ? DeletedDirectMessageResponse
-    : T extends GetDeletedGroupMessage
-    ? DeletedGroupMessageResponse
-    : T extends CreateUserClient
-    ? void
-    : T extends ChatEvents
-    ? EventsResponse<ChatEvent>
-    : T extends GetUsers
-    ? UsersResponse
-    : T extends MarkMessagesRead
-    ? MarkReadResponse
-    : T extends GetGroupDetails
-    ? GroupChatDetailsResponse
-    : T extends LookupMembers
-    ? LookupMembersResponse
-    : T extends SearchCommunityMembers
-    ? LookupMembersResponse
-    : T extends CurrentUser
-    ? CurrentUserResponse
-    : T extends CreateUserClient
-    ? void
-    : T extends GetAllCachedUsers
-    ? UserSummary[]
-    : T extends LastOnline
-    ? Record<string, number>
-    : T extends MarkAsOnline
-    ? MinutesOnline
-    : T extends ChatEventsWindow
-    ? EventsResponse<ChatEvent>
-    : T extends ChatEventsByEventIndex
-    ? EventsResponse<ChatEvent>
-    : T extends RehydrateMessage
-    ? EventWrapper<Message>
-    : T extends CheckUsername
-    ? CheckUsernameResponse
-    : T extends SearchUsers
-    ? UserSummary[]
-    : T extends GetUserStorageLimits
-    ? StorageStatus
-    : T extends GetPublicGroupSummary
-    ? PublicGroupSummaryResponse
-    : T extends ToggleMuteNotifications
-    ? ToggleMuteNotificationResponse
-    : T extends ArchiveChat
-    ? ArchiveChatResponse
-    : T extends UnArchiveChat
-    ? ArchiveChatResponse
-    : T extends PinChat
-    ? PinChatResponse
-    : T extends UnpinChat
-    ? UnpinChatResponse
-    : T extends BlockUserFromDirectChat
-    ? BlockUserResponse
-    : T extends UnblockUserFromDirectChat
-    ? UnblockUserResponse
-    : T extends SetUserAvatar
-    ? BlobReference
-    : T extends SetProfileBackground
-    ? BlobReference
-    : T extends DeleteGroup
-    ? DeleteGroupResponse
-    : T extends LeaveGroup
-    ? LeaveGroupResponse
-    : T extends JoinGroup
-    ? JoinGroupResponse
-    : T extends UpdateGroup
-    ? UpdateGroupResponse
-    : T extends RegisterPollVote
-    ? RegisterPollVoteResponse
-    : T extends RespondToActionCard
-    ? RespondToActionCardResponse
-    : T extends DeleteMessage
-    ? DeleteMessageResponse
-    : T extends UndeleteMessage
-    ? UndeleteMessageResponse
-    : T extends AddReaction
-    ? AddRemoveReactionResponse
-    : T extends RemoveReaction
-    ? AddRemoveReactionResponse
-    : T extends BlockUserFromGroup
-    ? BlockUserResponse
-    : T extends UnblockUserFromGroup
-    ? UnblockUserResponse
-    : T extends GetProposalVoteDetailsRequest
-    ? ProposalVoteDetails
-    : T extends ListNervousSystemFunctions
-    ? ListNervousSystemFunctionsResponse
-    : T extends SendMessage
-    ? "accepted" | [ SendMessageResponse, Message ]
-    : T extends EditMessage
-    ? EditMessageResponse
-    : T extends RegisterUser
-    ? RegisterUserResponse
-    : T extends SubscriptionExists
-    ? boolean
-    : T extends PushSub
-    ? void
-    : T extends RemoveSub
-    ? void
-    : T extends InviteUsers
-    ? boolean
-    : T extends RemoveMember
-    ? RemoveMemberResponse
-    : T extends ChangeRole
-    ? ChangeRoleResponse
-    : T extends RegisterProposalVote
-    ? RegisterProposalVoteResponse
-    : T extends GetRecommendedGroups
-    ? GroupChatSummary[]
-    : T extends ExploreCommunities
-    ? ExploreCommunitiesResponse
-    : T extends ExploreBots
-    ? ExploreBotsResponse
-    : T extends RegisterBot
-    ? boolean
-    : T extends RemoveBot
-    ? boolean
-    : T extends UpdateRegisteredBot
-    ? boolean
-    : T extends DismissRecommendations
-    ? void
-    : T extends GroupInvite
-    ? void
-    : T extends CommunityInvite
-    ? void
-    : T extends SearchGroupChat
-    ? SearchGroupChatResponse
-    : T extends SearchDirectChat
-    ? SearchDirectChatResponse
-    : T extends RefreshAccountBalance
-    ? bigint
-    : T extends GetFundsInPreviousWallets
-    ? FundsInPreviousWallet[]
-    : T extends MoveFundsFromPreviousWallets
-    ? MoveFundsOutcome[]
-    : T extends GetAccountTransactions
-    ? AccountTransactionResult
-    : T extends GetThreadPreviews
-    ? ThreadPreview[]
-    : T extends GetUser
-    ? UserSummary | undefined
-    : T extends GetPublicProfile
-    ? PublicProfile | undefined
-    : T extends SetUsername
-    ? SetUsernameResponse
-    : T extends SetDisplayName
-    ? SetDisplayNameResponse
-    : T extends SetHideOnlineStatus
-    ? void
-    : T extends SetBio
-    ? SetBioResponse
-    : T extends GetBio
-    ? string
-    : T extends WithdrawCrypto
-    ? WithdrawCryptocurrencyResponse
-    : T extends MessagesByMessageIndex
-    ? EventsResponse<Message>
-    : T extends GetInviteCode
-    ? InviteCodeResponse
-    : T extends EnableInviteCode
-    ? EnableInviteCodeResponse
-    : T extends DisableInviteCode
-    ? DisableInviteCodeResponse
-    : T extends ResetInviteCode
-    ? ResetInviteCodeResponse
-    : T extends CreateGroupChat
-    ? CreateGroupResponse
-    : T extends SetCachedMessageFromNotification
-    ? void
-    : T extends FreezeGroup
-    ? FreezeGroupResponse
-    : T extends UnfreezeGroup
-    ? UnfreezeGroupResponse
-    : T extends FreezeCommunity
-    ? FreezeCommunityResponse
-    : T extends UnfreezeCommunity
-    ? UnfreezeCommunityResponse
-    : T extends AddHotGroupExclusion
-    ? AddHotGroupExclusionResponse
-    : T extends RemoveHotGroupExclusion
-    ? RemoveHotGroupExclusionResponse
-    : T extends AddRemoveSwapProvider
-    ? boolean
-    : T extends ModelCatalogRequest
-    ? ModelCatalog
-    : T extends AddMessageFilter
-    ? boolean
-    : T extends RemoveMessageFilter
-    ? boolean
-    : T extends SetAirdropConfig
-    ? boolean
-    : T extends SetTokenEnabled
-    ? boolean
-    : T extends DeleteFrozenGroup
-    ? DeleteFrozenGroupResponse
-    : T extends SuspendUser
-    ? SuspendUserResponse
-    : T extends UnsuspendUser
-    ? UnsuspendUserResponse
-    : T extends SetCommunityModerationFlags
-    ? SetCommunityModerationFlagsResponse
-    : T extends SetGroupModerationFlags
-    ? SetGroupModerationFlagsResponse
-    : T extends SetGroupUpgradeConcurrency
-    ? SetGroupUpgradeConcurrencyResponse
-    : T extends SetCommunityUpgradeConcurrency
-    ? SetGroupUpgradeConcurrencyResponse
-    : T extends SetUserUpgradeConcurrency
-    ? SetUserUpgradeConcurrencyResponse
-    : T extends CreateMultiUserCanister
-    ? CreateMultiUserCanisterResponse
-    : T extends SetMultiUserCanistersEnabled
-    ? boolean
-    : T extends MigrateUsers
-    ? MigrateUsersResponse
-    : T extends SetUserMigrationConcurrency
-    ? boolean
-    : T extends GetUserMigration
-    ? UserMigrationResponse
-    : T extends CancelUserMigration
-    ? Success | OCError
-    : T extends MarkLocalGroupIndexFull
-    ? boolean
-    : T extends SetDiamondMembershipFees
-    ? boolean
-    : T extends StakeNeuronForSubmittingProposals
-    ? StakeNeuronForSubmittingProposalsResponse
-    : T extends TopUpNeuronForSubmittingProposals
-    ? TopUpNeuronResponse
-    : T extends LoadFailedMessages
-    ? Map< string, Record< string, EventWrapper<Message>>>
-    : T extends DeleteFailedMessage
-    ? void
-    : T extends ClaimPrize
-    ? ClaimPrizeResponse
-    : T extends PayForDiamondMembership
-    ? PayForDiamondMembershipResponse
-    : T extends UpdateMarketMakerConfig
-    ? UpdateMarketMakerConfigResponse
-    : T extends SetMessageReminder
-    ? SetMessageReminderResponse
-    : T extends CancelMessageReminder
-    ? boolean
-    : T extends ReportMessage
-    ? boolean
-    : T extends ApproveTransfer
-    ? ApproveTransferResponse
-    : T extends ApproveAccessGatePayment
-    ? ApproveTransferResponse
-    : T extends DeclineInvitation
-    ? DeclineInvitationResponse
-    : T extends AddMembersToChannel
-    ? AddMembersToChannelResponse
-    : T extends BlockCommunityUser
-    ? BlockCommunityUserResponse
-    : T extends ChangeChannelRole
-    ? ChangeRoleResponse
-    : T extends ChangeCommunityRole
-    ? ChangeCommunityRoleResponse
-    : T extends DeclineChannelInvitation
-    ? DeclineInvitationResponse
-    : T extends RemoveCommunityMember
-    ? RemoveMemberResponse
-    : T extends UnblockCommunityUser
-    ? UnblockCommunityUserResponse
-    : T extends UpdateCommunity
-    ? UpdateCommunityResponse
-    : T extends CreateCommunity
-    ? CreateCommunityResponse
-    : T extends JoinCommunity
-    ? JoinCommunityResponse
-    : T extends SearchGroups
-    ? GroupSearchResponse
-    : T extends GetCommunitySummary
-    ? CommunitySummaryResponse
-    : T extends ExploreChannels
-    ? ExploreChannelsResponse
-    : T extends GetCommunityDetails
-    ? CommunityDetailsResponse
-    : T extends GetChannelSummary
-    ? ChannelSummaryResponse
-    : T extends AddToFavourites
-    ? ManageFavouritesResponse
-    : T extends RemoveFromFavourites
-    ? ManageFavouritesResponse
-    : T extends LeaveCommunity
-    ? LeaveCommunityResponse
-    : T extends DeleteCommunity
-    ? DeleteCommunityResponse
-    : T extends ConvertGroupToCommunity
-    ? ConvertToCommunityResponse
-    : T extends ImportGroupToCommunity
-    ? ImportGroupResponse
-    : T extends UpdateRegistry
-    ? [RegistryValue, boolean]
-    : T extends SetCommunityIndexes
-    ? boolean
-    : T extends ProposeSetOpenAIApiKey
-    ? ProposedProtectedAction | undefined
-    : T extends ConfirmProtectedAction
-    ? Success | OCError
-    : T extends CancelProtectedAction
-    ? Success | OCError
-    : T extends ProtectedActions
-    ? string | undefined
-    : T extends SetModerationReferralConfig
-    ? boolean
-    : T extends ProposeSetVaultReviewers
-    ? ProposedProtectedAction | undefined
-    : T extends ProposeSetMediaScanConfig
-    ? ProposedProtectedAction | undefined
-    : T extends ProposeSetAuthorityReporter
-    ? ProposedProtectedAction | undefined
-    : T extends ProposeSetVaultLegalHold
-    ? ProposedProtectedAction | undefined
-    : T extends SetVaultLegalHold
-    ? boolean
-    : T extends ProposeDestroyVaultEvidence
-    ? ProposedProtectedAction | undefined
-    : T extends VaultLog
-    ? VaultLogResponse
-    : T extends VaultBuckets
-    ? string[]
-    : T extends AuthorityReports
-    ? string | undefined
-    : T extends GetModerationConfig
-    ? ModerationConfig | undefined
-    : T extends ClearAuthorityReportAttempt
-    ? boolean
-    : T extends RecordAuthorityReportFiled
-    ? boolean
-    : T extends AuthorityReportToken
-    ? AuthorityReportTokenResponse
-    : T extends AcceptTerms
-    ? boolean
-    : T extends ProposeSetInternalModerationChannel
-    ? ProposedProtectedAction | undefined
-    : T extends ResolveModerationReport
-    ? Success | OCError
-    : T extends ContestModerationSanction
-    ? boolean
-    : T extends VaultFileChunk
-    ? VaultFileChunkResponse
-    : T extends DownloadPublicBlob
-    ? Uint8Array | undefined
-    : T extends VaultFileInfo
-    ? VaultFileInfoResponse
-    : T extends CreateUserGroup
-    ? CreateUserGroupResponse
-    : T extends UpdateUserGroup
-    ? UpdateUserGroupResponse
-    : T extends DeleteUserGroups
-    ? DeleteUserGroupsResponse
-    : T extends SetMemberDisplayName
-    ? SetMemberDisplayNameResponse
-    : T extends SubmitProposal
-    ? SubmitProposalResponse
-    : T extends FollowThread
-    ? FollowThreadResponse
-    : T extends GetTokenSwaps
-    ? Record<string, DexId[]>
-    : T extends CanSwap
-    ? Set<string>
-    : T extends GetTokenSwapQuotes
-    ? [DexId, bigint][]
-    : T extends SwapTokens
-    ? SwapTokensResponse
-    : T extends TokenSwapStatus
-    ? TokenSwapStatusResponse
-    : T extends DeleteDirectChat
-    ? boolean
-    : T extends GetDiamondMembershipFees
-    ? DiamondMembershipFees[]
-    : T extends AiApps
-    ? AiAppRegistration[]
-    : T extends MyAiApps
-    ? { apps: AiAppRegistration[]; total: number }
-    : T extends SetAiAppEnabled
-    ? boolean
-    : T extends EnabledAiApps
-    ? number[]
-    : T extends MyAiAppKeys
-    ? AiAppUserKey[]
-    : T extends AiAppUserKeysLookup
-    ? AiAppMemberKey[]
-    : T extends CreateAiAppLinkCode
-    ? AiAppLinkCode | undefined
-    : T extends CancelAiAppLinkCode
-    ? boolean
-    : T extends CreateAiAppChatLinkToken
-    ? AiAppChatLinkToken | undefined
-    : T extends CancelAiAppChatLinkToken
-    ? boolean
-    : T extends CreateAiAppCardProvenance
-    ? AiAppCardProvenanceResult
-    : T extends CreateAiAppCardConfirmationGrant
-    ? AiAppCardConfirmationGrant | undefined
-    : T extends CreateAiAppCardCapability
-    ? AiAppCardCapability | undefined
-    : T extends CreateAiAppPrivateMatchCapability
-    ? AiAppPrivateMatchCapability | undefined
-    : T extends RemoveMyAiAppKey
-    ? boolean
-    : T extends PublishAiApp
-    ? boolean
-    : T extends ExploreAiApps
-    ? ExploreAiAppsResponse
-    : T extends GetReportedMessages
-    ? string
-    : T extends GetExchangeRates
-    ? Record<string, TokenExchangeRates>
-    : T extends ProposeTranslation
-    ? ProposeResponse
-    : T extends ApproveTranslation
-    ? ApproveResponse
-    : T extends RejectTranslation
-    ? RejectResponse
-    : T extends GetProposedTranslations
-    ? ProposedResponse
-    : T extends MarkTranslationsDeployed
-    ? MarkDeployedResponse
-    : T extends GetTranslationsPendingDeployment
-    ? PendingDeploymentResponse
-    : T extends AcceptP2PSwap
-    ? AcceptP2PSwapResponse
-    : T extends CancelP2PSwap
-    ? CancelP2PSwapResponse
-    : T extends JoinVideoCall
-    ? JoinVideoCallResponse
-    : T extends SetVideoCallPresence
-    ? SetVideoCallPresenceResponse
-    : T extends VideoCallParticipants
-    ? VideoCallParticipantsResponse
-    : T extends GetAccessToken
-    ? string | undefined
-    : T extends GetLocalUserIndexForUser
-    ? string
-    : T extends GenerateBtcAddress
-    ? string
-    : T extends GenerateOneSecAddress
-    ? string
-    : T extends UpdateBtcBalance
-    ? boolean
-    : T extends WithdrawBtc
-    ? WithdrawBtcResponse
-    : T extends WithdrawViaOneSec
-    ? WithdrawViaOneSecResponse
-    : T extends GetCkbtcMinterDepositInfo
-    ? CkbtcMinterDepositInfo
-    : T extends GetCkbtcMinterWithdrawalInfo
-    ? CkbtcMinterWithdrawalInfo
-    : T extends CurrentUserWebAuthnKey
-    ? WebAuthnKeyFull | undefined
-    : T extends LookupWebAuthnPubKey
-    ? Uint8Array | undefined
-    : T extends SetCachedWebAuthnKey
-    ? void
-    : T extends GenerateMagicLink
-    ? GenerateMagicLinkResponse
-    : T extends GetSignInWithEmailDelegation
-    ? GetDelegationResponse
-    : T extends SiwePrepareLogin
-    ? SiwePrepareLoginResponse
-    : T extends SiwsPrepareLogin
-    ? SiwsPrepareLoginResponse
-    : T extends LoginWithWallet
-    ? PrepareDelegationResponse
-    : T extends GetDelegationWithWallet
-    ? GetDelegationResponse
-    : T extends SetPinNumber
-    ? SetPinNumberResponse
-    : T extends ClaimDailyChit
-    ? ClaimDailyChitResponse
-    : T extends ChitLeaderboard
-    ? ChitLeaderboardResponse
-    : T extends ChitEventsRequest
-    ? ChitEventsResponse
-    : T extends MarkAchievementsSeen
-    ? void
-    : T extends SubmitProofOfUniquePersonhood
-    ? SubmitProofOfUniquePersonhoodResponse
-    : T extends LinkIdentities
-    ? LinkIdentitiesResponse
-    : T extends RemoveIdentityLink
-    ? RemoveIdentityLinkResponse
-    : T extends GetAuthenticationPrincipals
-    ? AuthenticationPrincipalsResponse
-    : T extends ConfigureWallet
-    ? void
-    : T extends ClearCachedData
-    ? void
-    : T extends SetCommunityReferral
-    ? void
-    : T extends GetExternalAchievements
-    ? ExternalAchievement[]
-    : T extends CancelInvites
-    ? boolean
-    : T extends MessageActivityFeed
-    ? MessageActivityFeedResponse
-    : T extends MarkActivityFeedRead
-    ? void
-    : T extends DeleteUser
-    ? boolean
-    : T extends InstallBot
-    ? boolean
-    : T extends GetBotDefinition
-    ? BotDefinitionResponse
-    : T extends CallBotCommandEndpoint
-    ? BotCommandResponse
-    : T extends UninstallBot
-    ? boolean
-    : T extends UpdateInstalledBot
-    ? boolean
-    : T extends WithdrawFromIcpSwap
-    ? boolean
-    : T extends RegisterWebhook
-    ? FullWebhookDetails | undefined
-    : T extends UpdateWebhook
-    ? boolean
-    : T extends RegenerateWebhook
-    ? string | undefined
-    : T extends DeleteWebhook
-    ? boolean
-    : T extends GetWebhook
-    ? string | undefined
-    : T extends PayForStreakInsurance
-    ? PayForStreakInsuranceResponse
-    : T extends UpdateDirectChatSettings
-    ? boolean
-    : T extends UpdateProposalTallies
-    ? EventWrapper<Message>[]
-    : T extends PayForPremiumItem
-    ? PayForPremiumItemResponse
-    : T extends DailyPuzzleFetch
-    ? DailyPuzzleFetchResult | OCError
-    : T extends DailyPuzzleStart
-    ? DailyPuzzleStartResponse
-    : T extends DailyPuzzleSubmit
-    ? DailyPuzzleSubmitResponse
-    : T extends DailyPuzzleHint
-    ? DailyPuzzleHintResponse
-    : T extends DailyPuzzleSaveGrid
-    ? Success | OCError
-    : T extends DailyPuzzleCurrent
-    ? PublicDailyPuzzle[]
-    : T extends DailyPuzzleResults
-    ? DailyPuzzleResult[]
-    : T extends DailyPuzzleGetConfig
-    ? DailyPuzzleConfig | OCError
-    : T extends DailyPuzzleSetEnabled
-    ? Success | OCError
-    : T extends DailyPuzzleRegenerateToday
-    ? Success | OCError
-    : T extends CallPushEnabled
-    ? boolean
-    : T extends SetCallPushEnabled
-    ? Success | OCError
-    : T extends SetPremiumItemCost
-    ? void
-    : T extends CreateAccountLinkingCode
-    ? AccountLinkingCode | undefined
-    : T extends GetSignInProof
-    ? string
-    : T extends ReinstateMissedDailyClaims
-    ? boolean
-    : T extends OneSecEnableForwarding
-    ? void
-    : T extends OneSecGetTransferFees
-    ? OneSecTransferFees[]
-    : T extends OneSecForwardEvmToIcp
-    ? OneSecForwardingStatus
-    : T extends OneSecGetForwardingStatus
-    ? OneSecForwardingStatus
-    : T extends UpdateBlockedUsernamePatterns
-    ? void
-    : T extends MarkNotificationSubscriptionActive
-    ? void
-    : T extends AbortInFlightQueries
-    ? void
-    : never;
+// Every kind of request has an entry, and nothing else does: either mistake fails to compile
+type ResultsByKind<
+    R extends Record<WorkerRequest["kind"], unknown> &
+        Record<Exclude<keyof R, WorkerRequest["kind"]>, never>,
+> = R;
+
+// What the worker sends back for each kind of request
+export type WorkerResults = ResultsByKind<{
+    respondToActionCard: RespondToActionCardResponse;
+    modelCatalog: ModelCatalog;
+    downloadPublicBlob: Uint8Array | undefined;
+    aiApps: AiAppRegistration[];
+    myAiApps: { apps: AiAppRegistration[]; total: number };
+    setAiAppEnabled: boolean;
+    enabledAiApps: number[];
+    myAiAppKeys: AiAppUserKey[];
+    aiAppUserKeys: AiAppMemberKey[];
+    createAiAppLinkCode: AiAppLinkCode | undefined;
+    cancelAiAppLinkCode: boolean;
+    createAiAppChatLinkToken: AiAppChatLinkToken | undefined;
+    cancelAiAppChatLinkToken: boolean;
+    createAiAppCardProvenance: AiAppCardProvenanceResult;
+    createAiAppCardConfirmationGrant: AiAppCardConfirmationGrant | undefined;
+    createAiAppCardCapability: AiAppCardCapability | undefined;
+    createAiAppPrivateMatchCapability: AiAppPrivateMatchCapability | undefined;
+    removeMyAiAppKey: boolean;
+    publishAiApp: boolean;
+    exploreAiApps: ExploreAiAppsResponse;
+    init: void;
+    setAuthIdentity: SetAuthIdentityResponse;
+    logout: void;
+    setMinLogLevel: void;
+    createOpenChatIdentity: CreateOpenChatIdentityResponse;
+    pinMessage: PinMessageResponse;
+    loadSavedCryptoAccounts: NamedAccount[];
+    saveCryptoAccount: SaveCryptoAccountResponse;
+    deleteCryptoAccount: DeleteCryptoAccountResponse;
+    tipMessage: TipMessageResponse;
+    unpinMessage: UnpinMessageResponse;
+    getUpdates: SyncSinceResponse | undefined;
+    syncSince: SyncSinceResponse;
+    refreshChat: boolean;
+    getBots: BotsResponse;
+    getDeletedDirectMessage: DeletedDirectMessageResponse;
+    getDeletedGroupMessage: DeletedGroupMessageResponse;
+    createUserClient: void;
+    chatEvents: EventsResponse<ChatEvent>;
+    getUsers: UsersResponse;
+    markMessagesRead: MarkReadResponse;
+    getGroupDetails: GroupChatDetailsResponse;
+    lookupMembers: LookupMembersResponse;
+    searchCommunityMembers: LookupMembersResponse;
+    getCurrentUser: CurrentUserResponse;
+    getAllCachedUsers: UserSummary[];
+    lastOnline: Record<string, number>;
+    markAsOnline: MinutesOnline;
+    chatEventsWindow: EventsResponse<ChatEvent>;
+    chatEventsByEventIndex: EventsResponse<ChatEvent>;
+    rehydrateMessage: EventWrapper<Message>;
+    checkUsername: CheckUsernameResponse;
+    searchUsers: UserSummary[];
+    getUserStorageLimits: StorageStatus;
+    getPublicGroupSummary: PublicGroupSummaryResponse;
+    toggleMuteNotifications: ToggleMuteNotificationResponse;
+    archiveChat: ArchiveChatResponse;
+    unarchiveChat: ArchiveChatResponse;
+    pinChat: PinChatResponse;
+    unpinChat: UnpinChatResponse;
+    blockUserFromDirectChat: BlockUserResponse;
+    unblockUserFromDirectChat: UnblockUserResponse;
+    setUserAvatar: BlobReference;
+    setProfileBackground: BlobReference;
+    deleteGroup: DeleteGroupResponse;
+    leaveGroup: LeaveGroupResponse;
+    joinGroup: JoinGroupResponse;
+    updateGroup: UpdateGroupResponse;
+    registerPollVote: RegisterPollVoteResponse;
+    deleteMessage: DeleteMessageResponse;
+    undeleteMessage: UndeleteMessageResponse;
+    addReaction: AddRemoveReactionResponse;
+    removeReaction: AddRemoveReactionResponse;
+    blockUserFromGroupChat: BlockUserResponse;
+    unblockUserFromGroupChat: UnblockUserResponse;
+    getProposalVoteDetails: ProposalVoteDetails;
+    listNervousSystemFunctions: ListNervousSystemFunctionsResponse;
+    sendMessage: "accepted" | [SendMessageResponse, Message];
+    editMessage: EditMessageResponse;
+    registerUser: RegisterUserResponse;
+    subscriptionExists: boolean;
+    pushSubscription: void;
+    removeSubscription: void;
+    inviteUsers: boolean;
+    removeMember: RemoveMemberResponse;
+    changeRole: ChangeRoleResponse;
+    registerProposalVote: RegisterProposalVoteResponse;
+    getRecommendedGroups: GroupChatSummary[];
+    exploreCommunities: ExploreCommunitiesResponse;
+    exploreBots: ExploreBotsResponse;
+    registerBot: boolean;
+    removeBot: boolean;
+    updateRegisteredBot: boolean;
+    dismissRecommendation: void;
+    searchGroupChat: SearchGroupChatResponse;
+    searchDirectChat: SearchDirectChatResponse;
+    refreshAccountBalance: bigint;
+    fundsInPreviousWallets: FundsInPreviousWallet[];
+    moveFundsFromPreviousWallets: MoveFundsOutcome[];
+    getAccountTransactions: AccountTransactionResult;
+    threadPreviews: ThreadPreview[];
+    getUser: UserSummary | undefined;
+    getPublicProfile: PublicProfile | undefined;
+    setUsername: SetUsernameResponse;
+    setDisplayName: SetDisplayNameResponse;
+    setHideOnlineStatus: void;
+    setBio: SetBioResponse;
+    getBio: string;
+    withdrawCryptocurrency: WithdrawCryptocurrencyResponse;
+    getMessagesByMessageIndex: EventsResponse<Message>;
+    getInviteCode: InviteCodeResponse;
+    enableInviteCode: EnableInviteCodeResponse;
+    disableInviteCode: DisableInviteCodeResponse;
+    resetInviteCode: ResetInviteCodeResponse;
+    createGroupChat: CreateGroupResponse;
+    setCachedMessageFromNotification: void;
+    freezeGroup: FreezeGroupResponse;
+    unfreezeGroup: UnfreezeGroupResponse;
+    freezeCommunity: FreezeCommunityResponse;
+    unfreezeCommunity: UnfreezeCommunityResponse;
+    addHotGroupExclusion: AddHotGroupExclusionResponse;
+    removeHotGroupExclusion: RemoveHotGroupExclusionResponse;
+    addRemoveSwapProvider: boolean;
+    addMessageFilter: boolean;
+    removeMessageFilter: boolean;
+    setAirdropConfig: boolean;
+    setTokenEnabled: boolean;
+    deleteFrozenGroup: DeleteFrozenGroupResponse;
+    suspendUser: SuspendUserResponse;
+    unsuspendUser: UnsuspendUserResponse;
+    setCommunityModerationFlags: SetCommunityModerationFlagsResponse;
+    setGroupModerationFlags: SetGroupModerationFlagsResponse;
+    setGroupUpgradeConcurrency: SetGroupUpgradeConcurrencyResponse;
+    setCommunityUpgradeConcurrency: SetGroupUpgradeConcurrencyResponse;
+    createMultiUserCanister: CreateMultiUserCanisterResponse;
+    markLocalGroupIndexFull: boolean;
+    setDiamondMembershipFees: boolean;
+    stakeNeuronForSubmittingProposals: StakeNeuronForSubmittingProposalsResponse;
+    topUpNeuronForSubmittingProposals: TopUpNeuronResponse;
+    loadFailedMessages: Map<string, Record<string, EventWrapper<Message>>>;
+    deleteFailedMessage: void;
+    claimPrize: ClaimPrizeResponse;
+    payForDiamondMembership: PayForDiamondMembershipResponse;
+    updateMarketMakerConfig: UpdateMarketMakerConfigResponse;
+    setMessageReminder: SetMessageReminderResponse;
+    cancelMessageReminder: boolean;
+    reportMessage: boolean;
+    approveTransfer: ApproveTransferResponse;
+    approveAccessGatePayment: ApproveTransferResponse;
+    declineInvitation: DeclineInvitationResponse;
+    addMembersToChannel: AddMembersToChannelResponse;
+    blockCommunityUser: BlockCommunityUserResponse;
+    changeChannelRole: ChangeRoleResponse;
+    changeCommunityRole: ChangeCommunityRoleResponse;
+    declineChannelInvitation: DeclineInvitationResponse;
+    removeCommunityMember: RemoveMemberResponse;
+    unblockCommunityUser: UnblockCommunityUserResponse;
+    updateCommunity: UpdateCommunityResponse;
+    createCommunity: CreateCommunityResponse;
+    joinCommunity: JoinCommunityResponse;
+    searchGroups: GroupSearchResponse;
+    getCommunitySummary: CommunitySummaryResponse;
+    exploreChannels: ExploreChannelsResponse;
+    getCommunityDetails: CommunityDetailsResponse;
+    getChannelSummary: ChannelSummaryResponse;
+    addToFavourites: ManageFavouritesResponse;
+    removeFromFavourites: ManageFavouritesResponse;
+    leaveCommunity: LeaveCommunityResponse;
+    deleteCommunity: DeleteCommunityResponse;
+    convertGroupToCommunity: ConvertToCommunityResponse;
+    importGroupToCommunity: ImportGroupResponse;
+    updateRegistry: [RegistryValue, boolean];
+    setCommunityIndexes: boolean;
+    proposeSetOpenAIApiKey: ProposedProtectedAction | undefined;
+    confirmProtectedAction: Success | OCError;
+    cancelProtectedAction: Success | OCError;
+    protectedActions: string | undefined;
+    setModerationReferralConfig: boolean;
+    proposeSetVaultReviewers: ProposedProtectedAction | undefined;
+    proposeSetMediaScanConfig: ProposedProtectedAction | undefined;
+    proposeSetAuthorityReporter: ProposedProtectedAction | undefined;
+    proposeSetVaultLegalHold: ProposedProtectedAction | undefined;
+    setVaultLegalHold: boolean;
+    proposeDestroyVaultEvidence: ProposedProtectedAction | undefined;
+    vaultLog: VaultLogResponse;
+    vaultBuckets: string[];
+    authorityReports: string | undefined;
+    moderationConfig: ModerationConfig | undefined;
+    clearAuthorityReportAttempt: boolean;
+    recordAuthorityReportFiled: boolean;
+    authorityReportToken: AuthorityReportTokenResponse;
+    acceptTerms: boolean;
+    proposeSetInternalModerationChannel: ProposedProtectedAction | undefined;
+    resolveModerationReport: Success | OCError;
+    contestModerationSanction: boolean;
+    vaultFileChunk: VaultFileChunkResponse;
+    vaultFileInfo: VaultFileInfoResponse;
+    createUserGroup: CreateUserGroupResponse;
+    updateUserGroup: UpdateUserGroupResponse;
+    deleteUserGroups: DeleteUserGroupsResponse;
+    setMemberDisplayName: SetMemberDisplayNameResponse;
+    submitProposal: SubmitProposalResponse;
+    followThread: FollowThreadResponse;
+    getTokenSwaps: Record<string, DexId[]>;
+    canSwap: Set<string>;
+    getTokenSwapQuotes: [DexId, bigint][];
+    swapTokens: SwapTokensResponse | SwapTokensStep;
+    recoverUnfinishedTokenSwaps: void;
+    deleteDirectChat: boolean;
+    diamondMembershipFees: DiamondMembershipFees[];
+    reportedMessages: string;
+    exchangeRates: Record<string, TokenExchangeRates>;
+    proposeTranslation: ProposeResponse;
+    approveTranslation: ApproveResponse;
+    rejectTranslation: RejectResponse;
+    getProposedTranslations: ProposedResponse;
+    markTranslationsDeployed: MarkDeployedResponse;
+    getTranslationsPendingDeployment: PendingDeploymentResponse;
+    acceptP2PSwap: AcceptP2PSwapResponse;
+    cancelP2PSwap: CancelP2PSwapResponse;
+    joinVideoCall: JoinVideoCallResponse;
+    setVideoCallPresence: SetVideoCallPresenceResponse;
+    videoCallParticipants: VideoCallParticipantsResponse;
+    getAccessToken: string | undefined;
+    getLocalUserIndexForUser: string;
+    generateBtcAddress: string;
+    generateOneSecAddress: string;
+    generateSolAddress: string;
+    updateBtcBalance: boolean;
+    updateSolBalance: boolean;
+    withdrawBtc: WithdrawBtcResponse;
+    withdrawSol: WithdrawSolResponse;
+    withdrawViaOneSec: WithdrawViaOneSecResponse;
+    ckbtcMinterDepositInfo: CkbtcMinterDepositInfo;
+    ckbtcMinterWithdrawalInfo: CkbtcMinterWithdrawalInfo;
+    cksolMinterDepositInfo: CksolMinterDepositInfo;
+    cksolMinterWithdrawalInfo: CksolMinterWithdrawalInfo;
+    currentUserWebAuthnKey: WebAuthnKeyFull | undefined;
+    lookupWebAuthnPubKey: Uint8Array | undefined;
+    setCachedWebAuthnKey: void;
+    generateMagicLink: GenerateMagicLinkResponse;
+    getSignInWithEmailDelegation: GetDelegationResponse;
+    siwePrepareLogin: SiwePrepareLoginResponse;
+    siwsPrepareLogin: SiwsPrepareLoginResponse;
+    loginWithWallet: PrepareDelegationResponse;
+    getDelegationWithWallet: GetDelegationResponse;
+    setPinNumber: SetPinNumberResponse;
+    claimDailyChit: ClaimDailyChitResponse;
+    chitLeaderboard: ChitLeaderboardResponse;
+    getChitEvents: ChitEventsResponse;
+    markAchievementsSeen: void;
+    submitProofOfUniquePersonhood: SubmitProofOfUniquePersonhoodResponse;
+    linkIdentities: LinkIdentitiesResponse;
+    removeIdentityLink: RemoveIdentityLinkResponse;
+    getAuthenticationPrincipals: AuthenticationPrincipalsResponse;
+    configureWallet: void;
+    clearCachedData: void;
+    setCommunityReferral: void;
+    getExternalAchievements: ExternalAchievement[];
+    cancelInvites: boolean;
+    messageActivityFeed: MessageActivityFeedResponse;
+    markActivityFeedRead: void;
+    deleteUser: boolean;
+    installBot: boolean;
+    getBotDefinition: BotDefinitionResponse;
+    callBotCommandEndpoint: BotCommandResponse;
+    uninstallBot: boolean;
+    updateInstalledBot: boolean;
+    registerWebhook: FullWebhookDetails | undefined;
+    updateWebhook: boolean;
+    regenerateWebhook: string | undefined;
+    deleteWebhook: boolean;
+    getWebhook: string | undefined;
+    payForStreakInsurance: PayForStreakInsuranceResponse;
+    updateDirectChatSettings: boolean;
+    updateProposalTallies: EventWrapper<Message>[];
+    payForPremiumItem: PayForPremiumItemResponse;
+    dailyPuzzleFetch: DailyPuzzleFetchResult | OCError;
+    dailyPuzzleStart: DailyPuzzleStartResponse;
+    dailyPuzzleSubmit: DailyPuzzleSubmitResponse;
+    dailyPuzzleHint: DailyPuzzleHintResponse;
+    dailyPuzzleSaveGrid: Success | OCError;
+    dailyPuzzleCurrent: PublicDailyPuzzle[];
+    dailyPuzzleResults: DailyPuzzleResult[];
+    dailyPuzzleConfig: DailyPuzzleConfig | OCError;
+    dailyPuzzleSetEnabled: Success | OCError;
+    dailyPuzzleRegenerateToday: Success | OCError;
+    callPushEnabled: boolean;
+    setCallPushEnabled: Success | OCError;
+    setAlchemyApiKey: Success | OCError;
+    setPremiumItemCost: void;
+    createAccountLinkingCode: AccountLinkingCode | undefined;
+    getSignInProof: string | undefined;
+    reinstateMissedDailyClaims: boolean;
+    oneSecEnableForwarding: void;
+    oneSecGetTransferFees: OneSecTransferFees[];
+    oneSecForwardEvmToIcp: OneSecForwardingStatus;
+    oneSecGetForwardingStatus: OneSecForwardingStatus;
+    updateBlockedUsernamePatterns: void;
+    markNotificationSubscriptionActive: void;
+    abortInFlightQueries: void;
+    addFcmToken: void;
+    fcmTokenExists: boolean;
+    removeFcmToken: void;
+    groupInvite: void;
+    communityInvite: void;
+    setModerationFlags: boolean;
+    verifyAccountLinkingCode: VerifyAccountLinkingCodeResponse;
+    finaliseAccountLinkingWithCode: FinaliseAccountLinkingResponse;
+}>;
+
+export type WorkerResult<T extends WorkerRequest> = WorkerResults[T["kind"]];

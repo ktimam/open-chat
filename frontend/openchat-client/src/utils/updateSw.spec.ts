@@ -16,7 +16,7 @@ describe("service-worker maintenance", () => {
                 { scope: "https://elsewhere.test/", unregister: foreignOriginUnregister },
             ]),
         };
-        const cacheStorage = { delete: vi.fn(async () => true) };
+        const cacheStorage = { delete: vi.fn(async (_name: string) => true) };
 
         await cleanupDevelopmentServiceWorkerState({
             serviceWorker,

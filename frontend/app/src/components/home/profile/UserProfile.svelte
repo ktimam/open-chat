@@ -5,13 +5,18 @@
         type BotClientConfigData,
         type ModerationFlag,
         ModerationFlags,
+        MAX_BIO_LENGTH,
         type OpenChat,
+        type ProfileFieldErrors,
+        profileChanges,
+        type PublicProfile,
         ROLE_NONE,
         type UserSummary,
         adultEnabledStore,
         anonUserStore,
         canExtendDiamondStore,
         communitiesStore,
+        currentUserIdStore,
         hideMessagesFromDirectBlocked,
         iconSize,
         isDiamondStore,
@@ -26,8 +31,8 @@
         suspendedUserStore,
         underReviewEnabledStore,
         userMetricsStore,
+        userWalletAccount,
     } from "@client";
-    import { ErrorCode, type PublicProfile } from "@shared";
     import { getContext, onMount } from "svelte";
     import { _, locale } from "svelte-i18n";
     import Close from "svelte-material-icons/Close.svelte";
@@ -61,9 +66,11 @@
         videoSectionOpen,
     } from "../../../stores/settings";
     import { toastStore } from "../../../stores/toast";
+    import { translatable } from "../../../actions/translatable";
     import { uniquePersonGate } from "../../../utils/access";
     import { isTouchDevice } from "../../../utils/devices";
     import { clearCrashLog, formatCrashLog } from "../../../utils/errorPostmortem";
+    import AlertBox from "../../AlertBox.svelte";
     import Button from "../../Button.svelte";
     import ButtonGroup from "../../ButtonGroup.svelte";
     import CollapsibleCard from "../../CollapsibleCard.svelte";
@@ -72,15 +79,16 @@
     import HoverIcon from "../../HoverIcon.svelte";
     import Verified from "../../icons/Verified.svelte";
     import Legend from "../../Legend.svelte";
+    import Link from "../../Link.svelte";
     import SectionHeader from "../../SectionHeader.svelte";
     import Select from "../../Select.svelte";
     import StorageUsage from "../../StorageUsage.svelte";
     import TextArea from "../../TextArea.svelte";
     import Toggle from "../../Toggle.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import UsernameInput from "../../UsernameInput.svelte";
     import Stats from "../Stats.svelte";
-    import Expiry from "../upgrade/Expiry.svelte";
+    import Expiry from "@shared_components/home/upgrade/Expiry.svelte";
     import AccountLinkingCode from "./AccountLinkingCode.svelte";
     import BotConfigData from "./BotConfigData.svelte";
     import ChitEvents from "./ChitEvents.svelte";
@@ -97,7 +105,6 @@
     import VideoCallSettings from "./VideoCallSettings.svelte";
 
     const client = getContext<OpenChat>("client");
-    const MAX_BIO_LENGTH = 2000;
 
     interface Props {
         user: UserSummary;
@@ -109,9 +116,7 @@
 
     let userbio = $state("");
     let selectedLocale = $state(($locale as string).substring(0, 2));
-    let usernameError: string | undefined = $state(undefined);
-    let displayNameError: string | undefined = $state(undefined);
-    let bioError: string | undefined = $state(undefined);
+    let errors = $state<ProfileFieldErrors>({});
     let saving = $state(false);
     let username = $state("");
     let usernameValid = $state(true);
@@ -134,9 +139,25 @@
     );
     let readonly = $derived($suspendedUserStore || $anonUserStore);
     let verified = $derived(user.isUniquePerson);
+    // The principal to add as a hotkey to the neurons the user votes with from OpenChat, which is the
+    // owner of their wallet: their OpenChat principal (not the auth principal). Read from the store
+    // rather than `user`, which is a placeholder whose id isn't a principal until the user's summary
+    // has loaded.
+    let votingHotkey = $derived(
+        userWalletAccount($currentUserIdStore, () => client.OcIdentityPrincipal).owner.toText(),
+    );
+    // The warning not to send tokens to the addresses below, split around its bracketed link to
+    // the wallet, so each translation can put the link wherever its grammar needs it
+    let addressesWarning = $derived.by(() => {
+        const text = $_("notWalletAddressesWarning");
+        const match = text.match(/^(.*)\[(.+)\](.*)$/s);
+        return match === null
+            ? { before: text, link: "", after: "" }
+            : { before: match[1], link: match[2], after: match[3] };
+    });
 
-    //@ts-ignore
-    let version = window.OC_WEBSITE_VERSION;
+    // @ts-expect-error OC_WEBSITE_VERSION is injected at build time and not declared on Window
+    const version = window.OC_WEBSITE_VERSION;
 
     // Hidden diagnostics: tapping the version number 5 times reveals the crash
     // log recorded by errorPostmortem, so mobile users can copy & share it
@@ -184,14 +205,17 @@
             bio: userbio,
         };
     });
-    let bioDirty = $derived(userbio !== originalProfile.bio);
-    let usernameDirty = $derived(username !== originalUsername);
-    let displayNameDirty = $derived(displayName !== originalDisplayName);
+    // username and display name are compared with the user record, which the client updates when they save
+    let savedProfile = $derived({
+        ...originalProfile,
+        username: originalUsername,
+        displayName: originalDisplayName,
+    });
+    let changes = $derived(profileChanges(savedProfile, candidateProfile));
     let buttonEnabled = $derived(
         usernameValid &&
             displayNameValid &&
-            bioError === undefined &&
-            (bioDirty || usernameDirty || displayNameDirty) &&
+            (changes.username || changes.displayName || changes.bio) &&
             !saving &&
             !readonly,
     );
@@ -219,85 +243,19 @@
         client.setModerationFlags($moderationFlagsEnabledStore ^ flag);
     }
 
-    function saveUser(e: Event) {
+    async function saveUser(e: Event) {
         e.preventDefault();
-
-        if ($anonUserStore) return;
-
         saving = true;
-        usernameError = undefined;
-        bioError = undefined;
-        const promises = [];
-
-        if (bioDirty) {
-            promises.push(
-                client
-                    .setBio(userbio)
-                    .then((resp) => {
-                        if (resp.kind === "error" && resp.code === ErrorCode.TextTooLong) {
-                            bioError = "register.bioTooLong";
-                        } else {
-                            originalProfile.bio = userbio;
-                        }
-                    })
-                    .catch((err) => {
-                        toastStore.showFailureToast(i18nKey("unableToSaveUserProfile"));
-                        client.logError("Unable to save user bio: ", err);
-                    }),
-            );
+        try {
+            const outcome = await client.saveProfile(savedProfile, candidateProfile);
+            originalProfile = outcome.profile;
+            errors = outcome.errors;
+            if (outcome.failure !== undefined) {
+                toastStore.showFailureToast(outcome.failure);
+            }
+        } finally {
+            saving = false;
         }
-
-        if (usernameDirty) {
-            promises.push(
-                client
-                    .setUsername(user.userId, username)
-                    .then((resp) => {
-                        if (resp !== "success") {
-                            if (resp === "username_taken") {
-                                usernameError = "register.usernameTaken";
-                            } else if (resp === "user_not_found") {
-                                usernameError = "register.userNotFound";
-                            } else if (resp === "username_too_short") {
-                                usernameError = "register.usernameTooShort";
-                            } else if (resp === "username_too_long") {
-                                usernameError = "register.usernameTooLong";
-                            } else if (resp === "username_invalid") {
-                                usernameError = "register.usernameInvalid";
-                            }
-                        }
-                    })
-                    .catch((err) => {
-                        toastStore.showFailureToast(i18nKey("unableToSaveUserProfile"));
-                        client.logError("Unable to save username: ", err);
-                    }),
-            );
-        }
-
-        if (displayNameDirty) {
-            promises.push(
-                client
-                    .setDisplayName(user.userId, displayName)
-                    .then((resp) => {
-                        if (resp !== "success") {
-                            if (resp === "user_not_found") {
-                                displayNameError = "register.userNotFound";
-                            } else if (resp === "display_name_too_short") {
-                                displayNameError = "register.displayNameTooShort";
-                            } else if (resp === "display_name_too_long") {
-                                displayNameError = "register.displayNameTooLong";
-                            } else if (resp === "display_name_invalid") {
-                                displayNameError = "register.displayNameInvalid";
-                            }
-                        }
-                    })
-                    .catch((err) => {
-                        toastStore.showFailureToast(i18nKey("unableToSaveUserProfile"));
-                        client.logError("Unable to save display name: ", err);
-                    }),
-            );
-        }
-
-        Promise.all(promises).finally(() => (saving = false));
     }
 
     function toggleNotifications() {
@@ -308,9 +266,9 @@
         }
     }
 
-    function onCopy() {
-        navigator.clipboard.writeText(user.userId).then(() => {
-            toastStore.showSuccessToast(i18nKey("userIdCopiedToClipboard"));
+    function copyToClipboard(text: string, successKey: string) {
+        navigator.clipboard.writeText(text).then(() => {
+            toastStore.showSuccessToast(i18nKey(successKey));
         });
     }
 
@@ -405,12 +363,11 @@
                         bind:username
                         bind:usernameValid
                         bind:checking={checkingUsername}
-                        bind:error={usernameError}
-                    >
-                        {#if usernameError !== undefined}
+                        bind:error={errors.username}>
+                        {#if errors.username !== undefined}
                             <ErrorMessage
-                                ><Translatable resourceKey={i18nKey(usernameError)} /></ErrorMessage
-                            >
+                                ><Translatable
+                                    resourceKey={i18nKey(errors.username)} /></ErrorMessage>
                         {/if}
                     </UsernameInput>
                     <Legend label={i18nKey("displayName")} rules={i18nKey("displayNameRules")} />
@@ -419,14 +376,11 @@
                         {originalDisplayName}
                         disabled={readonly}
                         bind:displayName
-                        bind:displayNameValid
-                    >
-                        {#if displayNameError !== undefined}
+                        bind:displayNameValid>
+                        {#if errors.displayName !== undefined}
                             <ErrorMessage
                                 ><Translatable
-                                    resourceKey={i18nKey(displayNameError)}
-                                /></ErrorMessage
-                            >
+                                    resourceKey={i18nKey(errors.displayName)} /></ErrorMessage>
                         {/if}
                     </DisplayNameInput>
                     <Legend label={i18nKey("bio")} rules={i18nKey("supportsMarkdown")} />
@@ -436,12 +390,10 @@
                         invalid={false}
                         disabled={readonly}
                         maxlength={MAX_BIO_LENGTH}
-                        placeholder={i18nKey("enterBio")}
-                    >
-                        {#if bioError !== undefined}
+                        placeholder={i18nKey("enterBio")}>
+                        {#if errors.bio !== undefined}
                             <ErrorMessage
-                                ><Translatable resourceKey={i18nKey(bioError)} /></ErrorMessage
-                            >
+                                ><Translatable resourceKey={i18nKey(errors.bio)} /></ErrorMessage>
                         {/if}
                     </TextArea>
                     <div class="full-width-btn">
@@ -705,13 +657,40 @@
                 headerText={i18nKey("advanced")}
             >
                 {#if !$anonUserStore}
+                    <AlertBox>
+                        <span use:translatable={{ key: i18nKey("notWalletAddressesWarning") }}
+                            >{addressesWarning.before}{#if addressesWarning.link}<Link
+                                    underline={"always"}
+                                    onClick={() => publish("wallet")}
+                                    >{addressesWarning.link}</Link
+                                >{/if}{addressesWarning.after}</span>
+                    </AlertBox>
                     <div class="userid">
-                        <Legend label={i18nKey("userId")} rules={i18nKey("alsoCanisterId")} />
+                        <Legend label={i18nKey("userId")} />
                         <div class="userid-txt">
                             <div>{user.userId}</div>
-                            <div role="button" tabindex="0" onclick={onCopy} class="copy">
+                            <button
+                                type="button"
+                                aria-label={$_("copyToClipboard")}
+                                onclick={() =>
+                                    copyToClipboard(user.userId, "userIdCopiedToClipboard")}
+                                class="copy">
                                 <CopyIcon size={$iconSize} color={"var(--icon-txt)"} />
-                            </div>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="userid">
+                        <Legend label={i18nKey("votingHotkey")} />
+                        <div class="userid-txt">
+                            <div>{votingHotkey}</div>
+                            <button
+                                type="button"
+                                aria-label={$_("copyToClipboard")}
+                                onclick={() =>
+                                    copyToClipboard(votingHotkey, "votingHotkeyCopiedToClipboard")}
+                                class="copy">
+                                <CopyIcon size={$iconSize} color={"var(--icon-txt)"} />
+                            </button>
                         </div>
                     </div>
                 {/if}
@@ -819,6 +798,10 @@
             align-items: center;
 
             .copy {
+                display: flex;
+                padding: 0;
+                border: none;
+                background: none;
                 cursor: pointer;
             }
         }

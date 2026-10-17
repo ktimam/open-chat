@@ -13,8 +13,9 @@ vi.mock("component-lib", async () => {
 });
 
 vi.mock("@client", async () => {
-    const { writable } = await import("svelte/store");
-    return { mobileWidth: writable(false) };
+    const { writable } = await import("@client/utils/stores");
+    return {
+        ...(await import("@client/utils/stores")), mobileWidth: writable(false) };
 });
 
 const mounted = new Set<ReturnType<typeof mount>>();

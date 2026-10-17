@@ -1,6 +1,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 import { ROLE_NONE } from "../../constants";
 import { emptyChatMetrics } from "../../utils";
+import type { ResourceKey } from "../../utils/i18n";
 import type { AccessControlled, AccessGateConfig, UpdatedRules, VersionedRules } from "../access";
 import type {
     CommandArg,
@@ -23,6 +24,7 @@ import type {
     ChatPermissions,
     HasMembershipRole,
     MemberRole,
+    OptionalChatPermissions,
     Permissioned,
 } from "../permission";
 import type {
@@ -202,7 +204,7 @@ export interface P2PSwapContentInitial {
     caption?: string;
     expiresIn: bigint;
     // An ICRC-1 textual account to take the funds from, for spending from a wallet OpenChat does
-    // not control. Left undefined to spend from the user's own canister.
+    // not control. Left undefined to spend from the user's wallet.
     fromAccount?: string;
     // The external wallet a draft of this offer intends to fund it from, by its `SignerWallet`
     // id. Purely the UI's note to itself: a draft carries the intent until the moment the message
@@ -396,7 +398,7 @@ export type PendingCryptocurrencyTransfer = {
     memo?: bigint;
     createdAtNanos: bigint;
     // An ICRC-1 textual account to take the funds from, for spending from a wallet OpenChat does
-    // not control. Left undefined to spend from the user's own canister.
+    // not control. Left undefined to spend from the user's wallet.
     fromAccount?: string;
     // The external wallet a draft of this transfer intends to spend from, by its `SignerWallet`
     // id. Purely the UI's note to itself: a draft carries the intent until the moment the message
@@ -494,7 +496,10 @@ export const PrizeContentSchema = Type.Object({
     streakOnly: Type.Number(),
     winnerCount: Type.Number(),
     userIsWinner: Type.Boolean(),
+    // The token's symbol, for display. Several ledgers can share a symbol, so the token itself is
+    // looked up by `ledger`.
     token: Type.String(),
+    ledger: Type.String(),
     endDate: Type.BigInt(),
     caption: Type.Optional(Type.String()),
     requiresCaptcha: Type.Boolean(),
@@ -1398,10 +1403,6 @@ export type EventsSuccessResult<T extends ChatEvent> = {
 export type UpdatesResult = {
     directChatsAddedUpdated: DirectChatSummary[];
     directChatsRemoved: string[];
-    // Each of `directChatsRemoved` which was moved rather than deleted, onto the other user's new
-    // id after they were migrated to a MultiUser canister, mapped to that id. The chat under the new
-    // id is in `directChatsAddedUpdated`, and its cached events have been moved onto it.
-    directChatsMoved: Map<string, string>;
     groupsAddedUpdated: GroupChatSummary[];
     groupsRemoved: string[];
     communitiesAddedUpdated: CommunitySummary[];
@@ -1421,6 +1422,7 @@ export type UpdatesResult = {
     installedBots: Map<string, GrantedBotPermissions> | undefined;
     bitcoinAddress: string | undefined;
     oneSecAddress: string | undefined;
+    solanaAddress: string | undefined;
     streakInsurance: OptionUpdate<StreakInsurance>;
     updatedEvents: Map<string, UpdatedEvent[]>;
     suspensionChanged: boolean | undefined;
@@ -1450,6 +1452,7 @@ export type ChatStateFull = {
     installedBots: Map<string, GrantedBotPermissions>;
     bitcoinAddress: string | undefined;
     oneSecAddress: string | undefined;
+    solanaAddress: string | undefined;
     streakInsurance: StreakInsurance | undefined;
     premiumItems: Set<PremiumItem>;
 };
@@ -1590,6 +1593,7 @@ export type InitialStateResponse = {
     bots: Map<string, GrantedBotPermissions>;
     bitcoinAddress: string | undefined;
     oneSecAddress: string | undefined;
+    solanaAddress: string | undefined;
     streakInsurance?: StreakInsurance;
     premiumItems: Set<PremiumItem>;
     pinnedChats: ChatIdentifier[];
@@ -1679,6 +1683,7 @@ export type UpdatesSuccessResponse = {
     botsRemoved: string[];
     bitcoinAddress: string | undefined;
     oneSecAddress: string | undefined;
+    solanaAddress: string | undefined;
     streakInsurance: OptionUpdate<StreakInsurance>;
     premiumItems: Set<PremiumItem> | undefined;
     pinnedChats: ChatIdentifier[] | undefined;
@@ -2404,6 +2409,38 @@ export type UpdateGroupResponse =
     | Offline
     | OCError;
 
+/** What an edit changes about a group. A field left out stays as it is. */
+export type GroupChanges = {
+    name?: string;
+    description?: string;
+    rules?: UpdatedRules;
+    permissions?: OptionalChatPermissions;
+    avatar?: Uint8Array;
+    eventsTimeToLive?: OptionUpdate<bigint>;
+    gateConfig?: AccessGateConfig;
+    isPublic?: boolean;
+    messagesVisibleToNonMembers?: boolean;
+    externalUrl?: string;
+};
+
+/**
+ * A change the user has to confirm before it is saved: renaming a verified group, which loses its
+ * verification, or making a group public or private
+ */
+export type GroupChangeConfirmation = "verified_name" | "visibility";
+
+export type UpdateGroupOutcome =
+    | { kind: "success" }
+    | { kind: "unchanged" }
+    | { kind: "needs_confirmation"; confirmation: GroupChangeConfirmation }
+    | { kind: "failed"; message: ResourceKey };
+
+/** `created_without_invites` means the group was created but inviting the chosen users failed */
+export type CreateGroupOutcome =
+    | { kind: "created"; chatId: MultiUserChatIdentifier }
+    | { kind: "created_without_invites"; chatId: MultiUserChatIdentifier; message: ResourceKey }
+    | { kind: "failed"; message: ResourceKey };
+
 export type UpdatePermissionsResponse =
     | "success"
     | "not_authorized"
@@ -2474,6 +2511,16 @@ export type ResetInviteCodeSuccess = {
     code: string;
 };
 
+/** A group's or community's invite link, as the backend last reported it */
+export type InviteLink =
+    | { kind: "public" } // anyone can join, so the link carries no code
+    | { kind: "none" } // a private channel: it has no invite link of its own
+    | { kind: "disabled" }
+    | { kind: "enabled"; code: string };
+
+/** The link after an invite link operation, or why it failed, in which case the link is unchanged */
+export type InviteLinkOutcome = InviteLink | { kind: "failed"; message: ResourceKey };
+
 export type ThreadPreviewsResponse = ThreadPreviewsSuccess | OCError | Offline;
 
 export type ThreadPreviewsSuccess = {
@@ -2508,6 +2555,13 @@ export type Metrics = {
 };
 
 export type RegisterProposalVoteResponse = Success | OCError | Offline | Failure;
+
+/** How a vote on a proposal went. `skipped` means nothing was sent because the user has already voted or a vote is in flight */
+export type ProposalVoteOutcome =
+    | { kind: "voted" }
+    | { kind: "skipped" }
+    | { kind: "no_eligible_neurons" }
+    | { kind: "failed"; message: ResourceKey };
 
 export type ListNervousSystemFunctionsResponse = {
     reservedIds: bigint[];
@@ -2616,6 +2670,42 @@ export type PublicGroupSummaryResponse =
 export type GroupMoved = { kind: "group_moved"; location: ChannelIdentifier };
 
 export type TipMessageResponse = Success | OCError | Failure;
+
+/**
+ * How tipping a message went. `pin_failed` means the PIN the user entered was refused; the message
+ * to show for that is in the PIN failure store, since it counts down to the next attempt.
+ */
+export type TipOutcome =
+    | { kind: "tipped" }
+    | { kind: "cancelled" }
+    | { kind: "pin_failed" }
+    | { kind: "failed"; message: ResourceKey };
+
+/**
+ * How sending tokens to a user in a message went. `pin_failed` means the PIN the user entered was
+ * refused; the message to show for that is in the PIN failure store, since it counts down to the
+ * next attempt.
+ */
+export type CryptoTransferOutcome =
+    | { kind: "sent" }
+    | { kind: "cancelled" }
+    | { kind: "pin_failed" }
+    | { kind: "failed"; message: ResourceKey };
+
+// What the app needs to enter a call's room
+export type VideoCallRoom = {
+    token: string;
+    roomName: string;
+    messageId: bigint;
+    callType: VideoCallType;
+    // the call was already running, so this user is joining it rather than starting it
+    joining: boolean;
+};
+
+export type VideoCallOutcome =
+    | { kind: "joined" }
+    | { kind: "no_meeting" }
+    | { kind: "failed"; message: ResourceKey };
 
 export type GroupAndCommunitySummaryUpdatesArgs = {
     canisterId: string;
@@ -2730,6 +2820,8 @@ export type SetPinNumberResponse =
     | OCError;
 
 export type PinNumberFailures = PinRequired | PinIncorrect | TooManyFailedPinAttempts;
+
+export type CheckPinNumberResponse = Success | OCError;
 
 export type MessageFilter = {
     id: bigint;

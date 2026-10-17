@@ -9,7 +9,6 @@ import { describe, expect, test } from "vitest";
 import { UserClient } from "./user.client";
 
 const THEM = "ryjl3-tyaaa-aaaaa-aaaba-cai";
-const USER_CANISTER_USER = "rrkah-fqaaa-aaaaa-aaaaq-cai";
 const MULTI_USER_CANISTER_USER = indexedUserId(
     Principal.fromText("dfdal-2uaaa-aaaaa-qaama-cai"),
     3,
@@ -39,19 +38,12 @@ describe("UserClient reading a direct chat's events", () => {
         return queries;
     }
 
-    test("a MultiUser canister is told whose copy of the chat to read", async () => {
-        expect(await sent(MULTI_USER_CANISTER_USER)).toEqual([
-            ["events", MULTI_USER_CANISTER_USER, THEM],
-            ["events_by_index", MULTI_USER_CANISTER_USER, THEM],
-            ["events_window", MULTI_USER_CANISTER_USER, THEM],
-        ]);
-    });
-
-    test("a User canister is told whose copy of the chat to read too", async () => {
-        expect(await sent(USER_CANISTER_USER)).toEqual([
-            ["events", USER_CANISTER_USER, THEM],
-            ["events_by_index", USER_CANISTER_USER, THEM],
-            ["events_window", USER_CANISTER_USER, THEM],
+    test("the user's canister is told whose copy of the chat to read", async () => {
+        const userId = MULTI_USER_CANISTER_USER;
+        expect(await sent(userId)).toEqual([
+            ["events", userId, THEM],
+            ["events_by_index", userId, THEM],
+            ["events_window", userId, THEM],
         ]);
     });
 });
@@ -97,52 +89,19 @@ describe("UserClient sending crypto in a direct chat", () => {
             EXTERNAL_ACCOUNT,
         );
     });
-
-    test("a User canister sends it from its own account", () => {
-        expect(fromAccount(USER_CANISTER_USER, crypto())).toBeUndefined();
-    });
-
-    test("any other message is left as it is", () => {
-        const content: MessageContent = { kind: "text_content", text: "hello" };
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const client = Object.create(UserClient.prototype) as any;
-        client.userId = MULTI_USER_CANISTER_USER;
-        client.identity = { getPrincipal: () => ME };
-
-        expect(client.transferFromWallet(content)).toBe(content);
-    });
 });
 
-describe("UserClient approving a spender", () => {
-    const LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai";
-    const SPENDER = Principal.fromText("rno2w-sqaaa-aaaaa-aaacq-cai");
-
-    // The spender the User canister is asked to approve
-    async function approved(subaccount?: Uint8Array): Promise<unknown> {
-        let sent: { spender: unknown } | undefined;
+describe("UserClient deleting a saved crypto account", () => {
+    test("the account is deleted by name", async () => {
+        const updates: [string, unknown][] = [];
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const client = Object.create(UserClient.prototype) as any;
-        client.update = (method: string, args: { spender: unknown }) => {
-            expect(method).toEqual("approve_transfer");
-            sent = args;
+        client.update = (method: string, args: unknown) => {
+            updates.push([method, args]);
             return Promise.resolve({ kind: "success" });
         };
 
-        await client.approveTransfer({ owner: SPENDER, subaccount }, LEDGER, 100n, 1_000n, "1234");
-        return sent?.spender;
-    }
-
-    test("a spender's subaccount is approved, as a group or community pulls a gate's payment", async () => {
-        const subaccount = new Uint8Array(32).fill(7);
-
-        expect(await approved(subaccount)).toEqual({
-            owner: SPENDER.toUint8Array(),
-            subaccount: [...subaccount],
-        });
-    });
-
-    test("a spender's default account is approved, as the ProposalsBot pulls a proposal's fee", async () => {
-        expect(await approved()).toEqual({ owner: SPENDER.toUint8Array(), subaccount: undefined });
+        await client.deleteCryptoAccount("Savings");
+        expect(updates).toEqual([["delete_saved_crypto_account", { name: "Savings" }]]);
     });
 });

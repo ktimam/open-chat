@@ -7,6 +7,7 @@ use types::{
     ModerationReportStatus, TextContent, TimestampMillis, UserId,
 };
 use user_index_canister::resolve_moderation_report::ModerationVerdict;
+use utils::migrated_user_ids::MigratedUserIds;
 
 // Generous cap on how many not-yet-reported messages a single user can report per hour, so that
 // one user cannot mass-report to trigger unbounded OpenAI calls and flood the moderation channel
@@ -575,6 +576,15 @@ impl ReportedMessages {
             return true;
         }
         false
+    }
+}
+
+// The chat, with the other user in a direct chat named by their latest id rather than one they had
+// before being migrated to a MultiUser canister
+pub fn latest_chat(chat: Chat, migrated_user_ids: &MigratedUserIds) -> Chat {
+    match chat {
+        Chat::Direct(chat_id) => Chat::Direct(migrated_user_ids.latest(chat_id.into()).into()),
+        chat => chat,
     }
 }
 

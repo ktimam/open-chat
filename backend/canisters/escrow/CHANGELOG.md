@@ -8,11 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Await work inside timers rather than spawning a task from them ([#9971](https://github.com/open-chat-labs/open-chat/pull/9971))
+- Stop tracking the async work in progress, since nothing reads it any more ([#9972](https://github.com/open-chat-labs/open-chat/pull/9972))
+
+### Removed
+
+- Remove the one-off which cancelled the open swaps set to stay open for more than 90 days, now that it has run ([#9871](https://github.com/open-chat-labs/open-chat/pull/9871))
+
+## [[2.0.2124](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2124-escrow)] - 2026-10-08
+
+### Changed
+
+- Cap swaps at 90 days, cancelling the open swaps created longer ago than that ([#9832](https://github.com/open-chat-labs/open-chat/pull/9832))
+
+## [[2.0.2100](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2100-escrow)] - 2026-10-06
+
+### Changed
+
 - Run the repeating jobs on `PerRoundTimer` rather than `set_timer_interval` ([#9772](https://github.com/open-chat-labs/open-chat/pull/9772))
+- Take payment retry delays from the shared `utils::payment_retries` ([#9794](https://github.com/open-chat-labs/open-chat/pull/9794))
 
 ### Removed
 
 - Remove the unused cache of the latest ids of users migrated to MultiUser canisters ([#9617](https://github.com/open-chat-labs/open-chat/pull/9617))
+
+### Fixed
+
+- Retry failed swap status notifications after a delay rather than every round, and drop those to uninstalled canisters ([#9785](https://github.com/open-chat-labs/open-chat/pull/9785))
+- Retry payments whose ledger can't be called after a growing delay rather than every round, and park those to uninstalled or deleted ledgers ([#9789](https://github.com/open-chat-labs/open-chat/pull/9789))
+- Handle each ledger error from a payment rather than dropping the payment: retry, remake if too old, record duplicates as made, or park ([#9791](https://github.com/open-chat-labs/open-chat/pull/9791))
+- Lock a deposit while its balance is checked, and while it's refunded for being too low, so it can't be topped up and recorded before its refund is made ([#9793](https://github.com/open-chat-labs/open-chat/pull/9793))
 
 ## [[2.0.2069](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2069-escrow)] - 2026-09-29
 

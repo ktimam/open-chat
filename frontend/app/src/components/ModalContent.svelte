@@ -11,7 +11,7 @@
     import { currentTheme } from "../theme/themes";
     import Button from "./Button.svelte";
     import HoverIcon from "./HoverIcon.svelte";
-    import Translatable from "./Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     type OnClose = (() => void) | undefined;
 
@@ -73,8 +73,6 @@
         rendering,
     }: Props = $props();
 
-    actualWidth;
-
     let divElement: HTMLElement;
 
     let useAlignTo = $derived(alignTo !== undefined && !$mobileWidth);
@@ -96,7 +94,7 @@
             }
             tick().then(() => (actualWidth = divElement?.clientWidth));
             divElement.addEventListener("click", closeMenus);
-        } catch (e: any) {
+        } catch (e) {
             console.error("Failed to open modal", e);
             onClose?.();
         }

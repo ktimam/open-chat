@@ -41,7 +41,6 @@
         return true;
     });
 
-    // @ts-ignore
     async function connectWith(connector: Connector) {
         try {
             connecting = connector;
@@ -73,7 +72,7 @@
         }
     }
 
-    let icons: Record<string, string> = {
+    const icons: Record<string, string> = {
         walletConnect: "/assets/walletconnect.svg",
         coinbaseWalletSDK: "/assets/coinbase.svg",
         metaMaskSDK: "/assets/metamask.svg",

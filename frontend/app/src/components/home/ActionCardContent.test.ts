@@ -1,6 +1,6 @@
 import type { ActionCardContent, ChatIdentifier, OpenChat } from "@client";
 import { mount, tick, unmount } from "svelte";
-import { writable } from "svelte/store";
+import { writable } from "@client/utils/stores";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import ActionCardContentHarness from "../../../test-stubs/ActionCardContentHarness.svelte";
 

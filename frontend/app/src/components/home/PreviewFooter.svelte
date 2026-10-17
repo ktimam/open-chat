@@ -6,8 +6,9 @@
     import { i18nKey } from "../../i18n/i18n";
     import { toastStore } from "../../stores/toast";
     import Button from "../Button.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AccessGateIconsForChat from "./access/AccessGateIconsForChat.svelte";
+    import { unfreezeTarget } from "./unfreezeTarget";
 
     const client = getContext<OpenChat>("client");
 
@@ -30,10 +31,7 @@
     let freezingInProgress = $state(false);
 
     function joinGroup() {
-        publish("joinGroup", {
-            group: chat,
-            select: false,
-        });
+        publish("joinGroup", chat);
     }
 
     function cancelPreview() {
@@ -87,32 +85,29 @@
     function unfreeze() {
         freezingInProgress = true;
 
-        switch (chat.kind) {
-            case "group_chat":
-                client
-                    .unfreezeGroup(chat.id)
-                    .then((success) => {
-                        if (!success) {
-                            toastStore.showFailureToast(i18nKey("failedToUnfreezeGroup"));
-                        } else {
-                            toastStore.showSuccessToast(i18nKey("Chat unfrozen"));
-                        }
-                    })
-                    .finally(() => (freezingInProgress = false));
-
-            case "channel":
-                if ($selectedCommunitySummaryStore) {
-                    client
-                        .unfreezeCommunity($selectedCommunitySummaryStore.id)
-                        .then((success) => {
-                            if (!success) {
-                                toastStore.showFailureToast(i18nKey("failedToUnfreezeCommunity"));
-                            } else {
-                                toastStore.showSuccessToast(i18nKey("communityUnfrozen"));
-                            }
-                        })
-                        .finally(() => (freezingInProgress = false));
-                }
+        const target = unfreezeTarget(chat, $selectedCommunitySummaryStore?.id);
+        if (target?.kind === "group") {
+            client
+                .unfreezeGroup(target.id)
+                .then((success) => {
+                    if (!success) {
+                        toastStore.showFailureToast(i18nKey("failedToUnfreezeGroup"));
+                    } else {
+                        toastStore.showSuccessToast(i18nKey("Chat unfrozen"));
+                    }
+                })
+                .finally(() => (freezingInProgress = false));
+        } else if (target?.kind === "community") {
+            client
+                .unfreezeCommunity(target.id)
+                .then((success) => {
+                    if (!success) {
+                        toastStore.showFailureToast(i18nKey("failedToUnfreezeCommunity"));
+                    } else {
+                        toastStore.showSuccessToast(i18nKey("communityUnfrozen"));
+                    }
+                })
+                .finally(() => (freezingInProgress = false));
         }
     }
 </script>

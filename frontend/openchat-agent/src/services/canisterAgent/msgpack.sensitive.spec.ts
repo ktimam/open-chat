@@ -109,6 +109,23 @@ describe("sensitive Msgpack calls", () => {
         }
     });
 
+    it("keeps full sensitive-value suppression when the upstream method context is supplied", () => {
+        const value = { new: "synthetic-pin", bearer: "synthetic-private-link" };
+        const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+        expect(() =>
+            typeboxValidate(value, Type.Object({ new: Type.Never() }), "set_pin_number", {
+                sensitive: true,
+            }),
+        ).toThrow();
+
+        expect(error).toHaveBeenCalledExactlyOnceWith(
+            "Typebox validation failed for a sensitive value",
+        );
+        expect(loggedText(error.mock.calls)).not.toContain(value.new);
+        expect(loggedText(error.mock.calls)).not.toContain(value.bearer);
+    });
+
     it("opts every confirmation-grant mint into sensitive handling", () => {
         const clients = [
             {
@@ -206,7 +223,7 @@ describe("sensitive Msgpack calls", () => {
             },
             {
                 file: resolve(__dirname, "../user/user.client.ts"),
-                nextMethod: "sendMessageWithTransferToGroup",
+                nextMethod: "loadSavedCryptoAccounts",
             },
         ];
 

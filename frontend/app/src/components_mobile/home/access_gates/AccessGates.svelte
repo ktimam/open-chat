@@ -17,10 +17,10 @@
     import MulticolourText from "../../MulticolourText.svelte";
     import Setting from "../../Setting.svelte";
     import SparkleBox from "../../SparkleBox.svelte";
-    import Translatable from "../../Translatable.svelte";
-    import { UpdateGroupState } from "../createOrUpdateGroup/group.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
+    import { UpdateGroupState } from "@shared_components/home/createOrUpdateGroup/group.svelte";
     import GroupCard from "../createOrUpdateGroup/GroupCard.svelte";
-    import type { UpdateGroupOrCommunityState } from "../groupOrCommunity.svelte";
+    import type { UpdateGroupOrCommunityState } from "@shared_components/home/groupOrCommunity.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
 
     interface Props {
@@ -31,7 +31,7 @@
 
     let diamond = $derived($currentUserStore.diamondStatus.kind !== "inactive");
     let hasAccessGates = $derived(stripSuspendedGate(data.gateConfig.gate).kind !== "no_gate");
-    let gateBindings: GateBinding[] = getGateBindings(data.candidate.level).filter(
+    const gateBindings: GateBinding[] = getGateBindings(data.candidate.level).filter(
         (b) => b.enabled && b.gate.kind !== "no_gate" && b.gate.kind !== "credential_gate",
     );
     // svelte-ignore state_referenced_locally

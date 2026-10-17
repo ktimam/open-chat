@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { writable } from "@client/reactiveStores";
 import type { LocalDraftDelivery } from "./localAppDrafts";
 import { sealLocalAppDelivery } from "./localAppEncryption";
 import { localAppDeliveryStatus } from "./localAppRelayDelivery";
@@ -224,7 +224,19 @@ export function createNativeAppDelivery(deps: Dependencies) {
             })();
         });
     };
-    return { deliver, pairing: { subscribe: pairing.subscribe }, cancelAll };
+    return {
+        deliver,
+        pairing: {
+            subscribe: (...args: Parameters<typeof pairing.subscribe>) => pairing.subscribe(...args),
+            get value() {
+                return pairing.value;
+            },
+            get dirty() {
+                return pairing.dirty;
+            },
+        },
+        cancelAll,
+    };
 }
 
 export const nativeAppDelivery = createNativeAppDelivery({

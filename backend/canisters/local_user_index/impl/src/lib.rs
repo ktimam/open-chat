@@ -8,15 +8,12 @@ use crate::model::local_group_map::LocalGroupMap;
 use crate::model::local_multi_user_canister_map::LocalMultiUserCanisterMap;
 use crate::model::media_scan_job_log::MediaScanJobLog;
 use crate::model::moderation_queue::ModerationQueue;
-use crate::model::old_local_group_index::{OldLocalGroupIndex, OldLocalGroupIndexMetrics};
 use crate::model::premium_items::PremiumItems;
-use crate::model::recent_joins::RecentJoins;
 use crate::model::referral_codes::{ReferralCodes, ReferralTypeMetrics};
 use crate::model::registry_tokens::RegistryTokens;
 use crate::model::top_up_leaderboards::TopUpLeaderboards;
 use crate::model::user_event_batch::UserEventBatch;
 use crate::model::user_index_event_batch::UserIndexEventBatch;
-use crate::model::users_to_migrate::{UserToCloseOut, UserToImport, UsersToMigrate};
 use crate::model::web_push_subscriptions::WebPushSubscriptions;
 use candid::Principal;
 use canister_state_macros::canister_state;
@@ -33,6 +30,8 @@ use local_user_index_canister::{ChildCanisterType, GlobalUser};
 use model::bots_map::BotsMap;
 use model::global_user_map::GlobalUserMap;
 use model::local_user_map::LocalUserMap;
+use multi_user_canister::LocalUserIndexEvent as UserEvent;
+use oc_error_codes::OCErrorCode;
 use p256_key_pair::P256KeyPair;
 use proof_of_unique_personhood::verify_proof_of_unique_personhood;
 use rand::Rng;
@@ -50,10 +49,9 @@ use types::{
     Chat, ChatId, ChildCanisterWasms, CommunityCanisterChannelSummary, CommunityCanisterCommunitySummary, CommunityId, Cycles,
     CyclesTopUp, DailyPuzzleResult, DeclineVideoCallClaims, DiamondMembershipDetails, DirectCallDismissedNotification, FcmData,
     GroupCallDismissedNotification, IdempotentEnvelope, MediaScanConfig, MessageContentInitial, MessageId, Milliseconds,
-    ModerationReferralConfig, Notification, NotificationEnvelope, ReferralType, TimestampMillis, Timestamped, UserId,
+    ModerationReferralConfig, Notification, NotificationEnvelope, OCResult, ReferralType, TimestampMillis, Timestamped, UserId,
     UserNotificationEnvelope, UserNotificationPayload, VerifiedCredentialGateArgs,
 };
-use user_canister::LocalUserIndexEvent as UserEvent;
 use user_ids_set::UserIdsSet;
 use user_index_canister::LocalUserIndexEvent as UserIndexEvent;
 use utils::canister;
@@ -86,9 +84,10 @@ const MULTI_USER_UPGRADE_CONCURRENCY: usize = 1;
 // this plus one top up, and is topped up by half this at a time.
 fn child_min_cycles_balance(canister_type: ChildCanisterType) -> Cycles {
     match canister_type {
-        ChildCanisterType::User => utils::cycles::USER_CANISTER_MIN_CYCLES_BALANCE, // 0.3T
         ChildCanisterType::Group | ChildCanisterType::Community => utils::cycles::MIN_CYCLES_BALANCE, // 1T
-        ChildCanisterType::MultiUser => MULTI_USER_CANISTER_MIN_CYCLES_BALANCE,     // 10T
+        ChildCanisterType::MultiUser => MULTI_USER_CANISTER_MIN_CYCLES_BALANCE,                       // 10T
+        #[expect(deprecated)]
+        ChildCanisterType::User => utils::cycles::MIN_CYCLES_BALANCE,
     }
 }
 
@@ -190,11 +189,6 @@ impl RuntimeState {
         self.data.notifications_index_canister_id == caller
     }
 
-    pub fn is_caller_local_user_canister(&self) -> bool {
-        let caller = self.env.caller();
-        self.data.local_users.contains(&caller.into())
-    }
-
     pub fn is_caller_local_multi_user_canister(&self) -> bool {
         let caller = self.env.caller();
         self.data.local_multi_user_canisters.contains(&caller)
@@ -212,8 +206,7 @@ impl RuntimeState {
 
     pub fn is_caller_local_child_canister(&self) -> bool {
         let caller = self.env.caller();
-        self.data.local_users.contains(&caller.into())
-            || self.data.local_groups.contains(&caller.into())
+        self.data.local_groups.contains(&caller.into())
             || self.data.local_communities.contains(&caller.into())
             || self.data.local_multi_user_canisters.contains(&caller)
     }
@@ -221,8 +214,6 @@ impl RuntimeState {
     pub fn child_canister_type(&self, canister_id: CanisterId) -> Option<ChildCanisterType> {
         if self.data.local_multi_user_canisters.contains(&canister_id) {
             Some(ChildCanisterType::MultiUser)
-        } else if self.data.local_users.contains(&canister_id.into()) {
-            Some(ChildCanisterType::User)
         } else if self.data.local_groups.contains(&canister_id.into()) {
             Some(ChildCanisterType::Group)
         } else if self.data.local_communities.contains(&canister_id.into()) {
@@ -235,10 +226,9 @@ impl RuntimeState {
     // The cycles top ups of one of this canister's children, or None if it isn't one
     pub fn child_canister_cycle_top_ups(&self, canister_id: CanisterId) -> Option<&[CyclesTopUp]> {
         self.data
-            .local_users
+            .local_groups
             .get(&canister_id.into())
-            .map(|u| &u.cycle_top_ups)
-            .or_else(|| self.data.local_groups.get(&canister_id.into()).map(|g| &g.cycle_top_ups))
+            .map(|g| &g.cycle_top_ups)
             .or_else(|| self.data.local_communities.get(&canister_id.into()).map(|c| &c.cycle_top_ups))
             .or_else(|| {
                 self.data
@@ -327,10 +317,29 @@ impl RuntimeState {
     }
 
     // Whether this LocalUserIndex holds the user by their latest id, which, if they've been migrated to
-    // a MultiUser canister held by another LocalUserIndex, it doesn't, even while it still holds
-    // their old canister
+    // a MultiUser canister held by another LocalUserIndex, it doesn't
     pub fn holds_latest_id_of(&self, user_id: UserId) -> bool {
         self.data.local_users.contains(&self.data.migrated_user_ids.latest(user_id))
+    }
+
+    // A direct chat may name the user by an id they had before being migrated to a MultiUser canister,
+    // eg. a bot installed in their direct chats before then, which still knows them by it. Their old
+    // canister is uninstalled once they've been migrated, so the chat is named by their latest id.
+    // If another LocalUserIndex holds them by it, their new canister is on another subnet, where it
+    // can't be reached from here, so the caller is told they've moved, and their new id.
+    pub fn latest_chat(&self, chat: Chat) -> OCResult<Chat> {
+        if let Chat::Direct(chat_id) = chat {
+            let user_id = UserId::from(chat_id);
+            let latest_user_id = self.data.migrated_user_ids.latest(user_id);
+            if latest_user_id != user_id {
+                return if self.data.local_users.contains(&latest_user_id) {
+                    Ok(Chat::Direct(latest_user_id.into()))
+                } else {
+                    Err(OCErrorCode::UserMovedToNewSubnet.with_message(latest_user_id))
+                };
+            }
+        }
+        Ok(chat)
     }
 
     // Queues an event for the user, by their latest id if they've been migrated to a MultiUser canister.
@@ -353,85 +362,25 @@ impl RuntimeState {
         }
     }
 
-    // Tells the user of another user's new id
-    pub fn notify_user_of_migrated_user_id(
-        &mut self,
-        user_id: UserId,
-        old_user_id: UserId,
-        new_user_id: UserId,
-        now: TimestampMillis,
-    ) {
-        let latest_user_id = self.data.migrated_user_ids.latest(user_id);
-        let event = UserEvent::UserIdMigrated(Box::new(user_canister::UserIdMigrated {
-            old_user_id,
-            new_user_id,
-        }));
-
-        if self.data.local_users.contains(&latest_user_id) {
-            self.push_event_to_user(latest_user_id, event, now);
-        } else {
-            // The user isn't held here. If they've been migrated to a canister on another
-            // LocalUserIndex, the notice is sent on to them there
-            let envelope = IdempotentEnvelope {
+    // Queues an event for a MultiUser canister itself rather than for one of its users. The queue pairs
+    // each event with a user, so it is sent under the canister's own id.
+    pub fn push_event_to_multi_user_canister(&mut self, canister_id: CanisterId, event: UserEvent, now: TimestampMillis) {
+        self.data.user_events_queue.push(
+            canister_id,
+            IdempotentEnvelope {
                 created_at: now,
                 idempotency_id: self.env.rng().next_u64(),
-                value: (latest_user_id, event),
-            };
-            self.push_events_queued_for_migrated_user(user_id, vec![envelope]);
-        }
+                value: (canister_id.into(), event),
+            },
+        );
     }
 
-    // Moves the events queued for a migrated user's old canister onto their latest id. If a batch of
-    // them is being sent, they are left to be moved after it, once it fails (see `UserEventBatch`), so
-    // that they stay in order.
-    pub fn move_events_queued_for_migrated_user(&mut self, old_user_id: UserId) {
-        let canister_id = old_user_id.canister_id();
-        if old_user_id.index() == 0 && !self.data.user_events_queue.is_in_progress(&canister_id) {
-            let events = self.data.user_events_queue.take(&canister_id);
-            self.push_events_queued_for_migrated_user(old_user_id, events);
-        }
-    }
-
-    // Sends events which were queued for a migrated user's old canister on to their latest id, in
-    // order. If this LocalUserIndex doesn't hold them by that id, the events go via the UserIndex to
-    // the one which does.
-    pub fn push_events_queued_for_migrated_user(
-        &mut self,
-        old_user_id: UserId,
-        events: Vec<IdempotentEnvelope<(UserId, UserEvent)>>,
-    ) {
-        let new_user_id = self.data.migrated_user_ids.latest(old_user_id);
-        if events.is_empty() || new_user_id == old_user_id {
+    // Events for a group this LocalUserIndex doesn't hold, eg. one which has been deleted, are
+    // dropped, since they could never be delivered
+    pub fn push_event_to_group(&mut self, canister_id: CanisterId, event: GroupEvent, now: TimestampMillis) {
+        if !self.data.local_groups.contains(&canister_id.into()) {
             return;
         }
-        let now = self.env.now();
-        if self.data.local_users.contains(&new_user_id) {
-            // Stamped with the current time, since the MultiUser canister ignores any event from here
-            // older than the latest it has had from here, and these may have been created before
-            // events already sent to it
-            let events = events
-                .into_iter()
-                .map(|event| IdempotentEnvelope {
-                    created_at: now,
-                    idempotency_id: event.idempotency_id,
-                    value: (new_user_id, event.value.1),
-                })
-                .collect();
-            self.data.user_events_queue.push_many(new_user_id.canister_id(), events);
-        } else {
-            for event in events {
-                self.push_event_to_user_index(
-                    UserIndexEvent::EventForMigratedUser(Box::new(user_index_canister::EventForMigratedUser {
-                        user_id: new_user_id,
-                        event: ByteBuf::from(msgpack::serialize_then_unwrap(&event.value.1)),
-                    })),
-                    now,
-                );
-            }
-        }
-    }
-
-    pub fn push_event_to_group(&mut self, canister_id: CanisterId, event: GroupEvent, now: TimestampMillis) {
         self.data.group_event_sync_queue.push(
             canister_id,
             IdempotentEnvelope {
@@ -442,7 +391,12 @@ impl RuntimeState {
         );
     }
 
+    // Events for a community this LocalUserIndex doesn't hold, eg. one which has been deleted, are
+    // dropped, since they could never be delivered
     pub fn push_event_to_community(&mut self, canister_id: CanisterId, event: CommunityEvent, now: TimestampMillis) {
+        if !self.data.local_communities.contains(&canister_id.into()) {
+            return;
+        }
         self.data.community_event_sync_queue.push(
             canister_id,
             IdempotentEnvelope {
@@ -457,7 +411,7 @@ impl RuntimeState {
         if self.holds_latest_id_of(user_id) {
             self.push_event_to_user(
                 user_id,
-                UserEvent::OpenChatBotMessageV2(Box::new(user_canister::OpenChatBotMessageV2 {
+                UserEvent::OpenChatBotMessageV2(Box::new(multi_user_canister::OpenChatBotMessageV2 {
                     thread_root_message_id: None,
                     content,
                     mentioned: Vec::new(),
@@ -522,13 +476,11 @@ impl RuntimeState {
         community_canister_timestamp: TimestampMillis,
         now: TimestampMillis,
     ) {
-        self.record_join(user_id, community_id.into(), now);
-
         let local_user_index_canister_id = self.env.canister_id();
         if self.holds_latest_id_of(user_id) {
             self.push_event_to_user(
                 user_id,
-                UserEvent::UserJoinedCommunityOrChannel(Box::new(user_canister::UserJoinedCommunityOrChannel {
+                UserEvent::UserJoinedCommunityOrChannel(Box::new(multi_user_canister::UserJoinedCommunityOrChannel {
                     community_id,
                     local_user_index_canister_id,
                     channels,
@@ -545,47 +497,6 @@ impl RuntimeState {
                     channels,
                     community_canister_timestamp,
                 })),
-                now,
-            );
-        }
-    }
-
-    // Records that the user has joined the group or community, so that it can be told of their new id if
-    // they turn out to be being migrated (see `RecentJoins`). If their migration has been heard of
-    // already, while the join was in flight, it's told now.
-    pub fn record_join(&mut self, user_id: UserId, canister_id: CanisterId, now: TimestampMillis) {
-        let latest_user_id = self.data.migrated_user_ids.latest(user_id);
-        if latest_user_id != user_id {
-            self.notify_group_or_community_of_migrated_user_id(canister_id, user_id, latest_user_id, now);
-        } else {
-            self.data.recent_joins.push(user_id, canister_id, now);
-        }
-    }
-
-    // Tells the group or community, if this LocalUserIndex holds it, that the user has been migrated
-    pub fn notify_group_or_community_of_migrated_user_id(
-        &mut self,
-        canister_id: CanisterId,
-        old_user_id: UserId,
-        new_user_id: UserId,
-        now: TimestampMillis,
-    ) {
-        if self.data.local_groups.get(&canister_id.into()).is_some() {
-            self.push_event_to_group(
-                canister_id,
-                GroupEvent::UserIdMigrated(group_canister::UserIdMigrated {
-                    old_user_id,
-                    new_user_id,
-                }),
-                now,
-            );
-        } else if self.data.local_communities.get(&canister_id.into()).is_some() {
-            self.push_event_to_community(
-                canister_id,
-                CommunityEvent::UserIdMigrated(community_canister::UserIdMigrated {
-                    old_user_id,
-                    new_user_id,
-                }),
                 now,
             );
         }
@@ -802,7 +713,6 @@ impl RuntimeState {
 
     pub fn metrics(&self) -> Metrics {
         let now = self.env.now();
-        let user_upgrades_metrics = self.data.users_requiring_upgrade.metrics();
         let group_upgrades_metrics = self.data.groups_requiring_upgrade.metrics();
         let community_upgrades_metrics = self.data.communities_requiring_upgrade.metrics();
         let multi_user_upgrades_metrics = self.data.multi_users_requiring_upgrade.metrics();
@@ -829,12 +739,6 @@ impl RuntimeState {
             oc_controlled_bots: self.data.global_users.oc_controlled_bots().iter().copied().collect(),
             platform_moderators: self.data.global_users.platform_moderators().len() as u32,
             platform_operators: self.data.global_users.platform_operators().len() as u32,
-            user_upgrades_completed: user_upgrades_metrics.completed,
-            user_upgrades_pending: user_upgrades_metrics.pending,
-            user_upgrades_in_progress: user_upgrades_metrics.in_progress,
-            user_wasm_version: self.data.child_canister_wasms.get(ChildCanisterType::User).wasm.version,
-            user_upgrade_concurrency: self.data.user_upgrade_concurrency,
-            max_concurrent_user_upgrades: self.data.max_concurrent_user_upgrades,
             group_upgrades_completed: group_upgrades_metrics.completed,
             group_upgrades_pending: group_upgrades_metrics.pending,
             group_upgrades_in_progress: group_upgrades_metrics.in_progress,
@@ -851,16 +755,8 @@ impl RuntimeState {
             multi_user_upgrades_pending: multi_user_upgrades_metrics.pending,
             multi_user_upgrades_in_progress: multi_user_upgrades_metrics.in_progress,
             multi_user_wasm_version: self.data.child_canister_wasms.get(ChildCanisterType::MultiUser).wasm.version,
-            multi_user_canisters_enabled: self.data.multi_user_canisters_enabled,
             migrated_user_ids: self.data.migrated_user_ids.len(),
             call_push_enabled: self.data.call_push_enabled,
-            user_versions: self
-                .data
-                .local_users
-                .iter_user_canisters()
-                .filter_map(|u| u.1.wasm_version)
-                .map(|v| v.to_string())
-                .count_per_value(),
             group_versions: self
                 .data
                 .local_groups
@@ -879,31 +775,24 @@ impl RuntimeState {
                 .iter()
                 .map(|u| u.1.wasm_version.to_string())
                 .count_per_value(),
-            user_upgrades_failed: user_upgrades_metrics.failed,
             group_upgrades_failed: group_upgrades_metrics.failed,
             community_upgrades_failed: community_upgrades_metrics.failed,
             multi_user_upgrades_failed: multi_user_upgrades_metrics.failed,
-            recent_user_upgrades: user_upgrades_metrics.recently_competed,
             recent_group_upgrades: group_upgrades_metrics.recently_competed,
             recent_community_upgrades: community_upgrades_metrics.recently_competed,
             recent_multi_user_upgrades: multi_user_upgrades_metrics.recently_competed,
             user_events_queue_length: self.data.user_events_queue.len(),
             user_events_queue_in_progress: self.data.user_events_queue.in_progress(),
+            group_events_queue_length: self.data.group_event_sync_queue.len(),
+            community_events_queue_length: self.data.community_event_sync_queue.len(),
             users_to_delete_queue_length: self.data.users_to_delete_queue.len(),
-            users_to_migrate_pending: self.data.users_to_migrate.pending(),
-            users_to_migrate_in_progress: self.data.users_to_migrate.in_progress(),
-            users_to_import_pending: self.data.users_to_import.pending(),
-            users_to_import_in_progress: self.data.users_to_import.in_progress(),
-            users_to_close_out_pending: self.data.users_to_close_out.pending(),
-            users_to_close_out_in_progress: self.data.users_to_close_out.in_progress(),
-            recent_joins: self.data.recent_joins.len(),
             chunk_store: crate::jobs::refresh_chunk_store::metrics(),
             cycles_refund_queue_length: self.data.cycles_refund_queue.len(),
             cycles_refunded_from_deleted_users: self.data.cycles_refunded_from_deleted_users,
             cycles_refunded_from_pool_canisters: self.data.cycles_refunded_from_pool_canisters,
             cycles_topped_up_for_refunds: self.data.cycles_topped_up_for_refunds,
-            old_local_group_index: self.data.old_local_group_index.as_ref().map(|old| old.metrics()),
             registry_tokens: self.data.registry_tokens.len(),
+            registry_burn_fees: self.data.registry_tokens.burn_fees().collect(),
             referral_codes: self.data.referral_codes.metrics(now),
             event_store_client_info,
             notification_pushers: self.data.notification_pushers.iter().copied().collect(),
@@ -914,6 +803,7 @@ impl RuntimeState {
             blocked_user_pairs: self.data.blocked_users.len() as u64,
             oc_secret_key_initialized: self.data.oc_key_pair.is_initialised(),
             openai_api_key_set: self.data.openai_api_key.is_some(),
+            alchemy_api_key_set: self.data.alchemy_api_key.is_some(),
             moderation_referral_config: self.data.moderation_referral_config.clone(),
             message_moderation_queue_len: self.data.message_moderation_queue.len() as u32,
             media_scanning_enabled: self.data.media_scan_config.enabled,
@@ -974,11 +864,9 @@ struct Data {
     pub proposals_bot_canister_id: CanisterId,
     pub cycles_dispenser_canister_id: CanisterId,
     pub escrow_canister_id: CanisterId,
-    pub online_users_canister_id: CanisterId,
     pub registry_canister_id: CanisterId,
     pub internet_identity_canister_id: CanisterId,
     pub website_canister_id: CanisterId,
-    pub users_requiring_upgrade: CanistersRequiringUpgrade,
     pub groups_requiring_upgrade: CanistersRequiringUpgrade,
     pub communities_requiring_upgrade: CanistersRequiringUpgrade,
     #[serde(default)]
@@ -991,8 +879,6 @@ struct Data {
     pub group_event_sync_queue: GroupedTimerJobQueue<GroupEventBatch>,
     pub community_event_sync_queue: GroupedTimerJobQueue<CommunityEventBatch>,
     pub test_mode: bool,
-    pub max_concurrent_user_upgrades: u32,
-    pub user_upgrade_concurrency: u32,
     pub max_concurrent_group_upgrades: u32,
     pub group_upgrade_concurrency: u32,
     pub max_concurrent_community_upgrades: u32,
@@ -1013,7 +899,6 @@ struct Data {
     pub cycles_refunded_from_pool_canisters: Cycles,
     #[serde(default)]
     pub cycles_topped_up_for_refunds: Cycles,
-    pub events_for_remote_users: Vec<(UserId, UserEvent)>,
     pub cycles_balance_check_queue: VecDeque<CanisterId>,
     pub fire_and_forget_handler: FireAndForgetHandler,
     pub idempotency_checker: IdempotencyChecker,
@@ -1033,10 +918,6 @@ struct Data {
     pub media_scan_config: MediaScanConfig,
     #[serde(default)]
     pub media_scan_job_log: MediaScanJobLog,
-    // Mirrors the flag on the UserIndex. While set, new users are placed in whichever MultiUser
-    // canister has the fewest users
-    #[serde(default)]
-    pub multi_user_canisters_enabled: bool,
     // The native call push kill switch (#9456). Off until the Android shell can ring.
     #[serde(default)]
     pub call_push_enabled: bool,
@@ -1054,27 +935,13 @@ struct Data {
     // UserIndex
     #[serde(default)]
     pub migrated_user_ids: MigratedUserIds,
-    // Users the UserIndex has asked this LocalUserIndex to start migrating to MultiUser canisters
-    #[serde(default)]
-    pub users_to_migrate: UsersToMigrate,
-    // Users the UserIndex has asked this LocalUserIndex to have one of its MultiUser canisters import
-    #[serde(default)]
-    pub users_to_import: UsersToMigrate<UserToImport>,
-    // Users switched over to the MultiUser canister they were migrated to, whose old canisters, which
-    // this LocalUserIndex controls, are to be uninstalled
-    #[serde(default)]
-    pub users_to_close_out: UsersToMigrate<UserToCloseOut>,
-    // The groups and communities users have recently joined via this LocalUserIndex, which are told
-    // of a user's new id if they turn out to have been being migrated
-    #[serde(default)]
-    pub recent_joins: RecentJoins,
     // The ledgers from which migrated users' funds can be moved, refreshed from the Registry daily
     #[serde(default)]
     pub registry_tokens: RegistryTokens,
-    // The LocalGroupIndex which ran alongside this LocalUserIndex before its work was moved in here,
-    // whose canisters are being reclaimed (see `jobs::reclaim_old_local_group_index`)
+    // The key the MultiUser canisters use to call Alchemy's Solana RPC, synced from the UserIndex and
+    // passed on to the MultiUser canisters, including any created later
     #[serde(default)]
-    pub old_local_group_index: Option<OldLocalGroupIndex>,
+    pub alchemy_api_key: Option<String>,
     // Rebuilt every 5 minutes (and on start) from the child canisters' top ups, so not persisted
     #[serde(skip)]
     pub top_up_leaderboards: TopUpLeaderboards,
@@ -1101,10 +968,6 @@ pub struct CanisterToRefund {
     pub canister_id: CanisterId,
     pub attempt: usize,
     pub retry_after: TimestampMillis,
-    // Set for a deleted group's or community's canister, which is deleted once its cycles have
-    // been refunded
-    #[serde(default)]
-    pub delete_canister: bool,
     // Set for a canister from the canister pool, which goes back into the pool once its cycles have
     // been refunded
     #[serde(default)]
@@ -1122,7 +985,6 @@ impl Data {
         cycles_dispenser_canister_id: CanisterId,
         escrow_canister_id: CanisterId,
         event_relay_canister_id: CanisterId,
-        online_users_canister_id: CanisterId,
         registry_canister_id: CanisterId,
         internet_identity_canister_id: CanisterId,
         website_canister_id: CanisterId,
@@ -1132,8 +994,8 @@ impl Data {
         openai_api_key: Option<String>,
         moderation_referral_config: Option<ModerationReferralConfig>,
         media_scan_config: MediaScanConfig,
-        multi_user_canisters_enabled: bool,
         call_push_enabled: bool,
+        alchemy_api_key: Option<String>,
         test_mode: bool,
     ) -> Self {
         Data {
@@ -1150,11 +1012,9 @@ impl Data {
             proposals_bot_canister_id,
             cycles_dispenser_canister_id,
             escrow_canister_id,
-            online_users_canister_id,
             registry_canister_id,
             internet_identity_canister_id,
             website_canister_id,
-            users_requiring_upgrade: CanistersRequiringUpgrade::default(),
             groups_requiring_upgrade: CanistersRequiringUpgrade::default(),
             communities_requiring_upgrade: CanistersRequiringUpgrade::default(),
             multi_users_requiring_upgrade: CanistersRequiringUpgrade::default(),
@@ -1165,8 +1025,6 @@ impl Data {
             community_event_sync_queue: GroupedTimerJobQueue::new(10, false),
             user_index_event_sync_queue: BatchedTimerJobQueue::new(user_index_canister_id, true),
             test_mode,
-            max_concurrent_user_upgrades: 10,
-            user_upgrade_concurrency: 10,
             max_concurrent_group_upgrades: 10,
             group_upgrade_concurrency: 10,
             max_concurrent_community_upgrades: 10,
@@ -1186,7 +1044,6 @@ impl Data {
             cycles_refunded_from_deleted_users: 0,
             cycles_refunded_from_pool_canisters: 0,
             cycles_topped_up_for_refunds: 0,
-            events_for_remote_users: Vec::new(),
             cycles_balance_check_queue: VecDeque::new(),
             bots: BotsMap::default(),
             fire_and_forget_handler: FireAndForgetHandler::default(),
@@ -1202,19 +1059,14 @@ impl Data {
             message_moderation_queue: ModerationQueue::default(),
             media_scan_config,
             media_scan_job_log: MediaScanJobLog::default(),
-            multi_user_canisters_enabled,
             call_push_enabled,
             daily_puzzle_canister_id: None,
             daily_puzzle_engine: DailyPuzzleEngine::default(),
             daily_puzzle_results_queue: None,
             game_chit_credit_retry_queue: new_retry_queue(),
             migrated_user_ids: MigratedUserIds::default(),
-            users_to_migrate: UsersToMigrate::default(),
-            users_to_import: UsersToMigrate::default(),
-            users_to_close_out: UsersToMigrate::default(),
-            recent_joins: RecentJoins::default(),
             registry_tokens: RegistryTokens::default(),
-            old_local_group_index: None,
+            alchemy_api_key,
             top_up_leaderboards: TopUpLeaderboards::default(),
         }
     }
@@ -1241,12 +1093,6 @@ pub struct Metrics {
     pub platform_moderators: u32,
     pub platform_operators: u32,
     pub canisters_in_pool: u16,
-    pub user_upgrades_completed: u64,
-    pub user_upgrades_pending: u64,
-    pub user_upgrades_in_progress: u64,
-    pub user_wasm_version: BuildVersion,
-    pub user_upgrade_concurrency: u32,
-    pub max_concurrent_user_upgrades: u32,
     pub group_upgrades_completed: u64,
     pub group_upgrades_pending: u64,
     pub group_upgrades_in_progress: u64,
@@ -1263,39 +1109,30 @@ pub struct Metrics {
     pub multi_user_upgrades_pending: u64,
     pub multi_user_upgrades_in_progress: u64,
     pub multi_user_wasm_version: BuildVersion,
-    pub multi_user_canisters_enabled: bool,
     pub migrated_user_ids: usize,
     pub call_push_enabled: bool,
     pub user_events_queue_length: usize,
     // Batches currently mid-flight: len() alone cannot distinguish an idle queue from one
     // whose last batch is still awaiting its reply
     pub user_events_queue_in_progress: usize,
+    pub group_events_queue_length: usize,
+    pub community_events_queue_length: usize,
     pub users_to_delete_queue_length: usize,
-    pub users_to_migrate_pending: usize,
-    pub users_to_migrate_in_progress: usize,
-    pub users_to_import_pending: usize,
-    pub users_to_import_in_progress: usize,
-    pub users_to_close_out_pending: usize,
-    pub users_to_close_out_in_progress: usize,
-    pub recent_joins: usize,
     pub chunk_store: crate::jobs::refresh_chunk_store::ChunkStoreMetrics,
     pub cycles_refund_queue_length: usize,
     pub cycles_refunded_from_deleted_users: Cycles,
     pub cycles_refunded_from_pool_canisters: Cycles,
     pub cycles_topped_up_for_refunds: Cycles,
-    pub old_local_group_index: Option<OldLocalGroupIndexMetrics>,
     pub registry_tokens: usize,
+    pub registry_burn_fees: BTreeMap<CanisterId, u128>,
     pub referral_codes: HashMap<ReferralType, ReferralTypeMetrics>,
     pub event_store_client_info: EventStoreClientInfo,
-    pub user_versions: BTreeMap<String, u32>,
     pub group_versions: BTreeMap<String, u32>,
     pub community_versions: BTreeMap<String, u32>,
     pub multi_user_versions: BTreeMap<String, u32>,
-    pub user_upgrades_failed: Vec<FailedUpgradeCount>,
     pub group_upgrades_failed: Vec<FailedUpgradeCount>,
     pub community_upgrades_failed: Vec<FailedUpgradeCount>,
     pub multi_user_upgrades_failed: Vec<FailedUpgradeCount>,
-    pub recent_user_upgrades: Vec<CanisterId>,
     pub recent_group_upgrades: Vec<CanisterId>,
     pub recent_community_upgrades: Vec<CanisterId>,
     pub recent_multi_user_upgrades: Vec<CanisterId>,
@@ -1307,6 +1144,7 @@ pub struct Metrics {
     pub blocked_user_pairs: u64,
     pub oc_secret_key_initialized: bool,
     pub openai_api_key_set: bool,
+    pub alchemy_api_key_set: bool,
     pub moderation_referral_config: Option<ModerationReferralConfig>,
     pub message_moderation_queue_len: u32,
     pub media_scanning_enabled: bool,
@@ -1354,4 +1192,52 @@ pub struct BotMetrics {
 
 fn new_user_events_queue() -> GroupedTimerJobQueue<UserEventBatch> {
     GroupedTimerJobQueue::new(10, false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use utils::env::test::TestEnv;
+
+    // Eg. for a group or community which has been deleted. Queueing an event for a local group or
+    // community starts sending it, which can't be done outside of a canister, so isn't tested here.
+    #[test]
+    fn events_for_groups_and_communities_which_are_not_local_are_dropped() {
+        let mut state = setup_runtime_state();
+        let canister_id = Principal::from_slice(&[10]);
+        let bot_id = Principal::from_slice(&[11]).into();
+
+        state.push_event_to_group(canister_id, GroupEvent::BotRemoved(bot_id), 0);
+        state.push_event_to_community(canister_id, CommunityEvent::BotRemoved(bot_id), 0);
+
+        assert_eq!(state.data.group_event_sync_queue.len(), 0);
+        assert_eq!(state.data.community_event_sync_queue.len(), 0);
+    }
+
+    pub(crate) fn setup_runtime_state() -> RuntimeState {
+        let canister_id = Principal::from_slice(&[1]);
+        let data = Data::new(
+            canister_id,
+            canister_id,
+            canister_id,
+            canister_id,
+            canister_id,
+            canister_id,
+            canister_id,
+            canister_id,
+            canister_id,
+            canister_id,
+            canister_id,
+            0,
+            Vec::new(),
+            P256KeyPair::new(&mut rand::rng()).secret_key_der().to_vec(),
+            None,
+            None,
+            MediaScanConfig::default(),
+            false,
+            None,
+            true,
+        );
+        RuntimeState::new(Box::new(TestEnv::default()), data)
+    }
 }

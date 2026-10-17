@@ -123,9 +123,9 @@ describe("saved native browser identity storage", () => {
             if (variant === "root") saved.webAuthnKey.publicKey = new Uint8Array(91);
             const chain = DelegationChain.fromJSON(saved.delegation);
             if (variant === "leaf") chain.delegations[0].delegation.pubkey[0] ^= 1;
-            if (variant === "target") chain.delegations[0].delegation.targets = [];
             if (variant === "extra-link") chain.delegations.push(chain.delegations[0]);
             saved.delegation = chain.toJSON();
+            if (variant === "target") saved.delegation.delegations[0].delegation.targets = [];
             if (variant === "private")
                 saved.key.privateKey = (await ECDSAKeyIdentity.generate()).getKeyPair().privateKey;
             if (variant === "extractable")

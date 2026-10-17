@@ -1,4 +1,4 @@
-import { get, writable, type Subscriber } from "svelte/store";
+import { get, writable, type Subscriber } from "@client/reactiveStores";
 
 export type BrowserImageActionMode =
     | "model_only"

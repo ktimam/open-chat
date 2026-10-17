@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { flushSync, mount, unmount } from "svelte";
-import { fromStore, get, writable } from "svelte/store";
+import { get, writable } from "@client/utils/stores";
+import { reactiveTestStore as fromStore } from "./reactiveStore.testFixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import LocalAppCardAnchor from "../components_shared/LocalAppCardAnchor.svelte";
 import {

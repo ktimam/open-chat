@@ -1,9 +1,9 @@
 use crate::User;
 use crate::queries::{pinned_direct_and_group_chats, sorted_pinned};
 use installed_bots::BotUpdate;
+use multi_user_canister::updates::*;
 use std::collections::HashSet;
 use types::{InstalledBotDetails, OptionUpdate, TimestampMillis, UserId, UserIdAndPrincipal};
-use user_canister::updates::*;
 
 // None if nothing has changed since `updates_since`. `now` is only read once something has,
 // since calling `ic0.time()` stops the query's response being cached.
@@ -44,6 +44,11 @@ pub fn updates(
         .as_ref()
         .filter(|a| a.timestamp > updates_since)
         .map(|a| a.value.clone());
+    let sol_address_if_updated = user
+        .sol_address
+        .as_ref()
+        .filter(|a| a.timestamp > updates_since)
+        .map(|a| a.value.clone());
     let premium_items_updated = user.premium_items.last_updated() > updates_since;
 
     let has_any_updates = username.is_some()
@@ -59,6 +64,7 @@ pub fn updates(
         || !referrals.is_empty()
         || btc_address_if_updated.is_some()
         || one_sec_address_if_updated.is_some()
+        || sol_address_if_updated.is_some()
         || premium_items_updated
         || user.chit_events.last_updated() > updates_since
         || user.achievements_last_seen > updates_since
@@ -199,6 +205,7 @@ pub fn updates(
         bots_removed,
         btc_address: btc_address_if_updated,
         one_sec_address: one_sec_address_if_updated,
+        sol_address: sol_address_if_updated,
         premium_items: premium_items_updated.then(|| user.premium_items.item_ids()),
         pinned_chats,
     })

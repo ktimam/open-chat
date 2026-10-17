@@ -18,7 +18,8 @@ import type {
     LocalAppSetupStorage,
 } from "./localAppSetupStore";
 
-vi.mock("@client", () => ({
+vi.mock("@client", async () => ({
+        ...(await import("@client/utils/stores")),
     currentUserIdStore: { value: "synthetic-account" },
 }));
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
@@ -28,7 +29,7 @@ vi.mock("./isolatedAppProcessor", () => ({
     verifyImportedLocalProcessor: vi.fn(),
 }));
 vi.mock("./localAppRelayDelivery", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return {
         deliverLocalAppViaRelay: vi.fn(),
         cancelLocalAppHandoffs: vi.fn(),

@@ -4,7 +4,7 @@ import type {
     ModelRuntime,
     OnDeviceInferenceCapability,
 } from "@shared";
-import { get } from "svelte/store";
+import { get } from "@client/reactiveStores";
 import {
     infer as nativeInfer,
     inferenceRuntimeAvailable,

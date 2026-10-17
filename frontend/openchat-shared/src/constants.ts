@@ -29,6 +29,8 @@ export const ONE_DAY = 24 * ONE_HOUR;
 export const ONE_WEEK = ONE_DAY * 7;
 export const ONE_MONTH = ONE_WEEK * 4;
 export const ONE_YEAR = 365 * ONE_DAY;
+// The longest a P2P swap may stay open, which the Escrow canister enforces
+export const P2P_SWAP_MAX_EXPIRY_DAYS = 90;
 export const LARGE_GROUP_THRESHOLD = 1000;
 // The most members of a chat or community which are loaded at a time
 export const MEMBERS_PAGE_SIZE = 1000;
@@ -37,3 +39,5 @@ export const FIND_MEMBERS_DELAY_MS = 300;
 // Bump this when the platform terms change: users whose recorded acceptance is below this
 // version are shown a blocking terms-updated notice and must affirmatively accept.
 export const CURRENT_TERMS_VERSION = 2;
+// The user canister rejects a longer bio (MAX_BIO_LEN in user_core set_bio.rs)
+export const MAX_BIO_LENGTH = 2000;

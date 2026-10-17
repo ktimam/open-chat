@@ -80,11 +80,11 @@
     let creatingP2PSwapMessage = $state(false);
     let selectingGif = $state(false);
     let buildingMeme = $state(false);
-    //@ts-ignore
+    // @ts-expect-error bind:this sets it after mount
     let pollBuilder: PollBuilder = $state();
-    //@ts-ignore
+    // @ts-expect-error bind:this sets it after mount
     let giphySelector: GiphySelector = $state();
-    //@ts-ignore
+    // @ts-expect-error bind:this sets it after mount
     let memeBuilder: MemeBuilder = $state();
     let showSearchHeader = $state(false);
     let searchTerm = $state("");
@@ -252,7 +252,7 @@
 
     function onSendMessage(detail: [string | undefined, User[], boolean]) {
         if (!canSendAny) return;
-        let [text, mentioned, blockLevelMarkdown] = detail;
+        const [text, mentioned, blockLevelMarkdown] = detail;
         if ($selectedChatDraftMessageStore?.editingEvent !== undefined) {
             client
                 .editMessageWithAttachment(
@@ -360,6 +360,7 @@
     let canDelete = $derived(client.canDeleteOtherUsersMessages(chat.id));
     let canReplyInThread = $derived(client.canSendMessage(chat.id, "thread"));
     let canReact = $derived(client.canReactToMessages(chat.id));
+    let canTipMessages = $derived(client.canTipMessages(chat.id));
     let canInvite = $derived(client.canInviteUsers(chat.id));
     let readonly = $derived(client.isChatReadOnly(chat.id));
     let externalUrl = $derived(chat.kind === "channel" ? chat.externalUrl : undefined);
@@ -469,6 +470,7 @@
                 {canReplyInThread}
                 {canSendAny}
                 {canReact}
+                {canTipMessages}
                 {canInvite}
                 {readonly}
                 {firstUnreadMention}

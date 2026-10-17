@@ -1,18 +1,19 @@
 use crate::env::ENV;
-use crate::utils::{now_millis, now_nanos, tick_many, wait_for_canister_to_be_deleted};
+use crate::utils::{now_millis, now_nanos, tick_many, tick_until, wait_for_deleted_canister_to_be_uninstalled};
 use crate::{CanisterIds, TestEnv, User, client};
 use candid::Principal;
-use constants::{HOUR_IN_MS, ICP_SYMBOL, ICP_TRANSFER_FEE};
+use constants::{HOUR_IN_MS, ICP_SYMBOL, ICP_TRANSFER_FEE, PRIZE_FEE_PERCENT};
 use itertools::Itertools;
+use multi_user_canister::mark_read::{ChatMessagesRead, ThreadRead};
+use oc_error_codes::OCErrorCode;
 use pocket_ic::PocketIc;
 use std::collections::HashMap;
 use std::ops::Deref;
 use testing::rng::{random_from_u128, random_string};
 use types::{
-    CanisterId, Chat, ChatEvent, ChatId, CommunityId, CryptoTransaction, EventIndex, MessageContentInitial, MultiUserChat,
-    PendingCryptoTransaction, PrizeContentInitial, ReplyContext, TextContent, icrc1,
+    CanisterId, Chat, ChatEvent, ChatId, CommunityId, CryptoTransaction, EventIndex, MessageContent, MessageContentInitial,
+    MessageIndex, MultiUserChat, PendingCryptoTransaction, PrizeContentInitial, ReplyContext, TextContent, icrc1,
 };
-use user_canister::mark_read::{ChatMessagesRead, ThreadRead};
 
 #[test]
 fn import_group_succeeds() {
@@ -42,6 +43,16 @@ fn import_group_succeeds() {
 
         client::group::happy_path::send_text_message(env, &user1, group_id, None, text, None);
     }
+    // Enough messages for the group to hold full chunks of its messages' event indexes in stable memory
+    for i in 0..140 {
+        client::group::happy_path::send_text_message(env, &user2, group_id, None, format!("message {i}"), None);
+    }
+    let user2_text_messages = client::group::happy_path::summary(env, user2.principal, group_id)
+        .membership
+        .unwrap()
+        .my_metrics
+        .text_messages;
+    assert_eq!(user2_text_messages, 140);
 
     let import_group_response = client::community::happy_path::import_group(env, user1.principal, community_id, group_id);
 
@@ -94,8 +105,36 @@ fn import_group_succeeds() {
     );
     assert!(events.events.len() > 10);
 
-    // Check that the group has been deleted
-    wait_for_canister_to_be_deleted(env, group_id.into());
+    // The users' metrics and the messages' event indexes were carried over from the group
+    let channel_id = import_group_response.channel_id;
+    let channel_summary = client::community::happy_path::channel_summary(env, &user2, community_id, channel_id);
+    assert_eq!(
+        channel_summary.membership.unwrap().my_metrics.text_messages,
+        user2_text_messages
+    );
+    let message_indexes = [0u32, 9, 100, 148].map(MessageIndex::from);
+    let response = client::community::messages_by_message_index(
+        env,
+        user1.principal,
+        community_id.into(),
+        &community_canister::messages_by_message_index::Args {
+            channel_id,
+            thread_root_message_index: None,
+            messages: message_indexes.to_vec(),
+            latest_known_update: None,
+        },
+    );
+    let community_canister::messages_by_message_index::Response::Success(result) = response else {
+        panic!("'messages_by_message_index' error: {response:?}");
+    };
+    assert_eq!(
+        result.messages.iter().map(|m| m.event.message_index).collect_vec(),
+        message_indexes.to_vec()
+    );
+    assert!(matches!(&result.messages[3].event.content, MessageContent::Text(t) if t.text == "message 139"));
+
+    // Check that the group has been deleted, leaving its canister uninstalled
+    wait_for_deleted_canister_to_be_uninstalled(env, group_id.into());
 }
 
 // The group's members who aren't members of the community are added to it a batch at a time (in
@@ -164,6 +203,67 @@ fn import_group_adds_its_members_to_the_community_a_batch_at_a_time() {
     }
 }
 
+// The GroupIndex is told once a group's import is complete, which needs the channel, so the channel
+// can't be deleted until then
+#[test]
+fn channel_cannot_be_deleted_until_the_group_import_is_complete() {
+    let mut wrapper = ENV.deref().get();
+    let TestEnv {
+        env,
+        canister_ids,
+        controller,
+        ..
+    } = wrapper.env();
+
+    let owner = client::register_diamond_user(env, canister_ids, *controller);
+    let group_id = client::user::happy_path::create_group(env, &owner, &random_string(), true, true);
+    // Enough members who aren't members of the community that they're added in several batches
+    let members: Vec<_> = (0..5).map(|_| client::register_user(env, canister_ids)).collect();
+    for member in members.iter() {
+        client::group::happy_path::join_group(env, member.principal, group_id);
+    }
+    let community_id = client::user::happy_path::create_community(env, &owner, &random_string(), true, vec![random_string()]);
+    tick_many(env, 3);
+
+    let channel_id = client::community::happy_path::import_group(env, owner.principal, community_id, group_id).channel_id;
+
+    let delete_channel = |env: &mut PocketIc| {
+        client::community::delete_channel(
+            env,
+            owner.principal,
+            community_id.into(),
+            &community_canister::delete_channel::Args { channel_id },
+        )
+    };
+
+    // The channel exists once the group's data has been imported, while its members are still being added
+    let mut response = delete_channel(env);
+    for _ in 0..50 {
+        if !matches!(&response, community_canister::delete_channel::Response::Error(e) if e.matches_code(OCErrorCode::ChatNotFound))
+        {
+            break;
+        }
+        env.tick();
+        response = delete_channel(env);
+    }
+    assert!(
+        matches!(&response, community_canister::delete_channel::Response::Error(e) if e.matches_code(OCErrorCode::GroupAlreadyBeingImported)),
+        "{response:?}"
+    );
+
+    // The import completes, so the group is deleted and replaced by the community in its members' lists
+    wait_for_deleted_canister_to_be_uninstalled(env, group_id.into());
+    tick_until(env, |env| {
+        members.iter().all(|member| {
+            let initial_state = client::user::happy_path::initial_state(env, member);
+            initial_state.group_chats.summaries.is_empty() && initial_state.communities.summaries.len() == 1
+        })
+    });
+
+    // Then the channel can be deleted
+    client::community::happy_path::delete_channel(env, owner.principal, community_id, channel_id);
+}
+
 #[test]
 fn read_up_to_data_maintained_after_import() {
     let mut wrapper = ENV.deref().get();
@@ -190,7 +290,7 @@ fn read_up_to_data_maintained_after_import() {
         env,
         user2.principal,
         user2.user_id.canister_id(),
-        &user_canister::mark_read::Args {
+        &multi_user_canister::mark_read::Args {
             messages_read: vec![ChatMessagesRead {
                 chat_id: group_id,
                 read_up_to: Some(4.into()),
@@ -254,14 +354,14 @@ fn pending_prizes_transferred_to_community() {
     let fee = ICP_TRANSFER_FEE;
     let message_id = random_from_u128();
     let prizes = vec![100000; 2];
-    let amount_to_transfer = prizes.iter().sum::<u128>() + fee * prizes.len() as u128;
+    let total = prizes.iter().sum::<u128>();
+    let amount_to_transfer = total + fee * prizes.len() as u128 + total * PRIZE_FEE_PERCENT as u128 / 100;
 
-    client::user::send_message_with_transfer_to_group(
+    client::group::send_message_with_transfer(
         env,
-        user1.principal,
-        user1.canister(),
-        &user_canister::send_message_with_transfer_to_group::Args {
-            group_id,
+        &user1,
+        group_id,
+        group_canister::send_message_v2::Args {
             thread_root_message_index: None,
             message_id,
             content: MessageContentInitial::Prize(PrizeContentInitial {
@@ -292,7 +392,8 @@ fn pending_prizes_transferred_to_community() {
 
             rules_accepted: None,
             message_filter_failed: None,
-            pin: None,
+            forwarding: false,
+            new_achievement: false,
             og_previews: Vec::new(),
         },
     );
@@ -314,7 +415,8 @@ fn pending_prizes_transferred_to_community() {
     tick_many(env, 20);
 
     let community_balance = client::ledger::happy_path::balance_of(env, canister_ids.icp_ledger, Principal::from(community_id));
-    assert_eq!(community_balance, amount_to_transfer - fee);
+    // The group moves the unclaimed prizes and the fee for paying out each, less the fee for moving them
+    assert_eq!(community_balance, total + fee);
 
     let local_user_index = canister_ids.local_user_index(env, community_id);
 
@@ -364,7 +466,7 @@ fn private_replies_to_group_updated_to_community() {
         env,
         user2.principal,
         user2.canister(),
-        &user_canister::send_message_v2::Args {
+        &multi_user_canister::send_message_v2::Args {
             recipient: user1.user_id,
             thread_root_message_index: None,
             message_id: random_from_u128(),

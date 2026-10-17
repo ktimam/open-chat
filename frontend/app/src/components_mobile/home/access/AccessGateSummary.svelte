@@ -1,7 +1,8 @@
 <script lang="ts">
+    import type { IconComponent } from "@src/utils/iconComponent";
     import { i18nKey } from "@src/i18n/i18n";
     import { disableCryptoPaymentsFeature } from "@src/utils/features";
-    import { accessApprovalState } from "@src/utils/preview.svelte";
+    import type { GateEvaluation } from "@shared_components/home/access/gateEvaluation.svelte";
     import {
         Avatar,
         Body,
@@ -25,15 +26,16 @@
     import AccountCheck from "svelte-material-icons/AccountCheckOutline.svelte";
     import Diamond from "svelte-material-icons/DiamondOutline.svelte";
     import Lifetime from "svelte-material-icons/DiamondStone.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AccessGateText from "../access_gates/AccessGateText.svelte";
-    import { TokenState } from "../wallet/walletState.svelte";
+    import { TokenState } from "@shared_components/home/wallet/walletState.svelte";
     import AccessGateBox from "./AccessGateBox.svelte";
 
     const client = getContext<OpenChat>("client");
 
     interface Props {
         gate: LeafGate;
+        evaluation: GateEvaluation;
         satisfied: boolean;
         onClick: (g: LeafGate) => void;
     }
@@ -41,7 +43,7 @@
     const restrictedMsg = i18nKey(
         "Unfortunately access gates of this type cannot be met from the native app",
     );
-    let { gate, onClick, satisfied }: Props = $props();
+    let { gate, evaluation, onClick, satisfied }: Props = $props();
     let token = $derived(client.getTokenDetailsForAccessGate(gate));
     let tokenState = $derived.by(() => {
         switch (gate.kind) {
@@ -67,7 +69,7 @@
     }
 </script>
 
-{#snippet booleanGate(restricted: boolean, Icon: any, title: string, subtitle?: string)}
+{#snippet booleanGate(restricted: boolean, Icon: IconComponent, title: string, subtitle?: string)}
     <AccessGateBox {satisfied} satisfiable onClick={restricted ? undefined : () => onClick(gate)}>
         <Row mainAxisAlignment={"center"} width={{ size: "2.5rem" }}>
             <Icon color={ColourVars.validationWarning} size={"1.5rem"} />
@@ -178,7 +180,7 @@
 
 {#if gate.kind !== "no_gate"}
     {#if gate.kind === "payment_gate" && tokenState}
-        {@const balance = accessApprovalState.balanceAfterCurrentCommitments(
+        {@const balance = evaluation.balanceAfterCurrentCommitments(
             tokenState.ledger,
             tokenState.cryptoBalance,
         )}
@@ -194,7 +196,7 @@
             tokenState.unknown ? undefined : () => tokenState.refreshBalance(client),
         )}
     {:else if gate.kind === "token_balance_gate" && tokenState}
-        {@const balance = accessApprovalState.balanceAfterCurrentCommitments(
+        {@const balance = evaluation.balanceAfterCurrentCommitments(
             tokenState.ledger,
             tokenState.cryptoBalance,
         )}

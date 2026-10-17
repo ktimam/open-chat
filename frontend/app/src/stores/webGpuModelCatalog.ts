@@ -1,4 +1,4 @@
-import { readable } from "svelte/store";
+import { readable } from "@client/reactiveStores";
 import {
     currentWebGpuModelCatalog,
     subscribeWebGpuModelCatalog,

@@ -21,7 +21,8 @@ import type { extractPrivateAppAction } from "./aiActionRunner";
 import { verifyImportedLocalProcessor, type runIsolatedAppProcessor } from "./isolatedAppProcessor";
 import type { LocalDraftDelivery } from "./localAppDrafts";
 
-vi.mock("@client", () => ({ currentUserIdStore: { value: "synthetic-account" } }));
+vi.mock("@client", async () => ({
+        ...(await import("@client/utils/stores")), currentUserIdStore: { value: "synthetic-account" } }));
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
 vi.mock("./aiActionRunner", () => ({ extractPrivateAppAction: vi.fn() }));
 vi.mock("./nativeAppDelivery", () => ({
@@ -29,7 +30,7 @@ vi.mock("./nativeAppDelivery", () => ({
     nativeDeliveryAllowed: vi.fn(() => false),
 }));
 vi.mock("./localAppRelayDelivery", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return {
         deliverLocalAppViaRelay: vi.fn(),
         cancelLocalAppHandoffs: vi.fn(),

@@ -1,4 +1,5 @@
 <script lang="ts">
+    import type { IconComponent } from "@src/utils/iconComponent";
     import { getContext } from "svelte";
     import { convertFileSrc } from "@tauri-apps/api/core";
     import {
@@ -29,10 +30,10 @@
     import SwapHorizontal from "svelte-material-icons/SwapHorizontal.svelte";
     import FileImageOutline from "svelte-material-icons/FileImageOutline.svelte";
     import VideoBox from "svelte-material-icons/VideoBox.svelte";
-    import Bitcoin from "../icons/Bitcoin.svelte";
-    import MemeFighter from "../icons/MemeFighter.svelte";
+    import Bitcoin from "@shared_components/icons/Bitcoin.svelte";
+    import MemeFighter from "@shared_components/icons/MemeFighter.svelte";
     import FileAttacher from "./FileAttacher.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import ShieldAlertOutline from "svelte-material-icons/ShieldAlertOutline.svelte";
     import ChevronRight from "svelte-material-icons/ChevronRight.svelte";
     import { toastStore } from "../../stores/toast";
@@ -66,7 +67,7 @@
 
     $effect(() => {
         if (open && client.isNativeApp()) {
-            loadRecentMedia().then((res: any) => {
+            loadRecentMedia().then((res) => {
                 mediaPermission = res.permission;
                 media = res.media;
             });
@@ -105,7 +106,7 @@
 {/snippet}
 
 <!-- Message attachment options -->
-{#snippet attachOption(key: string, Icon: any, color: string, onclick: () => void)}
+{#snippet attachOption(key: string, Icon: IconComponent, color: string, onclick: () => void)}
     <button class="attach-option" {onclick}>
         <Column gap="sm" crossAxisAlignment="center">
             <Icon size="1.5rem" {color} />

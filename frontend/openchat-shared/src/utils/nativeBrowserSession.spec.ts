@@ -67,7 +67,7 @@ describe("ephemeral native browser session structural validation", () => {
             [r.identity, r.nativeBrowserSession, true],
         ] as const) {
             await expect(
-                validateNativeBrowserSession(...args, nativeTestPolicy, nowMs),
+                validateNativeBrowserSession(args[0], args[1], args[2], nativeTestPolicy, nowMs),
             ).rejects.toBeInstanceOf(NativeBrowserSessionError);
         }
     });

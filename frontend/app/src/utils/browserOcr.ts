@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { writable } from "@client/reactiveStores";
 import type { AiActionPrivateImageOcrProfile } from "@shared";
 
 const ASSET_BASE = "/assets/local-extractor/v7.0.0";

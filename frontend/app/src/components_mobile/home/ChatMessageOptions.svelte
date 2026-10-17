@@ -53,8 +53,8 @@
     import { toastStore } from "../../stores/toast";
     import * as shareFunctions from "../../utils/share";
     import { copyToClipboard } from "../../utils/urls";
-    import Bitcoin from "../icons/Bitcoin.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Bitcoin from "@shared_components/icons/Bitcoin.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import { saveMediaToDevice } from "tauri-plugin-oc-api";
     import { getProxyAdjustedBlobUrl } from "../../utils/media";
 
@@ -233,7 +233,9 @@
             if (utf8Match) {
                 try {
                     return decodeURIComponent(utf8Match[1].trim());
-                } catch {}
+                } catch {
+                    // malformed encoding: fall back to the next way of finding a name
+                }
             }
 
             // Try regular filename=
@@ -246,9 +248,11 @@
         // Fallback... extract from URL if available
         try {
             const urlObj = new URL(url);
-            let filename = urlObj.pathname.split("/").pop()?.split("?")[0] || "";
+            const filename = urlObj.pathname.split("/").pop()?.split("?")[0] || "";
             if (filename) return filename;
-        } catch {}
+        } catch {
+            // not a valid URL: use the default name below
+        }
 
         // Default...
         const defaultName = `${msg.content.kind}_download_${Date.now()}`;
@@ -268,9 +272,10 @@
                 return { mimeType: msg.content.mimeType, contentKind: "video" };
             case "file_content":
                 return { mimeType: msg.content.mimeType, contentKind: "file" };
-            default:
+            default: {
                 const mime = res.headers.get("content-type")?.split(";")[0].trim();
                 return mime ? { mimeType: mime, contentKind: "file" } : undefined;
+            }
         }
     }
 

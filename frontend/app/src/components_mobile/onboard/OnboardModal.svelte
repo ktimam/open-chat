@@ -25,7 +25,7 @@
     import ErrorMessage from "../ErrorMessage.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
     import Progress from "../Progress.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import SignUp from "./SignUp.svelte";
 
     const ALC_LENGTH = 6;
@@ -40,7 +40,7 @@
     let linkingInProgress = $state(false);
     let error: string | undefined = $state(undefined);
     let signUpError: string | undefined = $state(undefined);
-    let checker = new VersionChecker();
+    const checker = new VersionChecker();
 
     let outdated = $derived(checker.versionState.kind !== "up_to_date");
 

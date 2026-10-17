@@ -1,7 +1,7 @@
 use crate::activity_notifications::handle_activity_notification;
 use crate::guards::caller_is_local_user_index;
 use crate::model::events::CommunityEventInternal;
-use crate::{RuntimeState, execute_update};
+use crate::{RuntimeState, execute_update_even_if_frozen};
 use canister_api_macros::update;
 use canister_time::now_millis;
 use canister_tracing_macros::trace;
@@ -15,7 +15,7 @@ use types::{EventIndex, GroupNameChanged, ModerationCategories, TimestampMillis,
 #[update(guard = "caller_is_local_user_index", msgpack = true)]
 #[trace]
 fn c2c_local_index(args: Args) -> Response {
-    execute_update(|state| c2c_local_index_impl(args, state))
+    execute_update_even_if_frozen(|state| c2c_local_index_impl(args, state))
 }
 
 fn c2c_local_index_impl(args: Args, state: &mut RuntimeState) -> Response {
@@ -202,16 +202,13 @@ fn process_event<F: FnOnce() -> TimestampMillis>(
             for channel in state.data.channels.iter_mut() {
                 channel.chat.members.remove(user_id, **now);
             }
-            state.data.members.remove(user_id, None, true, **now);
+            state.data.members.remove(user_id, None, **now);
         }
         LocalIndexEvent::BotRemoved(bot_id) => {
             state.data.uninstall_bot(bot_id, **now);
         }
         LocalIndexEvent::BotUpdated(ev) => {
             state.data.handle_bot_definition_updated(ev, **now);
-        }
-        LocalIndexEvent::UserIdMigrated(ev) => {
-            state.data.migrate_user_ids(&[ev.old_user_id], ev.new_user_id, None, **now);
         }
     }
 

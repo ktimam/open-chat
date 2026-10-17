@@ -1,5 +1,5 @@
 use canister_client::generate_c2c_call;
-use constants::{CYCLES_REQUIRED_FOR_UPGRADE, T};
+use constants::T;
 use std::cmp::max;
 use tracing::error;
 use types::{CanisterId, Cycles};
@@ -8,11 +8,6 @@ use types::{CanisterId, Cycles};
 // an upgrade needs, so that a canister which goes quiet, and so stops checking its balance, has
 // months of cycles before it freezes.
 pub const MIN_CYCLES_BALANCE: Cycles = T; // 1T
-
-// User canisters are being migrated into MultiUser canisters, so rather than each being topped up
-// towards `MIN_CYCLES_BALANCE`, they keep enough for an upgrade. That is about the 0.35T in total they
-// kept before, since a typical User canister's freezing threshold reserves about 30B.
-pub const USER_CANISTER_MIN_CYCLES_BALANCE: Cycles = CYCLES_REQUIRED_FOR_UPGRADE; // 0.3T
 
 pub fn check_cycles_balance(top_up_canister_id: CanisterId) {
     check_cycles_balance_with_min(top_up_canister_id, MIN_CYCLES_BALANCE);
@@ -114,11 +109,6 @@ mod tests {
     }
 
     #[test]
-    fn a_canister_below_its_freezing_threshold_is_low() {
-        assert!(is_cycles_balance_low(10 * B, 20 * B, MIN_CYCLES_BALANCE));
-    }
-
-    #[test]
     fn the_shortfall_is_what_brings_the_cycles_above_the_freezing_threshold_up_to_the_minimum() {
         let freeze_threshold = 40 * B;
         assert_eq!(
@@ -128,15 +118,6 @@ mod tests {
         assert_eq!(
             cycles_balance_shortfall(MIN_CYCLES_BALANCE + freeze_threshold, freeze_threshold, MIN_CYCLES_BALANCE),
             0
-        );
-    }
-
-    #[test]
-    fn the_shortfall_of_a_large_canister_is_up_to_twice_its_freezing_threshold() {
-        let freeze_threshold = MIN_CYCLES_BALANCE;
-        assert_eq!(
-            cycles_balance_shortfall(2 * freeze_threshold, freeze_threshold, MIN_CYCLES_BALANCE),
-            freeze_threshold
         );
     }
 

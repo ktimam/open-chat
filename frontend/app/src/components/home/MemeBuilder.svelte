@@ -12,8 +12,8 @@
     import ButtonGroup from "../ButtonGroup.svelte";
     import ModalContent from "../ModalContent.svelte";
     import Overlay from "../Overlay.svelte";
-    import Translatable from "../Translatable.svelte";
-    import MemeFighter from "../icons/MemeFighter.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
+    import MemeFighter from "@shared_components/icons/MemeFighter.svelte";
 
     interface Props {
         open: boolean;
@@ -27,7 +27,7 @@
     let memeUrl = $state(undefined as string | undefined);
     let iframe: HTMLIFrameElement;
     let img: HTMLImageElement | undefined = $state();
-    let placeholder = "/assets/memefighter.svg";
+    const placeholder = "/assets/memefighter.svg";
 
     let stopListening: (() => void) | undefined;
 

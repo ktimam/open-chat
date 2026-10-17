@@ -2,6 +2,7 @@ import { AssertError, Value } from "@sinclair/typebox/value";
 import { Kind, type Static, type TSchema } from "@sinclair/typebox";
 import { deepRemoveNullishFields } from "./nullish";
 import { TypeboxValidationError } from "@shared/domain/error";
+import { redactSecrets } from "@shared/utils/redact";
 
 export interface TypeboxValidationOptions {
     sensitive?: boolean;
@@ -126,11 +127,16 @@ function applyDefaults(schema: TSchema, value: unknown): unknown {
 // Equivalent to Value.Parse(["Default", "Convert", "Assert"], schema, value), with the
 // Default step replaced by applyDefaults above. Convert is kept as-is (it is what turns
 // msgpack numbers/strings into bigints) and Value.Assert is the Parse "Assert" step.
+// `methodName` is the canister method a request is for, so a failure can be logged without its PIN.
 export function typeboxValidate<T extends TSchema>(
     value: unknown,
     validator: T,
+    methodNameOrOptions?: string | TypeboxValidationOptions,
     options?: TypeboxValidationOptions,
 ): Static<T> {
+    const methodName = typeof methodNameOrOptions === "string" ? methodNameOrOptions : undefined;
+    const validationOptions =
+        typeof methodNameOrOptions === "string" ? options : (methodNameOrOptions ?? options);
     try {
         const converted = Value.Convert(
             validator,
@@ -139,12 +145,14 @@ export function typeboxValidate<T extends TSchema>(
         Value.Assert(validator, converted);
         return converted as Static<T>;
     } catch (err) {
-        if (options?.sensitive) {
+        if (validationOptions?.sensitive) {
             console.error("Typebox validation failed for a sensitive value");
             throw new TypeboxValidationError();
         }
-        console.error("Typebox validation failed: ", value, err);
-        throw new TypeboxValidationError(withPath(err));
+        // Not `err` itself: an AssertError holds the value which failed, PIN and all
+        const error = withPath(err);
+        console.error("Typebox validation failed: ", redactSecrets(value, methodName), error);
+        throw new TypeboxValidationError(error);
     }
 }
 

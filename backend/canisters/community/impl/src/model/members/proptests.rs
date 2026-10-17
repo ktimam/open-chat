@@ -46,17 +46,9 @@ enum Operation {
     UnlapseSome {
         count: u8,
     },
-    Migrate {
-        user_index: usize,
-        new_user_index: usize,
-    },
     SetSuspended {
         user_index: usize,
         suspended: bool,
-    },
-    AddFormerMembers {
-        user_ids: Vec<UserId>,
-        member_index: usize,
     },
 }
 
@@ -72,14 +64,10 @@ fn operation_strategy() -> impl Strategy<Value = Operation> {
         5 => any::<usize>().prop_map(|user_index| Operation::Block { user_index}),
         3 => any::<usize>().prop_map(|user_index| Operation::Unblock { user_index}),
         5 => any::<usize>().prop_map(|user_index| Operation::Lapse { user_index}),
-        3 => (pvec(any::<usize>(), 0..5), any::<usize>())
-            .prop_map(|(user_indexes, member_index)| Operation::AddFormerMembers { user_ids: user_indexes.into_iter().map(user_id).collect(), member_index }),
         3 => any::<usize>().prop_map(|user_index| Operation::Unlapse { user_index}),
         1 => Just(Operation::UnlapseAll),
         1 => Just(Operation::StartUnlapsing),
         3 => any::<u8>().prop_map(|count| Operation::UnlapseSome { count }),
-        2 => (any::<usize>(), any::<usize>())
-            .prop_map(|(user_index, new_user_index)| Operation::Migrate { user_index, new_user_index }),
         2 => any::<usize>().prop_map(|user_index| Operation::SetSuspended { user_index, suspended: true }),
         1 => any::<usize>().prop_map(|user_index| Operation::SetSuspended { user_index, suspended: false }),
     ]
@@ -143,13 +131,13 @@ fn execute_operation(members: &mut CommunityMembers, op: Operation, timestamp: T
         Operation::Remove { user_index } => {
             let user_id = get_from_map(&members.members_and_channels, user_index);
             if members.owners.len() != 1 || members.owners.first() != Some(&user_id) {
-                members.remove(user_id, None, false, timestamp);
+                members.remove(user_id, None, timestamp);
             }
         }
         Operation::Block { user_index } => {
             let user_id = get_from_map(&members.members_and_channels, user_index);
             if members.owners.len() != 1 || members.owners.first() != Some(&user_id) {
-                members.remove(user_id, None, false, timestamp);
+                members.remove(user_id, None, timestamp);
                 members.block(user_id, timestamp);
             }
         }
@@ -181,14 +169,6 @@ fn execute_operation(members: &mut CommunityMembers, op: Operation, timestamp: T
                 unlapsed <= count
             });
         }
-        Operation::Migrate {
-            user_index,
-            new_user_index,
-        } => {
-            let old_user_id = get_from_map(&members.members_and_channels, user_index);
-            let new_user_id = user_id(new_user_index);
-            members.migrate_user_id(old_user_id, new_user_id, None, timestamp);
-        }
         Operation::SetSuspended { user_index, suspended } => {
             if suspended {
                 let user_id = get_from_map(&members.members_and_channels, user_index);
@@ -197,11 +177,6 @@ fn execute_operation(members: &mut CommunityMembers, op: Operation, timestamp: T
                 let user_id = get_from_set(&members.suspended, user_index);
                 members.set_suspended(user_id, false, timestamp);
             }
-        }
-        Operation::AddFormerMembers { user_ids, member_index } => {
-            // Includes a member, who should be skipped
-            let member = get_from_map(&members.members_and_channels, member_index);
-            members.add_former_members(user_ids.into_iter().chain([member]));
         }
     };
 }

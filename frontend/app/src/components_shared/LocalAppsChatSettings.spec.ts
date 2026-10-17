@@ -17,16 +17,17 @@ const calls = vi.hoisted(() => ({
     setEnabled: vi.fn(),
 }));
 vi.mock("../utils/privateAppWorkspace", async () => ({
-    privateAppWorkspaceState: (await import("svelte/store")).writable({}),
+    privateAppWorkspaceState: (await import("@client/utils/stores")).writable({}),
     privateAppWorkspace: { configureChat: calls.configureChat },
 }));
 vi.mock("../utils/localAppChatState", async () => ({
-    localAppChatRevision: (await import("svelte/store")).writable(0),
+    localAppChatRevision: (await import("@client/utils/stores")).writable(0),
     localAppChatConfiguration: { enabled: calls.enabled, setEnabled: calls.setEnabled },
 }));
 vi.mock("../utils/mainAppsNavigation", () => ({ navigateToMainApps: calls.navigate }));
 vi.mock("@client", async () => ({
-    currentUserIdStore: (await import("svelte/store")).writable("viewer"),
+        ...(await import("@client/utils/stores")),
+    currentUserIdStore: (await import("@client/utils/stores")).writable("viewer"),
 }));
 vi.mock("@shared", () => ({ chatIdentifierToString: () => "local-chat-a" }));
 

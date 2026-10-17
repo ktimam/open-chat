@@ -9,10 +9,11 @@
         subscribe,
     } from "@client";
     import { getContext, onMount } from "svelte";
+    import { SvelteSet } from "svelte/reactivity";
     import { i18nKey } from "../../../i18n/i18n";
     import { activeVideoCall } from "../../../stores/video";
     import FancyLoader from "../../icons/FancyLoader.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import VirtualList from "@shared_components/VirtualList.svelte";
     import ActiveCallParticipant from "./ActiveCallParticipant.svelte";
     import ActiveCallParticipantsHeader from "./ActiveCallParticipantsHeader.svelte";
@@ -34,7 +35,7 @@
 
     let { chatId, messageId, isOwner, onClose }: Props = $props();
 
-    let demoted = $state(new Set<string>());
+    const demoted = new SvelteSet<string>();
     let loading = $state(false);
 
     let selectedTab: "presenters" | "viewers" = $state("presenters");
@@ -71,7 +72,6 @@
             .then((res) => {
                 videoParticipants = res;
                 Object.values(videoParticipants.hidden).forEach((h) => demoted.delete(h.userId));
-                demoted = demoted;
             })
             .finally(() => (loading = false));
     }
@@ -88,7 +88,6 @@
 
     function demote(userId: string) {
         demoted.add(userId);
-        demoted = demoted;
         activeVideoCall.demote(userId);
     }
 </script>

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    ChatEvents, DeleteUndeleteMessagesArgs, EditMessageArgs, MessageContentInternal, NullEventPusher, PushMessageArgs,
-    TextContentInternal,
+    ChatEvents, DeleteUndeleteMessagesArgs, EditMessageArgs, EventKey, MessageContentInternal, NullEventPusher,
+    PushMessageArgs, TextContentInternal,
 };
 use candid::Principal;
 use ic_stable_structures::DefaultMemoryImpl;
@@ -9,8 +9,8 @@ use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use stable_memory_map::{BaseKey, BaseKeyPrefix, ChatEventKeyPrefix};
-use types::{ChannelId, Chat, EventContext, MessageId, MultiUserChat, TimestampMillis};
-use utils::migrated_user_ids::MigratedUserIds;
+use std::collections::BTreeMap;
+use types::{ChannelId, Chat, EventContext, EventIndex, MessageId, MultiUserChat, TimestampMillis};
 
 const WORDS: &[&str] = &[
     "apple",
@@ -82,9 +82,9 @@ fn search_matches_model() {
             }
             2 | 3 if !model.is_empty() => {
                 let message_index = random_key(model, &mut rng);
-                let (sender, fields) = model.get_mut(&message_index).unwrap();
+                let (_, fields) = model.get_mut(&message_index).unwrap();
                 let new_fields = random_fields(&mut rng);
-                index.update(chat, message_index, *sender, &document(fields), &document(&new_fields));
+                index.update(chat, message_index, &document(fields), &document(&new_fields));
                 *fields = new_fields;
             }
             _ => {
@@ -230,11 +230,7 @@ fn chat_events_keep_search_index_up_to_date() {
     assert_eq!(search(&events, "", &[bob]), vec![thread_root]);
 
     // Editing a deleted message doesn't add it back to the index
-    let _ = events.edit_message::<NullEventPusher>(
-        edit_args(bob, konnichiwa, "世界 again", 31),
-        &MigratedUserIds::default(),
-        None,
-    );
+    let _ = events.edit_message::<NullEventPusher>(edit_args(bob, konnichiwa, "世界 again", 31), None);
     assert!(search(&events, "世界", &[]).is_empty());
 
     undelete(&mut events, bob, konnichiwa, 40);
@@ -250,109 +246,6 @@ fn chat_events_keep_search_index_up_to_date() {
 }
 
 #[test]
-fn message_edited_under_a_new_id_stays_indexed_under_its_sender() {
-    let mut events = setup_group_events();
-    let old_user_id = user_id(1);
-    let new_user_id = user_id(2);
-
-    let chat = events.stable_memory_prefix().clone();
-    let hello = push(&mut events, old_user_id, "hello world", 10);
-    // Where the index keeps a message by its sender
-    events
-        .search_index_mut()
-        .move_to_heap(&chat, hello, old_user_id, document(&["hello world".to_string()]));
-
-    // The sender has since been migrated to a MultiUser canister and given a new id
-    let mut migrated_user_ids = MigratedUserIds::default();
-    migrated_user_ids.insert(old_user_id, new_user_id);
-    events
-        .edit_message::<NullEventPusher>(edit_args(new_user_id, hello, "goodbye world", 20), &migrated_user_ids, None)
-        .unwrap();
-
-    assert!(search(&events, "hello", &[]).is_empty());
-    assert_eq!(search(&events, "goodbye", &[old_user_id]), vec![hello]);
-    assert!(search(&events, "goodbye", &[new_user_id]).is_empty());
-}
-
-#[test]
-fn legacy_heap_entries_are_searchable_then_migrated() {
-    let mut events = setup_group_events();
-    let chat = events.stable_memory_prefix().clone();
-    let senders = [user_id(1), user_id(2), user_id(3)];
-    let texts = ["hello world", "apple banana", "hello apple", "東京 tower", "banana split"];
-
-    let mut messages = Vec::new();
-    for i in 0..60u64 {
-        let sender = senders[i as usize % 3];
-        let text = texts[i as usize % texts.len()];
-        messages.push((push(&mut events, sender, text, 10 + i), sender, text));
-    }
-
-    // Every search term is a whole word, for which the legacy substring search behaves identically
-    let queries = [
-        ("hello", vec![]),
-        ("apple", vec![senders[1]]),
-        ("東京", vec![]),
-        ("", vec![senders[0]]),
-    ];
-    let expected: Vec<_> = queries.iter().map(|(q, u)| search(&events, q, u)).collect();
-
-    // Move the older messages onto the heap, plus an entry for a message which no longer exists
-    for (message_index, sender, text) in messages.iter().take(40) {
-        events
-            .search_index_mut()
-            .move_to_heap(&chat, *message_index, *sender, document(&[text.to_string()]));
-    }
-    events
-        .search_index_mut()
-        .move_to_heap(&chat, 10_000.into(), senders[0], document(&["hello".to_string()]));
-    let expected_with_missing: Vec<_> = expected
-        .iter()
-        .enumerate()
-        .map(|(i, e)| {
-            let mut e = e.clone();
-            if i == 0 || i == 3 {
-                e.insert(0, 10_000.into());
-            }
-            e
-        })
-        .collect();
-    assert_eq!(events.heap_entries_to_migrate_count(), 41);
-    assert_searches(&events, &queries, &expected_with_missing);
-
-    // Messages on the heap can still be edited and deleted
-    let (edited, edited_sender, _) = messages[1];
-    edit(&mut events, edited_sender, edited, "hello there", 100);
-    let (deleted, deleted_sender, _) = messages[2];
-    delete(&mut events, deleted_sender, deleted, 101);
-    assert_eq!(events.heap_entries_to_migrate_count(), 39);
-    let expected: Vec<_> = queries.iter().map(|(q, u)| search(&events, q, u)).collect();
-    assert!(expected[0].contains(&edited) && !expected[0].contains(&deleted));
-
-    let mut migrated = 0;
-    loop {
-        migrated += events.migrate_to_stable_memory(10);
-        if events.heap_entries_to_migrate_count() == 0 {
-            break;
-        }
-        assert_searches(&events, &queries, &expected);
-    }
-    assert!(migrated > 39);
-
-    // The entry for the message which no longer exists was dropped
-    let expected_without_missing: Vec<_> = expected
-        .iter()
-        .map(|e| {
-            e.iter()
-                .copied()
-                .filter(|m| *m != MessageIndex::from(10_000))
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    assert_searches(&events, &queries, &expected_without_missing);
-}
-
-#[test]
 fn imported_events_are_indexed() {
     let mut events = setup_group_events();
     let alice = user_id(1);
@@ -363,28 +256,12 @@ fn imported_events_are_indexed() {
     let tokyo = push(&mut events, bob, "東京タワー", 12);
     push_thread_reply(&mut events, alice, tokyo, "hello thread", 13);
     delete(&mut events, bob, deleted, 14);
-    // Legacy entries, which are re-indexed under the channel's prefix after the import, one of which
-    // (as if imported by a version which didn't index imported events) has no entries in the index
-    let chat = events.stable_memory_prefix().clone();
-    events
-        .search_index_mut()
-        .move_to_heap(&chat, hello, alice, document(&["hello world".to_string()]));
-    events
-        .search_index_mut()
-        .move_to_heap(&chat, tokyo, bob, document(&["東京タワー".to_string()]));
 
     let channel = Chat::Channel(Principal::from_slice(&[3]).into(), ChannelId::from(1u32));
     ChatEvents::import_events(channel, export_events(&events));
-    let tokyo_document = document(&["東京タワー".to_string()]);
-    SearchIndex::default().remove(&ChatEventKeyPrefix::new_from_chat(channel, None), tokyo, bob, &tokyo_document);
 
     let mut imported: ChatEvents = msgpack::deserialize_then_unwrap(&msgpack::serialize_then_unwrap(&events));
     imported.set_chat(channel);
-    imported.discard_message_ids_on_heap();
-    imported.discard_expiring_events_on_heap();
-    assert_eq!(search(&imported, "タワ", &[]), vec![tokyo]);
-    imported.migrate_to_stable_memory(usize::MAX);
-    assert_eq!(imported.heap_entries_to_migrate_count(), 0);
 
     assert_eq!(search(&imported, "hello", &[]), vec![hello]);
     assert_eq!(search(&imported, "タワ", &[]), vec![tokyo]);
@@ -438,12 +315,6 @@ fn assert_random_search_matches_model(chat: &ChatEventKeyPrefix, index: &SearchI
         results, expected,
         "{search_term:?} {users:?} {min_visible_message_index:?} {max_results}"
     );
-}
-
-fn assert_searches(events: &ChatEvents, queries: &[(&str, Vec<UserId>)], expected: &[Vec<MessageIndex>]) {
-    for ((query, users), expected) in queries.iter().zip(expected) {
-        assert_eq!(&search(events, query, users), expected, "{query:?}");
-    }
 }
 
 fn random_fields(rng: &mut StdRng) -> Vec<String> {
@@ -538,7 +409,7 @@ fn push_args(
 
 fn edit(events: &mut ChatEvents, sender: UserId, message_index: MessageIndex, text: &str, now: TimestampMillis) {
     events
-        .edit_message::<NullEventPusher>(edit_args(sender, message_index, text, now), &MigratedUserIds::default(), None)
+        .edit_message::<NullEventPusher>(edit_args(sender, message_index, text, now), None)
         .unwrap();
 }
 
@@ -557,12 +428,12 @@ fn edit_args(sender: UserId, message_index: MessageIndex, text: &str, now: Times
 }
 
 fn delete(events: &mut ChatEvents, caller: UserId, message_index: MessageIndex, now: TimestampMillis) {
-    let results = events.delete_messages(delete_args(caller, message_index, now), &MigratedUserIds::default());
+    let results = events.delete_messages(delete_args(caller, message_index, now));
     assert!(results.iter().all(|(_, r)| r.is_ok()));
 }
 
 fn undelete(events: &mut ChatEvents, caller: UserId, message_index: MessageIndex, now: TimestampMillis) {
-    let results = events.undelete_messages(delete_args(caller, message_index, now), &MigratedUserIds::default());
+    let results = events.undelete_messages(delete_args(caller, message_index, now));
     assert!(results.iter().all(|(_, r)| r.is_ok()));
 }
 
@@ -597,7 +468,7 @@ fn text_content(text: &str) -> MessageContentInternal {
 fn export_events(events: &ChatEvents) -> Vec<(EventContext, serde_bytes::ByteBuf)> {
     let mut exported = Vec::new();
     loop {
-        let batch = events.read_events_as_bytes_from_stable_memory(exported.last().map(|(c, _): &(EventContext, _)| c.clone()));
+        let batch = events.read_events_as_bytes_from_stable_memory(exported.last().map(|(c, _): &(EventContext, _)| *c));
         if batch.is_empty() {
             return exported;
         }

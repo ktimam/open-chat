@@ -31,7 +31,7 @@
     import Badges from "../profile/Badges.svelte";
     import BotBadge from "../profile/BotBadge.svelte";
     import RoleIcon from "../profile/RoleIcon.svelte";
-    import WithRole from "../profile/WithRole.svelte";
+    import WithRole from "@shared_components/home/profile/WithRole.svelte";
     import UnresolvedReply from "../UnresolvedReply.svelte";
     import MessageMetadata from "./MessageMetadata.svelte";
 
@@ -105,7 +105,8 @@
             $selectedChatWebhooksStore,
         ),
     );
-    // The details held can be for another chat until the next chat's details load
+    // The details held can be for another chat, when a thread preview shows a message from a chat
+    // other than the one selected
     let chatMembers = $derived(
         chatIdentifiersEqual($selectedServerChatStore?.chatId, chatId)
             ? $selectedChatMembersStore

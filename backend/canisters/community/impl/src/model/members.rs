@@ -1,7 +1,7 @@
 use crate::model::members::stable_memory::MembersStableStorage;
 use crate::model::user_groups::{UserGroup, UserGroups};
 use constants::calculate_summary_updates_data_removal_cutoff;
-use group_community_common::{FormerMembers, Member, MemberUpdate, Members, MembersPage, Unlapsing, members_page};
+use group_community_common::{Member, MemberUpdate, Members, MembersPage, Unlapsing, members_page};
 use ic_principal::Principal;
 use oc_error_codes::OCErrorCode;
 use principal_to_user_id_map::PrincipalToUserIdMap;
@@ -40,10 +40,6 @@ pub struct CommunityMembers {
     members_with_referrals: BTreeSet<UserId>,
     updates: BTreeSet<(TimestampMillis, UserId, MemberUpdate)>,
     latest_update_removed: TimestampMillis,
-    // Also holds the former members of any groups imported into the community who are not in it, since the
-    // imported channels' events refer to them too
-    #[serde(default)]
-    former_members: FormerMembers,
     #[serde(default)]
     unlapsing: Option<Unlapsing>,
 }
@@ -94,7 +90,6 @@ impl CommunityMembers {
             members_with_referrals: BTreeSet::new(),
             updates: BTreeSet::new(),
             latest_update_removed: 0,
-            former_members: FormerMembers::default(),
             unlapsing: None,
         }
     }
@@ -104,55 +99,94 @@ impl CommunityMembers {
         user_id: UserId,
         principal: Principal,
         user_type: UserType,
-        mut referred_by: Option<UserId>,
+        referred_by: Option<UserId>,
         now: TimestampMillis,
     ) -> AddResult {
-        if self.blocked.contains(&user_id) {
-            AddResult::Blocked
-        } else if let Vacant(e) = self.members_and_channels.entry(user_id) {
-            e.insert(Vec::new());
+        let mut members = MembersToAdd::default();
+        members.push(user_id, principal, user_type, referred_by);
+        let (_, result) = self.add_many(members, now).pop().unwrap();
+        result
+    }
 
-            if referred_by == Some(user_id) {
-                referred_by = None;
-            }
+    // Adds the members in the order they were pushed, then writes those added to stable memory, along
+    // with their principals, together, so that each node of the map is written once rather than once
+    // per member. Returns each one's result.
+    pub fn add_many(&mut self, members: MembersToAdd, now: TimestampMillis) -> Vec<(UserId, AddResult)> {
+        let mut results = Vec::with_capacity(members.0.len());
+        let mut referrals = Vec::new();
+        for MemberToAdd {
+            user_id,
+            principal,
+            user_type,
+            mut referred_by,
+        } in members.0
+        {
+            let result = if self.blocked.contains(&user_id) {
+                AddResult::Blocked
+            } else if let Vacant(e) = self.members_and_channels.entry(user_id) {
+                e.insert(Vec::new());
 
-            let member = CommunityMemberInternal {
-                user_id,
-                principal,
-                date_added: now,
-                role: CommunityRole::Member,
-                suspended: Timestamped::default(),
-                rules_accepted: None,
-                user_type,
-                display_name: Timestamped::default(),
-                referred_by,
-                referrals: BTreeSet::new(),
-                referrals_removed: BTreeSet::new(),
-                lapsed: Timestamped::default(),
+                if referred_by == Some(user_id) {
+                    referred_by = None;
+                }
+                // A referrer who isn't a member by now isn't updated, as when members are added one at
+                // a time
+                if let Some(referrer) = referred_by
+                    && self.members_and_channels.contains_key(&referrer)
+                {
+                    referrals.push((referrer, user_id));
+                }
+
+                let member = CommunityMemberInternal {
+                    user_id,
+                    principal,
+                    date_added: now,
+                    role: CommunityRole::Member,
+                    suspended: Timestamped::default(),
+                    rules_accepted: None,
+                    user_type,
+                    display_name: Timestamped::default(),
+                    referred_by,
+                    referrals: BTreeSet::new(),
+                    referrals_removed: BTreeSet::new(),
+                    lapsed: Timestamped::default(),
+                };
+                if user_type.is_bot() {
+                    self.bots.insert(user_id, user_type);
+                }
+                self.prune_then_insert_member_update(user_id, MemberUpdate::Added, now);
+                AddResult::Success(Box::new(member))
+            } else {
+                AddResult::AlreadyInCommunity
             };
-            self.add_user_id(principal, user_id);
-            self.members_map.insert(member.user_id, member.clone());
-            if user_type.is_bot() {
-                self.bots.insert(user_id, user_type);
-            }
-            self.former_members.on_member_added(user_id);
-            self.prune_then_insert_member_update(user_id, MemberUpdate::Added, now);
+            results.push((user_id, result));
+        }
 
-            if let Some(referrer) = referred_by
-                && matches!(
-                    self.update_member(&referrer, |m| {
-                        m.add_referral(user_id);
-                        true
-                    }),
-                    Some(true)
-                )
-            {
+        let added: Vec<_> = results
+            .iter()
+            .filter_map(|(_, result)| match result {
+                AddResult::Success(member) => Some(member.as_ref().clone()),
+                _ => None,
+            })
+            .collect();
+        self.principal_to_user_id_map
+            .insert_many(added.iter().map(|m| (m.principal, m.user_id)));
+        self.members_map.insert_many(added);
+
+        // The referrers are updated once the members have been written, since they may be among them
+        for (referrer, user_id) in referrals {
+            if matches!(
+                self.update_member(&referrer, |m| {
+                    m.add_referral(user_id);
+                    true
+                }),
+                Some(true)
+            ) {
                 self.members_with_referrals.insert(referrer);
             }
-            AddResult::Success(Box::new(member))
-        } else {
-            AddResult::AlreadyInCommunity
         }
+
+        results
     }
 
     pub fn add_user_id(&mut self, principal: Principal, user_id: UserId) {
@@ -161,24 +195,22 @@ impl CommunityMembers {
 
     pub fn remove_by_principal(&mut self, principal: Principal, now: TimestampMillis) -> Option<CommunityMemberInternal> {
         let user_id = self.principal_to_user_id_map.remove(&principal)?.into_value();
-        self.remove(user_id, Some(principal), false, now)
+        self.remove(user_id, Some(principal), now)
     }
 
     pub fn remove(
         &mut self,
         user_id: UserId,
         principal: Option<Principal>,
-        user_deleted: bool,
         now: TimestampMillis,
     ) -> Option<CommunityMemberInternal> {
-        self.remove_internal(user_id, principal, user_deleted, true, now)
+        self.remove_internal(user_id, principal, true, now)
     }
 
     fn remove_internal(
         &mut self,
         user_id: UserId,
         principal: Option<Principal>,
-        user_deleted: bool,
         record_update: bool,
         now: TimestampMillis,
     ) -> Option<CommunityMemberInternal> {
@@ -231,7 +263,6 @@ impl CommunityMembers {
         if record_update {
             self.prune_then_insert_member_update(user_id, MemberUpdate::Removed, now);
         }
-        self.former_members.on_member_removed(user_id, user_deleted);
 
         Some(member)
     }
@@ -408,131 +439,6 @@ impl CommunityMembers {
         self.update_member(user_id, |member| member.accept_rules(version, now));
     }
 
-    // Moves the membership, block and former membership of a user migrated to a MultiUser canister
-    // onto their new id, along with their channels, user groups and referrals. `principal` is the
-    // user's principal, if known, which is pointed at their new id if it points at the old one, as
-    // it does for an invited user. Returns whether anything changed.
-    pub fn migrate_user_id(
-        &mut self,
-        old_user_id: UserId,
-        new_user_id: UserId,
-        principal: Option<Principal>,
-        now: TimestampMillis,
-    ) -> bool {
-        if old_user_id == new_user_id {
-            return false;
-        }
-
-        let mut updated = false;
-        if self.members_and_channels.contains_key(&old_user_id) {
-            if self.blocked.contains(&new_user_id) {
-                // The user has been blocked under their new id, so their membership under the old id
-                // is dropped
-                let principal = self.principal_if_mapped_to(&old_user_id);
-                self.remove(old_user_id, principal, false, now);
-            } else {
-                // If the user has also joined under their new id since being migrated, that membership
-                // is replaced by their membership under the old id, which holds their role, referrals,
-                // etc, keeping the channels they have joined since. No update is recorded for its
-                // removal, since the user remains a member and clients are told of them being added
-                // under their new id.
-                let new_channels = self.members_and_channels.get(&new_user_id).cloned().unwrap_or_default();
-                self.remove_internal(new_user_id, None, false, false, now);
-                let member = self.members_map.remove(&old_user_id).unwrap().into_value();
-                self.move_member(member, new_user_id, now);
-                for channel_id in new_channels {
-                    self.mark_member_joined_channel(new_user_id, channel_id);
-                }
-            }
-            updated = true;
-        }
-
-        if let Some(principal) = principal
-            && self.principal_to_user_id_map.get(&principal) == Some(old_user_id)
-        {
-            self.principal_to_user_id_map.insert(principal, new_user_id);
-            updated = true;
-        }
-        let is_member = self.members_and_channels.contains_key(&new_user_id);
-        if self.unblock(old_user_id, now) {
-            if !is_member {
-                self.block(new_user_id, now);
-            }
-            updated = true;
-        }
-        updated |= self.former_members.migrate_user_id(old_user_id, new_user_id, is_member);
-        updated
-    }
-
-    fn principal_if_mapped_to(&self, user_id: &UserId) -> Option<Principal> {
-        self.members_map
-            .get(user_id)
-            .map(|m| m.principal)
-            .filter(|p| self.principal_to_user_id_map.get(p) == Some(*user_id))
-    }
-
-    // Moves a member, who has already been removed from `members_map`, onto their new id
-    fn move_member(&mut self, mut member: CommunityMemberInternal, new_user_id: UserId, now: TimestampMillis) {
-        let old_user_id = member.user_id;
-        member.user_id = new_user_id;
-
-        if self.principal_to_user_id_map.get(&member.principal) == Some(old_user_id) {
-            self.principal_to_user_id_map.insert(member.principal, new_user_id);
-        }
-
-        let channels = self.members_and_channels.remove(&old_user_id).unwrap_or_default();
-        self.members_and_channels.insert(new_user_id, channels);
-        let channels_removed: Vec<_> = self.channels_removed_for_member(old_user_id).collect();
-        for (channel_id, timestamp) in channels_removed {
-            self.member_channel_links_removed.remove(&(old_user_id, channel_id));
-            self.member_channel_links_removed.insert((new_user_id, channel_id), timestamp);
-        }
-        self.user_groups.migrate_user_id(old_user_id, new_user_id, now);
-
-        for set in [
-            &mut self.owners,
-            &mut self.admins,
-            &mut self.lapsed,
-            &mut self.suspended,
-            &mut self.members_with_display_names,
-            &mut self.members_with_referrals,
-        ] {
-            if set.remove(&old_user_id) {
-                set.insert(new_user_id);
-            }
-        }
-        if self.lapsed.contains(&new_user_id) {
-            self.restart_unlapsing_cursor();
-        }
-        if let Some(user_type) = self.bots.remove(&old_user_id) {
-            self.bots.insert(new_user_id, user_type);
-        }
-
-        if let Some(referrer) = member.referred_by {
-            self.update_member(&referrer, |m| {
-                if m.referrals.contains(&old_user_id) {
-                    // Recorded as a removal so that the referrer's client is told of it
-                    m.remove_referral(old_user_id);
-                    m.add_referral(new_user_id);
-                    true
-                } else {
-                    false
-                }
-            });
-        }
-        for referred in member.referrals.iter() {
-            self.update_member(referred, |m| {
-                m.referred_by = Some(new_user_id);
-                true
-            });
-        }
-
-        self.members_map.insert(new_user_id, member);
-        self.former_members.on_member_added(new_user_id);
-        self.prune_then_insert_member_update(old_user_id, MemberUpdate::Removed, now);
-        self.prune_then_insert_member_update(new_user_id, MemberUpdate::Added, now);
-    }
-
     pub fn block(&mut self, user_id: UserId, now: TimestampMillis) -> bool {
         if self.blocked.insert(user_id) {
             self.prune_then_insert_member_update(user_id, MemberUpdate::Blocked, now);
@@ -665,19 +571,6 @@ impl CommunityMembers {
             .collect()
     }
 
-    pub fn is_former_member(&self, user_id: &UserId) -> bool {
-        self.former_members.contains(user_id)
-    }
-
-    // Skips any who are members, since they are not former members
-    pub fn add_former_members(&mut self, user_ids: impl IntoIterator<Item = UserId>) {
-        for user_id in user_ids {
-            if !self.members_and_channels.contains_key(&user_id) {
-                self.former_members.record(user_id);
-            }
-        }
-    }
-
     pub fn len(&self) -> usize {
         self.members_and_channels.len()
     }
@@ -755,17 +648,27 @@ impl CommunityMembers {
     }
 
     pub fn update_lapsed(&mut self, user_id: UserId, lapsed: bool, now: TimestampMillis) {
-        if matches!(
-            self.update_member(&user_id, |m| {
-                if lapsed {
-                    // Owners can't lapse
-                    !m.is_owner() && m.set_lapsed(true, now)
-                } else {
-                    m.set_lapsed(false, now)
-                }
-            }),
-            Some(true)
-        ) {
+        self.update_lapsed_many([user_id], lapsed, now);
+    }
+
+    // As `update_lapsed` for each of the users, writing the members updated to stable memory together
+    // (see `update_many`)
+    pub fn update_lapsed_many(&mut self, user_ids: impl IntoIterator<Item = UserId>, lapsed: bool, now: TimestampMillis) {
+        let mut updated = Vec::new();
+        self.update_many(user_ids, |m| {
+            let changed = if lapsed {
+                // Owners can't lapse
+                !m.is_owner() && m.set_lapsed(true, now)
+            } else {
+                m.set_lapsed(false, now)
+            };
+            if changed {
+                updated.push(m.user_id);
+            }
+            changed
+        });
+
+        for user_id in updated {
             if lapsed {
                 self.lapsed.insert(user_id);
             } else {
@@ -795,37 +698,40 @@ impl CommunityMembers {
     }
 
     // Unlapses, in order of user id, the members who lapsed before `start_unlapsing` was called,
-    // until `keep_going` returns false or there are none left. Each is written to stable memory, so
-    // a great many are unlapsed a batch at a time (see the `unlapse_members` job). Members who have
-    // lapsed since, under an access gate set since, are left lapsed. Returns those unlapsed.
+    // until `keep_going` returns false or there are none left. Each is read from stable memory, so a
+    // great many are unlapsed a batch at a time (see the `unlapse_members` job), and those unlapsed
+    // are written back together once it stops. Members who have lapsed since, under an access gate
+    // set since, are left lapsed. Returns those unlapsed.
     pub fn unlapse_while(&mut self, now: TimestampMillis, mut keep_going: impl FnMut() -> bool) -> Vec<UserId> {
         let Some(Unlapsing { before, mut after }) = self.unlapsing else {
             return Vec::new();
         };
         self.prune_member_updates(now);
         let mut unlapsed = Vec::new();
+        let mut members_unlapsed = Vec::new();
         loop {
             if !keep_going() {
                 self.unlapsing = Some(Unlapsing { before, after });
-                return unlapsed;
+                break;
             }
             let start = after.map_or(Bound::Unbounded, Bound::Excluded);
             let Some(user_id) = self.lapsed.range((start, Bound::Unbounded)).next().copied() else {
                 self.unlapsing = None;
-                return unlapsed;
+                break;
             };
             after = Some(user_id);
 
-            let mut not_lapsed = false;
-            let updated = self.update_member(&user_id, |m| {
-                not_lapsed = !m.lapsed.value;
-                m.lapsed.timestamp <= before && m.set_lapsed(false, now)
-            });
+            let mut member = self.members_map.get(&user_id);
+            let not_lapsed = member.as_ref().is_some_and(|m| !m.lapsed.value);
+            let updated = member
+                .as_mut()
+                .map(|m| m.lapsed.timestamp <= before && m.set_lapsed(false, now));
             match updated {
                 Some(true) => {
                     self.lapsed.remove(&user_id);
                     self.updates.insert((now, user_id, MemberUpdate::Unlapsed));
                     unlapsed.push(user_id);
+                    members_unlapsed.extend(member);
                 }
                 // A member whose record says they aren't lapsed, or who isn't a member, shouldn't be
                 // in the set (eg. if the members were imported from a group which was unlapsing them)
@@ -838,14 +744,8 @@ impl CommunityMembers {
                 Some(false) => {}
             }
         }
-    }
-
-    // A member who has been migrated to a new user id may now come before the cursor, so the lapsed
-    // members are looked at again from the start. Those already unlapsed are no longer among them.
-    fn restart_unlapsing_cursor(&mut self) {
-        if let Some(unlapsing) = self.unlapsing.as_mut() {
-            unlapsing.after = None;
-        }
+        self.members_map.insert_many(members_unlapsed);
+        unlapsed
     }
 
     pub fn iter_latest_updates(&self, since: TimestampMillis) -> impl Iterator<Item = (UserId, MemberUpdate)> + '_ {
@@ -881,6 +781,26 @@ impl CommunityMembers {
             self.members_map.insert(member.user_id, member);
         }
         Some(updated)
+    }
+
+    // Applies `update_fn` to each of the members in turn, as `update_member` does, then writes back
+    // those it updated together, so that each node of the stable memory map is written once rather
+    // than once per member. A member given more than once is updated from where it last left them.
+    fn update_many<F: FnMut(&mut CommunityMemberInternal) -> bool>(
+        &mut self,
+        user_ids: impl IntoIterator<Item = UserId>,
+        mut update_fn: F,
+    ) {
+        let mut updated: BTreeMap<UserId, CommunityMemberInternal> = BTreeMap::new();
+        for user_id in user_ids {
+            let Some(mut member) = updated.get(&user_id).cloned().or_else(|| self.members_map.get(&user_id)) else {
+                continue;
+            };
+            if update_fn(&mut member) {
+                updated.insert(user_id, member);
+            }
+        }
+        self.members_map.insert_many(updated.into_values());
     }
 
     // Whether any update made after `since` has been pruned, so that `iter_latest_updates(since)`
@@ -964,7 +884,6 @@ impl CommunityMembers {
         assert_eq!(members_with_display_names, self.members_with_display_names);
         assert_eq!(members_with_referrals, self.members_with_referrals);
         assert_eq!(bots, self.bots);
-        assert!(self.former_members.iter().all(|u| !member_ids.contains(&u)));
     }
 }
 
@@ -1114,6 +1033,37 @@ impl Member for CommunityMemberInternal {
     }
 }
 
+// The members to be added to the community together (see `CommunityMembers::add_many`)
+#[derive(Default)]
+pub struct MembersToAdd(Vec<MemberToAdd>);
+
+struct MemberToAdd {
+    user_id: UserId,
+    principal: Principal,
+    user_type: UserType,
+    referred_by: Option<UserId>,
+}
+
+impl MembersToAdd {
+    pub fn push(&mut self, user_id: UserId, principal: Principal, user_type: UserType, referred_by: Option<UserId>) {
+        self.0.push(MemberToAdd {
+            user_id,
+            principal,
+            user_type,
+            referred_by,
+        });
+    }
+
+    pub fn contains(&self, user_id: &UserId) -> bool {
+        self.0.iter().any(|m| m.user_id == *user_id)
+    }
+
+    #[cfg(test)]
+    pub fn user_ids(&self) -> Vec<UserId> {
+        self.0.iter().map(|m| m.user_id).collect()
+    }
+}
+
 pub enum AddResult {
     Success(Box<CommunityMemberInternal>),
     AlreadyInCommunity,
@@ -1155,7 +1105,7 @@ mod tests {
     use super::*;
     use ic_stable_structures::DefaultMemoryImpl;
     use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
-    use std::collections::HashMap;
+
     use test_case::test_case;
     use types::CanisterId;
 
@@ -1192,7 +1142,7 @@ mod tests {
             assert_eq!(removed, (1u32..25).map(ChannelId::from).collect::<Vec<_>>());
         }
 
-        members.remove(user_id2, Some(principal2), false, 0);
+        members.remove(user_id2, Some(principal2), 0);
         assert!(members.channels_for_member(user_id2).is_empty());
         assert!(members.channels_removed_for_member(user_id2).next().is_none());
     }
@@ -1212,198 +1162,9 @@ mod tests {
         assert_eq!(members.bots(), &expected);
         members.check_invariants();
 
-        members.remove(user_id(2), None, false, 0);
+        members.remove(user_id(2), None, 0);
         assert!(members.bots().is_empty());
         members.check_invariants();
-    }
-
-    #[test]
-    fn former_members_maintained_correctly() {
-        let memory = MemoryManager::init(DefaultMemoryImpl::default());
-        stable_memory_map::init(memory.get(MemoryId::new(1)));
-
-        let user_id = test_user_id;
-        let principal = |i: u8| test_principal(test_user_id(i));
-
-        let mut members = CommunityMembers::new(principal(1), user_id(1), UserType::User, Vec::new(), 0);
-        members.add(user_id(2), principal(2), UserType::User, None, 0);
-        members.add(user_id(3), principal(3), UserType::User, None, 0);
-
-        members.remove(user_id(2), None, false, 0);
-        members.remove(user_id(3), None, true, 0);
-        members.add_former_members([user_id(1), user_id(4)]);
-
-        assert!(members.is_former_member(&user_id(2)));
-        assert!(!members.is_former_member(&user_id(3)), "deleted users aren't recorded");
-        assert!(!members.is_former_member(&user_id(1)), "members are skipped");
-        assert!(members.is_former_member(&user_id(4)));
-
-        members.add(user_id(2), principal(2), UserType::User, None, 0);
-        members.add(user_id(4), principal(4), UserType::User, None, 0);
-
-        assert!(!members.is_former_member(&user_id(2)));
-        assert!(!members.is_former_member(&user_id(4)));
-        members.check_invariants();
-    }
-
-    #[test]
-    fn migrate_user_id_moves_membership_block_and_former_membership() {
-        let memory = MemoryManager::init(DefaultMemoryImpl::default());
-        stable_memory_map::init(memory.get(MemoryId::new(1)));
-
-        let [
-            creator,
-            referrer,
-            old,
-            new,
-            referred,
-            blocked_old,
-            blocked_new,
-            former_old,
-            former_new,
-        ]: [UserId; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(test_user_id);
-        let (channel1, channel2) = (ChannelId::from(1u32), ChannelId::from(2u32));
-
-        let mut members = CommunityMembers::new(test_principal(creator), creator, UserType::User, Vec::new(), 0);
-        members.add(referrer, test_principal(referrer), UserType::User, None, 1);
-        members.add(old, test_principal(old), UserType::User, Some(referrer), 2);
-        members.add(referred, test_principal(referred), UserType::User, Some(old), 3);
-        members.add(former_old, test_principal(former_old), UserType::User, None, 3);
-        members.remove(former_old, Some(test_principal(former_old)), false, 4);
-        members.block(blocked_old, 4);
-        members.set_display_name(old, Some("old".to_string()), 5);
-        members.set_suspended(old, true, 5);
-        members.mark_member_joined_channel(old, channel1);
-        members.mark_member_joined_channel(old, channel2);
-        members.mark_member_left_channel(old, channel2, false, 6);
-        let user_group_id = members
-            .create_user_group("group".to_string(), vec![old, referred], &mut rand::rng(), 6)
-            .unwrap();
-
-        assert!(members.migrate_user_id(old, new, None, 10));
-        assert!(!members.contains(&old));
-        assert!(members.get_by_user_id(&old).is_none());
-        let member = members.get_by_user_id(&new).unwrap();
-        assert_eq!(member.user_id, new);
-        assert_eq!(member.principal, test_principal(old));
-        assert_eq!(member.date_added, 2);
-        assert_eq!(member.referred_by, Some(referrer));
-        assert_eq!(member.referrals(), &[referred].into_iter().collect());
-        assert_eq!(member.display_name().value.as_deref(), Some("old"));
-        assert!(member.suspended().value);
-        assert_eq!(members.lookup_user_id(test_principal(old)), Some(new));
-        assert_eq!(members.get(test_principal(old)).unwrap().user_id, new);
-        assert_eq!(members.channels_for_member(new), &[channel1]);
-        assert_eq!(
-            members.channels_removed_for_member(new).collect::<Vec<_>>(),
-            vec![(channel2, 6)]
-        );
-        assert!(members.channels_removed_for_member(old).next().is_none());
-        assert_eq!(
-            members.get_user_group(user_group_id).unwrap().members.value,
-            [new, referred].into_iter().collect()
-        );
-        let referrer_member = members.get_by_user_id(&referrer).unwrap();
-        assert_eq!(referrer_member.referrals(), &[new].into_iter().collect());
-        // So that the referrer's client is told the referral under the old id has gone
-        assert!(referrer_member.referrals_removed().contains(&old));
-        assert_eq!(members.get_by_user_id(&referred).unwrap().referred_by, Some(new));
-        assert!(members.suspended.contains(&new));
-        assert!(members.members_with_display_names.contains(&new));
-        assert!(members.members_with_referrals.contains(&new));
-
-        assert!(members.migrate_user_id(blocked_old, blocked_new, None, 10));
-        assert!(!members.is_blocked(&blocked_old));
-        assert!(members.is_blocked(&blocked_new));
-
-        assert!(members.migrate_user_id(former_old, former_new, None, 10));
-        assert!(!members.is_former_member(&former_old));
-        assert!(members.is_former_member(&former_new));
-
-        // Clients are told of each change
-        let updates: Vec<_> = members.iter_latest_updates(9).collect();
-        for update in [
-            (old, MemberUpdate::Removed),
-            (new, MemberUpdate::Added),
-            (blocked_old, MemberUpdate::Unblocked),
-            (blocked_new, MemberUpdate::Blocked),
-        ] {
-            assert!(updates.contains(&update));
-        }
-
-        // Nothing is left under the old ids
-        for (old, new) in [(old, new), (blocked_old, blocked_new), (former_old, former_new)] {
-            assert!(!members.migrate_user_id(old, new, None, 11));
-        }
-        members.check_invariants();
-    }
-
-    #[test]
-    fn migrate_user_id_keeps_old_membership_if_also_member_under_new_id() {
-        let memory = MemoryManager::init(DefaultMemoryImpl::default());
-        stable_memory_map::init(memory.get(MemoryId::new(1)));
-
-        let [creator, old, new]: [UserId; 3] = [1, 2, 3].map(test_user_id);
-        let (channel1, channel2) = (ChannelId::from(1u32), ChannelId::from(2u32));
-        // The user keeps the same principal when migrated
-        let principal = test_principal(old);
-        let mut members = CommunityMembers::new(test_principal(creator), creator, UserType::User, Vec::new(), 0);
-        members.add(old, principal, UserType::User, None, 1);
-        members.mark_member_joined_channel(old, channel1);
-        members.add(new, principal, UserType::User, None, 2);
-        members.mark_member_joined_channel(new, channel2);
-
-        assert!(members.migrate_user_id(old, new, None, 10));
-        assert!(!members.contains(&old));
-        assert_eq!(members.get_by_user_id(&new).unwrap().date_added, 1);
-        assert_eq!(members.channels_for_member(new), &[channel1, channel2]);
-        assert_eq!(members.lookup_user_id(principal), Some(new));
-        assert!(!members.is_former_member(&old));
-        assert!(!members.is_former_member(&new));
-
-        // Clients are told the user was added under their new id, not removed
-        let mut latest = HashMap::new();
-        for (user_id, update) in members.iter_latest_updates(9) {
-            latest.entry(user_id).or_insert(update);
-        }
-        assert_eq!(latest.get(&new), Some(&MemberUpdate::Added));
-        members.check_invariants();
-    }
-
-    #[test]
-    fn migrate_user_id_drops_old_membership_if_blocked_under_new_id() {
-        let memory = MemoryManager::init(DefaultMemoryImpl::default());
-        stable_memory_map::init(memory.get(MemoryId::new(1)));
-
-        let [creator, old, new]: [UserId; 3] = [1, 2, 3].map(test_user_id);
-        let mut members = CommunityMembers::new(test_principal(creator), creator, UserType::User, Vec::new(), 0);
-        members.add(old, test_principal(old), UserType::User, None, 1);
-        members.block(new, 5);
-
-        assert!(members.migrate_user_id(old, new, None, 10));
-        assert!(!members.contains(&old));
-        assert!(!members.contains(&new));
-        assert!(members.is_blocked(&new));
-        assert_eq!(members.lookup_user_id(test_principal(old)), None);
-        members.check_invariants();
-    }
-
-    #[test]
-    fn migrate_user_id_points_an_invited_users_principal_at_their_new_id() {
-        let memory = MemoryManager::init(DefaultMemoryImpl::default());
-        stable_memory_map::init(memory.get(MemoryId::new(1)));
-
-        let [creator, old, new]: [UserId; 3] = [1, 2, 3].map(test_user_id);
-        let principal = test_principal(old);
-        let mut members = CommunityMembers::new(test_principal(creator), creator, UserType::User, Vec::new(), 0);
-        members.add_user_id(principal, old);
-
-        // Without the principal, an invited user's lookup can't be found
-        assert!(!members.migrate_user_id(old, new, None, 10));
-        assert_eq!(members.lookup_user_id(principal), Some(old));
-
-        assert!(members.migrate_user_id(old, new, Some(principal), 10));
-        assert_eq!(members.lookup_user_id(principal), Some(new));
     }
 
     #[test]
@@ -1507,39 +1268,6 @@ mod tests {
     }
 
     #[test]
-    fn a_lapsed_member_migrated_to_an_earlier_user_id_is_still_unlapsed() {
-        let mut members = members_for_page_tests(5);
-        members.update_lapsed(test_user_id(3), true, 3);
-        members.update_lapsed(test_user_id(5), true, 3);
-        members.start_unlapsing(10);
-
-        let mut asked = 0;
-        let unlapsed = members.unlapse_while(10, || {
-            asked += 1;
-            asked <= 1
-        });
-        assert_eq!(unlapsed, user_ids([3]));
-
-        // User 5 is migrated to an id before where unlapsing has got to
-        members.migrate_user_id(test_user_id(5), test_user_id(0), None, 11);
-        assert_eq!(members.unlapse_while(12, || true), user_ids([0]));
-        assert!(members.lapsed().is_empty());
-        assert!(!members.get_by_user_id(&test_user_id(0)).unwrap().lapsed().value);
-    }
-
-    #[test]
-    fn a_member_in_the_lapsed_set_whose_record_isnt_lapsed_is_dropped_from_it() {
-        let mut members = members_for_page_tests(3);
-        // As can happen if the members were imported from a group which was unlapsing them
-        members.lapsed.insert(test_user_id(2));
-        members.start_unlapsing(10);
-
-        assert!(members.unlapse_while(10, || true).is_empty());
-        assert!(members.lapsed().is_empty());
-        assert!(!members.is_unlapsing());
-    }
-
-    #[test]
     fn members_who_lapse_after_unlapsing_starts_are_left_lapsed() {
         let mut members = members_for_page_tests(4);
         members.update_lapsed(test_user_id(2), true, 3);
@@ -1563,6 +1291,172 @@ mod tests {
         members.start_unlapsing(30);
         assert_eq!(members.unlapse_while(30, || true), user_ids([3]));
         assert!(members.lapsed().is_empty());
+    }
+
+    #[test]
+    fn add_many_matches_adding_one_at_a_time() {
+        // User 3 has been invited, so their principal is already mapped, and user 5 is blocked
+        let setup = || {
+            let mut members = members_for_page_tests(1);
+            members.add_user_id(principal_for(long_user_id(&[3])), long_user_id(&[3]));
+            members.block(long_user_id(&[5]), 1);
+            members
+        };
+        // Of different lengths, so that the order of the user ids differs from that of their keys, as
+        // does the order of the principals. Of the referrers, user 1 is already a member, user 9,9 is
+        // added before the member they referred, user 7,7,7 after, and user 7,7,7 refers themselves.
+        let members_to_add = [
+            (&[9, 9][..], Some(&[1][..])),
+            (&[3], Some(&[7, 7, 7])),
+            (&[5], None),
+            (&[2], Some(&[9, 9])),
+            (&[9, 9], None),
+            (&[7, 7, 7], Some(&[7, 7, 7])),
+        ]
+        .map(|(user_id, referred_by)| (long_user_id(user_id), referred_by.map(long_user_id)));
+        let user_type = |user_id: UserId| if user_id == long_user_id(&[2]) { UserType::BotV2 } else { UserType::User };
+
+        let mut one_at_a_time = setup();
+        let results: Vec<_> = members_to_add
+            .iter()
+            .map(|(u, r)| {
+                (
+                    *u,
+                    result_name(&one_at_a_time.add(*u, principal_for(*u), user_type(*u), *r, 10)),
+                )
+            })
+            .collect();
+        let expected = stored_state(&one_at_a_time);
+
+        let mut together = setup();
+        let mut to_add = MembersToAdd::default();
+        for (user_id, referred_by) in members_to_add {
+            to_add.push(user_id, principal_for(user_id), user_type(user_id), referred_by);
+        }
+        let results_together: Vec<_> = together
+            .add_many(to_add, 10)
+            .iter()
+            .map(|(user_id, result)| (*user_id, result_name(result)))
+            .collect();
+
+        assert_eq!(results_together, results);
+        assert_eq!(stored_state(&together), expected);
+        assert_eq!(together.len(), 5);
+        assert_eq!(
+            together.lookup_user_id(principal_for(long_user_id(&[7, 7, 7]))),
+            Some(long_user_id(&[7, 7, 7]))
+        );
+        let referrals = |user_id| together.get_by_user_id(&long_user_id(user_id)).unwrap().referrals;
+        assert_eq!(referrals(&[1]), BTreeSet::from([long_user_id(&[9, 9])]));
+        assert_eq!(referrals(&[9, 9]), BTreeSet::from([long_user_id(&[2])]));
+        assert!(referrals(&[7, 7, 7]).is_empty());
+        together.check_invariants();
+    }
+
+    #[test]
+    fn update_lapsed_many_matches_updating_one_at_a_time() {
+        // User 1 is the owner, so can't lapse, user 3 is given twice, and user 4 isn't a member
+        let user_ids = [&[9, 9][..], &[1], &[3], &[2, 1], &[3], &[4]].map(long_user_id);
+        let setup = || {
+            let mut members = members_for_page_tests(1);
+            for user_id in [&[2, 1][..], &[3], &[9, 9]].map(long_user_id) {
+                members.add(user_id, principal_for(user_id), UserType::User, None, 1);
+            }
+            members
+        };
+
+        let mut one_at_a_time = setup();
+        for user_id in user_ids {
+            one_at_a_time.update_lapsed(user_id, true, 10);
+        }
+        one_at_a_time.update_lapsed(long_user_id(&[3]), false, 11);
+        let expected = stored_state(&one_at_a_time);
+
+        let mut together = setup();
+        together.update_lapsed_many(user_ids, true, 10);
+        together.update_lapsed_many([long_user_id(&[3])], false, 11);
+
+        assert_eq!(stored_state(&together), expected);
+        assert_eq!(together.lapsed().len(), 2);
+        together.check_invariants();
+    }
+
+    #[test]
+    fn members_unlapsed_together_match_those_updated_one_at_a_time() {
+        let lapsed = [&[2, 1][..], &[3], &[9, 9], &[4], &[2]].map(long_user_id);
+        let setup = || {
+            let mut members = members_for_page_tests(1);
+            for user_id in lapsed {
+                members.add(user_id, principal_for(user_id), UserType::User, None, 1);
+                members.update_lapsed(user_id, true, 2);
+            }
+            members
+        };
+        // In order of user id, which is by length first
+        let first_four = [&[2][..], &[3], &[4], &[2, 1]].map(long_user_id);
+
+        // Each member unlapsed is written as when updated on their own
+        let mut one_at_a_time = setup();
+        for user_id in first_four {
+            one_at_a_time.update_member(&user_id, |m| m.set_lapsed(false, 10));
+        }
+        let expected = one_at_a_time.members_map.all_entries();
+
+        let mut together = setup();
+        together.start_unlapsing(5);
+        let mut asked = 0;
+        let unlapsed = together.unlapse_while(10, || {
+            asked += 1;
+            asked <= 4
+        });
+
+        assert_eq!(unlapsed, first_four.to_vec());
+        assert_eq!(together.members_map.all_entries(), expected);
+        assert_eq!(
+            together.lapsed().iter().copied().collect::<Vec<_>>(),
+            vec![long_user_id(&[9, 9])]
+        );
+        together.check_invariants();
+    }
+
+    // What's held in stable memory for each member and principal, along with what's held on the heap
+    fn stored_state(members: &CommunityMembers) -> impl PartialEq + std::fmt::Debug + use<> {
+        use stable_memory_map::{KeyPrefix, PrincipalKeyPrefix, with_map};
+
+        let prefix = PrincipalKeyPrefix::new_for_principal_to_user_id_map();
+        let principals: Vec<_> = with_map(|m| {
+            m.range(prefix.create_key(&Principal::from_slice(&[]))..)
+                .map(|(k, v)| (k.as_ref().to_vec(), v))
+                .collect()
+        });
+        (
+            members.members_map.all_entries(),
+            principals,
+            members.principal_to_user_id_map.len(),
+            members.members_and_channels.clone(),
+            members.bots.clone(),
+            members.lapsed.clone(),
+            members.members_with_referrals.clone(),
+            members.updates.clone(),
+        )
+    }
+
+    fn result_name(result: &AddResult) -> &'static str {
+        match result {
+            AddResult::Success(_) => "Success",
+            AddResult::AlreadyInCommunity => "AlreadyInCommunity",
+            AddResult::Blocked => "Blocked",
+        }
+    }
+
+    fn long_user_id(bytes: &[u8]) -> UserId {
+        Principal::from_slice(bytes).into()
+    }
+
+    // Each a different length to the user id, and in a different order
+    fn principal_for(user_id: UserId) -> Principal {
+        let bytes = user_id.as_slice();
+        Principal::from_slice(&vec![255 - bytes[0]; 4 - bytes.len()])
     }
 
     // Holds users 1 to `count`, of whom user 1 is the owner

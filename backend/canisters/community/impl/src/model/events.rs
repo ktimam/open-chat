@@ -236,6 +236,8 @@ pub struct GroupImportedInternal {
     pub members_added: Vec<UserId>,
 }
 
+impl CommunityEventInternal {}
+
 impl From<CommunityEventInternal> for CommunityEvent {
     fn from(value: CommunityEventInternal) -> Self {
         match value {

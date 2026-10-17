@@ -4,13 +4,13 @@
         medium: string;
         light: string;
         size: string;
-        y?: any;
+        y?: number;
     }
 
     let { dark, medium, light, size, y = -40 }: Props = $props();
 
-    let width = size;
-    let height = size;
+    const width = size;
+    const height = size;
 </script>
 
 <svg class="diamond" viewBox={`0 ${y} 500 430`} {width} {height}>

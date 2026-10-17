@@ -1,6 +1,5 @@
 use crate::model::group_index_event_batch::GroupIndexEventBatch;
 use crate::model::local_user_index_map::LocalUserIndex;
-use crate::model::notifications_index_event_batch::NotificationsIndexEventBatch;
 use crate::model::online_users_event_batch::OnlineUsersEventBatch;
 use crate::model::premium_items::{PremiumItemMetrics, PremiumItems};
 use crate::model::protected_actions::{ProtectedActionMetrics, ProtectedActions};
@@ -18,7 +17,7 @@ use event_store_producer_cdk_runtime::CdkRuntime;
 use fire_and_forget_handler::FireAndForgetHandler;
 use icrc_ledger_types::icrc1::account::{Account, Subaccount};
 use identity_canister::UserIdentity;
-use local_user_index_canister::{UserIdMigrated, UserIndexEvent as LocalUserIndexEvent};
+use local_user_index_canister::UserIndexEvent as LocalUserIndexEvent;
 use model::authority_reports::{AuthorityReportMetrics, AuthorityReports};
 use model::chit_leaderboard::ChitLeaderboard;
 use model::external_achievements::{ExternalAchievementMetrics, ExternalAchievements};
@@ -27,14 +26,7 @@ use model::multi_user_canister_map::{MultiUserCanister, MultiUserCanisterMap};
 use model::pending_payments_queue::{PendingPayment, PendingPaymentsQueue};
 use model::reported_messages::{ReportedMessages, ReportingMetrics};
 use model::user::SuspensionDetails;
-use model::user_migrations::{UserMigrations, UserMigrationsMetrics};
-use model::users_last_online::{UsersLastOnline, UsersLastOnlineMetrics};
-use notifications_index_canister::{
-    UserIdMigrated as NotificationsIndexUserIdMigrated, UserIndexEvent as NotificationsIndexEvent,
-};
-use online_users_canister::{
-    UserDeleted as OnlineUsersUserDeleted, UserIdMigrated as OnlineUsersUserIdMigrated, UserIndexEvent as OnlineUsersEvent,
-};
+use online_users_canister::{UserDeleted as OnlineUsersUserDeleted, UserIndexEvent as OnlineUsersEvent};
 use p256_key_pair::P256KeyPair;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -62,13 +54,11 @@ mod jobs;
 mod lifecycle;
 mod memory;
 mod model;
-mod nns_registry;
 mod no_inline_anchor;
 mod queries;
 mod timer_job_types;
 mod updates;
 
-const USER_CANISTER_TOP_UP_AMOUNT: Cycles = 100_000_000_000; // 0.1T cycles
 const TIME_UNTIL_SUSPENDED_ACCOUNT_IS_DELETED_MILLIS: Milliseconds = DAY_IN_MS * 90; // 90 days
 
 thread_local! {
@@ -90,11 +80,6 @@ impl RuntimeState {
     pub fn is_caller_openchat_user(&self) -> bool {
         let caller = self.env.caller();
         self.data.users.get(&caller).is_some()
-    }
-
-    pub fn is_caller_user_canister(&self) -> bool {
-        let caller = self.env.caller();
-        self.data.users.get_by_user_id(&caller.into()).is_some()
     }
 
     // A MultiUser canister acts for any of the users it holds
@@ -195,11 +180,6 @@ impl RuntimeState {
         }
     }
 
-    pub fn push_event_to_local_user_index_canister(&mut self, canister_id: CanisterId, event: LocalUserIndexEvent) {
-        self.data.user_index_event_sync_queue.push(canister_id, event);
-        jobs::sync_events_to_local_user_index_canisters::try_run_now(self);
-    }
-
     pub fn push_event_to_all_local_user_indexes(&mut self, event: LocalUserIndexEvent, except: Option<CanisterId>) {
         for canister_id in self.data.local_index_map.canisters() {
             if except != Some(*canister_id) {
@@ -209,15 +189,6 @@ impl RuntimeState {
         jobs::sync_events_to_local_user_index_canisters::try_run_now(self);
     }
 
-    pub fn push_event_to_notifications_index(&mut self, event: NotificationsIndexEvent) {
-        let now = self.env.now();
-        self.data.notifications_index_event_sync_queue.push(IdempotentEnvelope {
-            created_at: now,
-            idempotency_id: self.env.rng().next_u64(),
-            value: event,
-        });
-    }
-
     pub fn push_event_to_online_users(&mut self, event: OnlineUsersEvent) {
         let now = self.env.now();
         self.data.online_users_event_sync_queue.push(IdempotentEnvelope {
@@ -225,157 +196,6 @@ impl RuntimeState {
             idempotency_id: self.env.rng().next_u64(),
             value: event,
         });
-    }
-
-    // Switches a user migrated to a MultiUser canister over from their old id to the new one it gave
-    // them, once it has imported them. From then on they are known here by their new id, as they are
-    // by the Identity canister, the NotificationsIndex, the OnlineUsers canister and each LocalUserIndex
-    // once told.
-    pub fn switch_over_migrated_user(
-        &mut self,
-        old_user_id: UserId,
-        new_user_id: UserId,
-        canisters_to_notify: Vec<CanisterId>,
-        direct_chat_user_ids: Vec<UserId>,
-    ) -> bool {
-        let now = self.env.now();
-        let Some(principal) = self.data.users.migrate_user_id(old_user_id, new_user_id, now) else {
-            return false;
-        };
-
-        self.data.local_index_map.remove_user(&old_user_id);
-        if let Some(local_user_index) = self.data.multi_user_canisters.local_user_index(&new_user_id.canister_id()) {
-            self.data.local_index_map.add_user(local_user_index, new_user_id);
-        }
-        for user_ids in [
-            &mut self.data.platform_moderators,
-            &mut self.data.platform_operators,
-            &mut self.data.vault_reviewers,
-        ] {
-            if user_ids.remove(&old_user_id) {
-                user_ids.insert(new_user_id);
-            }
-        }
-        self.data.chit_leaderboard.migrate_user_id(old_user_id, new_user_id);
-        self.data.external_achievements.migrate_user_id(old_user_id, new_user_id);
-        // Finding the users they've blocked means scanning every blocked-user pair (~55M instructions
-        // for 7.6k pairs). That is only done here, where no more users are switched over in a batch
-        // than the migration concurrency, which must be kept well below the ~700 at which a batch
-        // would run out of instructions, and not by each LocalUserIndex, which may be sent up to 1000
-        // switch-overs in one batch
-        let blocked_users: Vec<UserId> = self.data.blocked_users.all_users_linked_to(old_user_id);
-        // Each pair is keyed by the user who was blocked, so those who have blocked the user are found
-        // by their key
-        let blocked_by: Vec<UserId> = self.data.blocked_users.all_linked_users(old_user_id);
-        self.data
-            .blocked_users
-            .migrate_user_id(old_user_id, new_user_id, &blocked_users);
-        for (_, job) in self.data.timer_jobs.iter() {
-            if let Some(job) = job.borrow_mut().as_mut() {
-                job.migrate_user_id(old_user_id, new_user_id);
-            }
-        }
-
-        self.data.identity_canister_user_sync_queue.push_back(UserIdentity {
-            principal,
-            user_id: Some(new_user_id),
-            email: None,
-        });
-        jobs::sync_users_to_identity_canister::try_run_now(self);
-
-        self.push_event_to_notifications_index(NotificationsIndexEvent::UserIdMigrated(NotificationsIndexUserIdMigrated {
-            user_principal: principal,
-            old_user_id,
-            new_user_id,
-        }));
-
-        self.push_event_to_online_users(OnlineUsersEvent::UserIdMigrated(OnlineUsersUserIdMigrated {
-            user_principal: principal,
-            old_user_id,
-            new_user_id,
-        }));
-
-        // Those the user has, or had, a direct chat with and those they have blocked may have been
-        // migrated before them, in which case the user's canister may not have been told, eg. if it
-        // was being migrated itself at the time, so it is told now
-        let mut migrated_earlier = HashMap::new();
-        for &user_id in direct_chat_user_ids.iter().chain(blocked_users.iter()) {
-            let latest = self.data.migrated_user_ids.latest(user_id);
-            if latest != user_id {
-                migrated_earlier.insert(user_id, latest);
-            }
-        }
-        // Those the user has a direct chat with, those who have blocked them and those they have
-        // blocked each move what they hold under the user's old id onto the new one
-        let users_to_notify = direct_chat_user_ids
-            .into_iter()
-            .chain(blocked_by)
-            .chain(blocked_users.iter().copied())
-            .collect();
-        self.record_user_id_migrated(
-            old_user_id,
-            new_user_id,
-            canisters_to_notify,
-            blocked_users,
-            users_to_notify,
-            migrated_earlier.into_iter().collect(),
-        );
-        true
-    }
-
-    // Records that a user migrated to a MultiUser canister has been given a new id, and tells every
-    // LocalUserIndex, each of which tells whichever of the user's groups and communities it controls,
-    // and of `users_to_notify` it holds, and moves the pairs of the user and those they've blocked
-    // onto their new id. The LocalUserIndex holding the new id tells the user of `migrated_earlier`.
-    // Only the first call for a migration is acted on, so it must list all of them.
-    fn record_user_id_migrated(
-        &mut self,
-        old_user_id: UserId,
-        new_user_id: UserId,
-        canisters_to_notify: Vec<CanisterId>,
-        blocked_users: Vec<UserId>,
-        users_to_notify: Vec<UserId>,
-        migrated_earlier: Vec<(UserId, UserId)>,
-    ) {
-        if self.data.migrated_user_ids.insert(old_user_id, new_user_id) {
-            self.data.multi_user_canisters.on_user_removed(&old_user_id);
-            self.data.multi_user_canisters.on_user_added(&new_user_id);
-
-            // Each LocalUserIndex is only sent the users it holds, by their latest ids
-            let mut users_by_local_user_index: HashMap<CanisterId, HashSet<UserId>> = HashMap::new();
-            for user_id in users_to_notify {
-                let user_id = self.data.migrated_user_ids.latest(user_id);
-                if user_id != new_user_id
-                    && let Some(local_user_index) = self.data.local_index_map.get_index_canister(&user_id)
-                {
-                    users_by_local_user_index.entry(local_user_index).or_default().insert(user_id);
-                }
-            }
-            let new_user_local_user_index = self.data.local_index_map.get_index_canister(&new_user_id);
-            let local_user_indexes: Vec<CanisterId> = self.data.local_index_map.canisters().copied().collect();
-            for local_user_index in local_user_indexes {
-                let users_to_notify = users_by_local_user_index
-                    .remove(&local_user_index)
-                    .map(|user_ids| user_ids.into_iter().collect())
-                    .unwrap_or_default();
-                self.data.user_index_event_sync_queue.push(
-                    local_user_index,
-                    LocalUserIndexEvent::UserIdMigrated(UserIdMigrated {
-                        old_user_id,
-                        new_user_id,
-                        canisters_to_notify: canisters_to_notify.clone(),
-                        blocked_users: blocked_users.clone(),
-                        users_to_notify,
-                        migrated_earlier: if new_user_local_user_index == Some(local_user_index) {
-                            migrated_earlier.clone()
-                        } else {
-                            Vec::new()
-                        },
-                    }),
-                );
-            }
-            jobs::sync_events_to_local_user_index_canisters::try_run_now(self);
-        }
     }
 
     pub fn get_random_local_user_index_canister(&mut self) -> CanisterId {
@@ -476,7 +296,6 @@ impl RuntimeState {
             canister_upgrades_pending: canister_upgrades_metrics.pending,
             canister_upgrades_in_progress: canister_upgrades_metrics.in_progress,
             governance_principals: self.data.governance_principals.iter().copied().collect(),
-            user_wasm_version: self.data.child_canister_wasms.get(ChildCanisterType::User).wasm.version,
             local_user_index_wasm_version: self
                 .data
                 .child_canister_wasms
@@ -490,21 +309,27 @@ impl RuntimeState {
             user_index_events_queue_length: self.data.user_index_event_sync_queue.len(),
             local_user_indexes: self.data.local_index_map.iter().map(|(c, i)| (*c, i.clone())).collect(),
             multi_user_canisters: self.data.multi_user_canisters.iter().map(|(c, m)| (*c, m.clone())).collect(),
-            multi_user_canisters_enabled: self.data.multi_user_canisters_enabled,
             migrated_user_ids: self.data.migrated_user_ids.len(),
-            users_last_online: self.data.users_last_online.metrics(),
-            user_migrations: self.data.user_migrations.metrics(),
             call_push_enabled: self.data.call_push_enabled,
             platform_moderators_group: self.data.platform_moderators_group,
             nns_8_year_neuron: self.data.nns_8_year_neuron.clone(),
             event_store_client_info,
             pending_payments: self.data.pending_payments_queue.len(),
+            payments_awaiting_retry: self
+                .data
+                .timer_jobs
+                .iter()
+                // A job which has already run leaves an empty entry behind
+                .filter(|(_, wrapper)| matches!(wrapper.borrow().as_ref(), Some(TimerJob::RetryPayment(_))))
+                .count() as u32,
+            parked_payments: self.data.pending_payments_queue.parked_len() as u32,
             pending_users_to_sync_to_storage_index: self.data.storage_index_user_sync_queue.len(),
             reporting_metrics: self.data.reported_messages.metrics(),
             authority_report_metrics: self.data.authority_reports.metrics(),
             protected_action_metrics: self.data.protected_actions.metrics(),
             vault_reviewers: self.data.vault_reviewers.len() as u32,
             openai_api_key_set: self.data.openai_api_key.is_some(),
+            alchemy_api_key_set: self.data.alchemy_api_key.is_some(),
             internal_moderation_channel_set: self.data.internal_moderation_channel.is_some(),
             // Presence and size only: the metrics endpoint is public and the per-category
             // thresholds must not be readable by people tuning content to sit under them.
@@ -520,7 +345,6 @@ impl RuntimeState {
             oc_public_key: self.data.oc_key_pair.public_key_pem().to_string(),
             empty_users: self.data.empty_users.len(),
             deleted_users: self.data.deleted_users.len(),
-            unique_person_proofs_submitted: self.data.users.unique_person_proofs_submitted(),
             blocked_user_pairs: self.data.blocked_users.len() as u64,
             july_airdrop_period: self.build_stats_for_cohort(1719792000000, 1723021200000),
             august_airdrop_period: self.build_stats_for_cohort(1723021200000, 1725181200000),
@@ -610,7 +434,6 @@ struct Data {
     pub storage_index_users_to_remove_queue: BatchedTimerJobQueue<StorageIndexUsersToRemoveBatch>,
     pub user_index_event_sync_queue: CanisterEventSyncQueue<LocalUserIndexEvent>,
     pub group_index_event_sync_queue: BatchedTimerJobQueue<GroupIndexEventBatch>,
-    pub notifications_index_event_sync_queue: BatchedTimerJobQueue<NotificationsIndexEventBatch>,
     pub online_users_event_sync_queue: BatchedTimerJobQueue<OnlineUsersEventBatch>,
     pub pending_payments_queue: PendingPaymentsQueue,
     pub platform_moderators: HashSet<UserId>,
@@ -672,10 +495,6 @@ struct Data {
     // canister id -> LocalUserIndex, is still held under the old one
     #[serde(rename = "multi_user_canisters_v2", default)]
     pub multi_user_canisters: MultiUserCanisterMap,
-    // Set by a platform operator and fanned out to the LocalUserIndexes. While set, new users are
-    // routed to the LocalUserIndex controlling the MultiUser canister with the fewest users
-    #[serde(default)]
-    pub multi_user_canisters_enabled: bool,
     // The native call push kill switch (#9456). Set by a platform operator and fanned out to the
     // LocalUserIndexes, including any added later
     #[serde(default)]
@@ -687,13 +506,11 @@ struct Data {
     // LocalUserIndexes, including any added later
     #[serde(default)]
     pub migrated_user_ids: MigratedUserIds,
-    // Temporary: each user's last online date, used to decide which users to migrate first
-    // TODO remove once the users have been migrated
+    // The key the MultiUser canisters use to call Alchemy's Solana RPC. Set by a platform operator and
+    // fanned out to the LocalUserIndexes, including any added later, which pass it on to their
+    // MultiUser canisters
     #[serde(default)]
-    pub users_last_online: UsersLastOnline,
-    // The users being migrated from canisters of their own to MultiUser canisters
-    #[serde(default)]
-    pub user_migrations: UserMigrations,
+    pub alchemy_api_key: Option<String>,
 }
 
 impl Data {
@@ -753,7 +570,6 @@ impl Data {
             storage_index_users_to_remove_queue: BatchedTimerJobQueue::new(storage_index_canister_id, false),
             user_index_event_sync_queue: CanisterEventSyncQueue::default(),
             group_index_event_sync_queue: BatchedTimerJobQueue::new(group_index_canister_id, false),
-            notifications_index_event_sync_queue: BatchedTimerJobQueue::new(notifications_index_canister_id, false),
             online_users_event_sync_queue: BatchedTimerJobQueue::new(online_users_canister_id, false),
             pending_payments_queue: PendingPaymentsQueue::default(),
             platform_moderators: HashSet::new(),
@@ -797,12 +613,10 @@ impl Data {
             internal_moderation_channel: None,
             blocked_attempt_notice_throttle: HashMap::new(),
             multi_user_canisters: MultiUserCanisterMap::default(),
-            multi_user_canisters_enabled: false,
             call_push_enabled: false,
             daily_puzzle_canister_id: None,
             migrated_user_ids: MigratedUserIds::default(),
-            users_last_online: UsersLastOnline::default(),
-            user_migrations: UserMigrations::default(),
+            alchemy_api_key: None,
         };
 
         // Register the ProposalsBot
@@ -870,7 +684,6 @@ impl Default for Data {
             storage_index_users_to_remove_queue: BatchedTimerJobQueue::new(Principal::anonymous(), false),
             user_index_event_sync_queue: CanisterEventSyncQueue::default(),
             group_index_event_sync_queue: BatchedTimerJobQueue::new(Principal::anonymous(), false),
-            notifications_index_event_sync_queue: BatchedTimerJobQueue::new(Principal::anonymous(), false),
             online_users_event_sync_queue: BatchedTimerJobQueue::new(Principal::anonymous(), false),
             pending_payments_queue: PendingPaymentsQueue::default(),
             platform_moderators: HashSet::new(),
@@ -914,12 +727,10 @@ impl Default for Data {
             internal_moderation_channel: None,
             blocked_attempt_notice_throttle: HashMap::new(),
             multi_user_canisters: MultiUserCanisterMap::default(),
-            multi_user_canisters_enabled: false,
             call_push_enabled: false,
             daily_puzzle_canister_id: None,
             migrated_user_ids: MigratedUserIds::default(),
-            users_last_online: UsersLastOnline::default(),
-            user_migrations: UserMigrations::default(),
+            alchemy_api_key: None,
         }
     }
 }
@@ -941,7 +752,6 @@ pub struct Metrics {
     pub canister_upgrades_pending: u64,
     pub canister_upgrades_in_progress: u64,
     pub governance_principals: Vec<Principal>,
-    pub user_wasm_version: BuildVersion,
     pub local_user_index_wasm_version: BuildVersion,
     pub multi_user_wasm_version: BuildVersion,
     pub max_concurrent_canister_upgrades: usize,
@@ -950,21 +760,21 @@ pub struct Metrics {
     pub user_index_events_queue_length: usize,
     pub local_user_indexes: Vec<(CanisterId, LocalUserIndex)>,
     pub multi_user_canisters: Vec<(CanisterId, MultiUserCanister)>,
-    pub multi_user_canisters_enabled: bool,
     pub migrated_user_ids: usize,
-    pub users_last_online: UsersLastOnlineMetrics,
-    pub user_migrations: UserMigrationsMetrics,
     pub call_push_enabled: bool,
     pub platform_moderators_group: Option<ChatId>,
     pub nns_8_year_neuron: Option<NnsNeuron>,
     pub event_store_client_info: EventStoreClientInfo,
     pub pending_payments: usize,
+    pub payments_awaiting_retry: u32,
+    pub parked_payments: u32,
     pub pending_users_to_sync_to_storage_index: usize,
     pub reporting_metrics: ReportingMetrics,
     pub authority_report_metrics: AuthorityReportMetrics,
     pub vault_reviewers: u32,
     pub protected_action_metrics: ProtectedActionMetrics,
     pub openai_api_key_set: bool,
+    pub alchemy_api_key_set: bool,
     pub internal_moderation_channel_set: bool,
     pub moderation_referral_config_set: bool,
     pub moderation_referral_categories: u32,
@@ -973,7 +783,6 @@ pub struct Metrics {
     pub oc_public_key: String,
     pub empty_users: usize,
     pub deleted_users: usize,
-    pub unique_person_proofs_submitted: u32,
     pub blocked_user_pairs: u64,
     pub july_airdrop_period: AirdropStats,
     pub august_airdrop_period: AirdropStats,

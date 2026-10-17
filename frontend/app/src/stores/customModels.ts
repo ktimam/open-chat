@@ -1,6 +1,6 @@
 import type { ModelCatalogEntry, ModelModality, ModelRuntime } from "@shared";
-import { get, writable } from "svelte/store";
-import { configKeys } from "../utils/config";
+import { get, writable } from "@client/reactiveStores";
+import { configKeys } from "@shared";
 
 // Device-local "add a model from a URL" store (PR-cat-3).
 //
@@ -103,7 +103,15 @@ function persist(list: CustomModelEntry[]): boolean {
 }
 
 // Reactive list of the user's custom models (read-only view).
-export const customModels = { subscribe: store.subscribe };
+export const customModels = {
+    subscribe: (...args: Parameters<typeof store.subscribe>) => store.subscribe(...args),
+    get value() {
+        return store.value;
+    },
+    get dirty() {
+        return store.dirty;
+    },
+};
 
 export function getCustomModels(): CustomModelEntry[] {
     return get(store);

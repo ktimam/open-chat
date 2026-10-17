@@ -1,4 +1,4 @@
-import { writable, type Readable } from "svelte/store";
+import { writable, type Readable } from "@client/reactiveStores";
 import type { LocalAppDraftSourceReference } from "./localAppDraftPersistence";
 import type { LocalAppSetupScope } from "./localAppSetupStore";
 import { localAppSourceNavigation } from "./localAppSourceNavigation";
@@ -48,8 +48,7 @@ export function localAppCardAnchorKey(
     ]);
 }
 
-export interface LocalAppCardAnchorRegistry {
-    readonly subscribe: Readable<readonly LocalAppCardAnchor[]>["subscribe"];
+export interface LocalAppCardAnchorRegistry extends Readable<readonly LocalAppCardAnchor[]> {
     register(
         namespace: LocalAppCardAnchorNamespace,
         source: LocalAppCardAnchorSource,
@@ -82,7 +81,13 @@ export function createLocalAppCardAnchorRegistry(): LocalAppCardAnchorRegistry {
     }
 
     return Object.freeze({
-        subscribe: store.subscribe,
+        subscribe: (...args: Parameters<typeof store.subscribe>) => store.subscribe(...args),
+        get value() {
+            return store.value;
+        },
+        get dirty() {
+            return store.dirty;
+        },
         register(namespace, source, node) {
             const key = localAppCardAnchorKey(namespace, source);
             if (

@@ -32,7 +32,7 @@
     import { groupAiAppsOpen } from "../../../stores/settings";
     import Button from "../../Button.svelte";
     import CollapsibleCard from "../../CollapsibleCard.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AiAppLinkModal from "../AiAppLinkModal.svelte";
     import AiAppSurfaceModal from "../AiAppSurfaceModal.svelte";
     import PrivateMatchAutomaticNotice from "../PrivateMatchAutomaticNotice.svelte";

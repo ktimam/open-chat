@@ -1,6 +1,6 @@
 <script lang="ts">
     import { i18nKey } from "@src/i18n/i18n";
-    import { configKeys } from "@src/utils/config";
+    import { configKeys } from "@shared";
     import { EmailSigninHandler } from "@src/utils/signin";
     import {
         AuthProvider,
@@ -13,9 +13,9 @@
     import Button from "../Button.svelte";
     import ButtonGroup from "../ButtonGroup.svelte";
     import ErrorMessage from "../ErrorMessage.svelte";
-    import EmailSigninFeedback from "../home/EmailSigninFeedback.svelte";
+    import EmailSigninFeedback from "@shared_components/home/EmailSigninFeedback.svelte";
     import ChooseSignInOption from "../home/profile/ChooseSignInOption.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     const client = getContext<OpenChat>("client");
 
@@ -32,7 +32,7 @@
     let emailInvalid = $state(false);
     let email = $state(localStorage.getItem(configKeys.selectedAuthEmail) ?? "");
     let verificationCode: string | undefined = $state(undefined);
-    let emailSigninHandler = new EmailSigninHandler(client, "registration", true);
+    const emailSigninHandler = new EmailSigninHandler(client, "registration", true);
     let restrictTo = $derived(new Set($querystringStore.getAll("auth")));
     let loggingInWithEmail = $derived(
         loginState === "logging-in" && $selectedAuthProviderStore === AuthProvider.EMAIL,
@@ -88,11 +88,11 @@
                 }
             });
         } else if (provider === AuthProvider.PASSKEY) {
-            if (client.isNativeApp()) {
-                client.signInWithAndroidWebAuthn();
-            } else {
-                client.signInWithWebAuthn();
-            }
+            // A cancelled prompt or a passkey we don't recognise rejects; go back to the options
+            (client.isNativeApp()
+                ? client.signInWithAndroidWebAuthn()
+                : client.signInWithWebAuthn()
+            ).catch(() => (loginState = "options"));
         } else if (provider === AuthProvider.ETH) {
             console.log("Logging in with ETH");
         } else if (provider === AuthProvider.SOL) {

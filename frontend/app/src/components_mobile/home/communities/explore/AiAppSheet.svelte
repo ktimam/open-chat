@@ -14,7 +14,7 @@
     import LinkOff from "svelte-material-icons/LinkOff.svelte";
     import LinkVariant from "svelte-material-icons/LinkVariant.svelte";
     import Web from "svelte-material-icons/Web.svelte";
-    import Translatable from "../../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AiAppIcon from "./AiAppIcon.svelte";
 
     const client = getContext<OpenChat>("client");

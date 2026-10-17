@@ -9,6 +9,7 @@ import { offline } from "./network";
 import { NOOP } from "../constants";
 import type { LogLevel } from "../domain/logging";
 import { shouldReportError, shouldReportMessage } from "./error";
+import { SECRET_KEYS } from "./redact";
 
 let rollbar: Rollbar | undefined;
 
@@ -68,6 +69,14 @@ function throwSiteFilename(payload: any): string | undefined {
 function thrownByExtension(payload: any): boolean {
     const filename = throwSiteFilename(payload);
     return filename !== undefined && /^(chrome|moz|safari-web)-extension:\/\//.test(filename);
+}
+
+// True when the page has no body, so the app, which mounts into it, isn't on screen. Automated
+// browsers (crawlers, link-preview renderers) have been seen removing the body after the app
+// mounted, and the next component that binds to it throws (#9932). There's no user to fix that
+// for. A worker has no document and is unaffected.
+function documentHasNoBody(): boolean {
+    return typeof document !== "undefined" && document.body === null;
 }
 
 // True when the throw site is the HTML document itself rather than a script file: in-app browsers
@@ -156,6 +165,9 @@ export function inititaliseLogger(apikey: string, version: string, env: string):
             environment: env,
             enabled: env === "production",
             captureUnhandledRejections: true,
+            // Added to Rollbar's defaults. Requests are redacted before they are logged, this
+            // catches any which are not.
+            scrubFields: [...SECRET_KEYS],
             // Noise with no fix on our side: opaque cross-origin "Script error." (injected
             // scripts, extensions), and Chrome extension messaging failures
             ignoredMessages: [
@@ -195,7 +207,7 @@ export function inititaliseLogger(apikey: string, version: string, env: string):
     }
     return {
         error(message: unknown, error: unknown, ...optionalParams: unknown[]): void {
-            if (!shouldReportError(error)) {
+            if (!shouldReportError(error) || documentHasNoBody()) {
                 console.debug("Expected failure (not reported): ", message, error);
                 return;
             }

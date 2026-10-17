@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { flushSync, mount, unmount } from "svelte";
-import { get } from "svelte/store";
+import { get } from "@client/utils/stores";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LocalAppSourceCardLink from "./LocalAppSourceCardLink.svelte";
 import {
@@ -12,7 +12,7 @@ import type { LocalAppCardAnchorSource } from "../utils/localAppCardAnchors";
 
 const calls = vi.hoisted(() => ({ open: vi.fn(), selectCard: vi.fn(() => true) }));
 vi.mock("../utils/privateAppWorkspace", async () => ({
-    privateAppWorkspaceState: (await import("svelte/store")).writable({}),
+    privateAppWorkspaceState: (await import("@client/utils/stores")).writable({}),
     privateAppWorkspace: calls,
 }));
 

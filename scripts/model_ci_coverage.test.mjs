@@ -962,7 +962,6 @@ test("model runtime, workers, helpers, UI, build, notices and policy inputs trig
     "frontend/app/model-asset-notices/sources.json",
     "frontend/app/model-asset-notices/MODEL_MODIFICATIONS.md",
     "frontend/vitest.config.ts",
-    "frontend/app/vitest.config.ts",
     "frontend/tauri-plugin-oc/src/model_manager.rs",
     "scripts/check_openchat_pr1_security.mjs",
     "scripts/security_dependency_hash.mjs",

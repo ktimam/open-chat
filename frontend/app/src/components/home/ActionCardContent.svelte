@@ -59,7 +59,7 @@
         type CardCollectAttemptBinding,
         type CardConfirmationAttemptBinding,
     } from "../../utils/cardBridge";
-    import Spinner from "../icons/Spinner.svelte";
+    import Spinner from "@shared_components/icons/Spinner.svelte";
     import AiAppIcon from "./communities/explore/AiAppIcon.svelte";
 
     // Generic interactive confirm card. Two render modes:

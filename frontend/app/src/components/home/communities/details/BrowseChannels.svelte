@@ -11,7 +11,7 @@
     import { browseChannels } from "../../../../stores/settings";
     import Button from "../../../Button.svelte";
     import CollapsibleCard from "../../../CollapsibleCard.svelte";
-    import Translatable from "../../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import ChannelCard from "./ChannelCard.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -25,7 +25,7 @@
     let selectedCommunityId = $derived($selectedCommunitySummaryStore?.id.communityId);
     let searching = $state(false);
     let pageIndex = 0;
-    let pageSize = 100;
+    const pageSize = 100;
     let searchResults: ChannelMatch[] = $state([]);
     let total = $state(0);
     let autoOpen = $state(false);

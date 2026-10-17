@@ -13,7 +13,7 @@ use constants::{ICP_LEDGER_CANISTER_ID, OPENCHAT_BOT_USER_ID};
 use event_store_types::Event;
 use fire_and_forget_handler::FireAndForgetHandler;
 use gated_groups::{GatePayment, calculate_gate_payments};
-use group_chat_core::{AccessRulesInternal, AddResult};
+use group_chat_core::{AccessRulesInternal, AddResult, MembersToAdd};
 use group_community_common::{
     Achievements, ExpiringMember, ExpiringMemberActions, ExpiringMembers, Members, PaymentReceipts, PendingPaymentsQueue,
     UserCache,
@@ -25,13 +25,14 @@ use ledger_utils::certified::CertifiedTransfers;
 use model::events::CommunityEventInternal;
 use model::user_event_batch::UserEventBatch;
 use model::{events::CommunityEvents, invited_users::InvitedUsers, members::CommunityMemberInternal};
+use multi_user_canister::CommunityCanisterEvent;
 use oc_error_codes::OCErrorCode;
 use rand::Rng;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 use stable_memory_map::{BaseKeyPrefix, ChatEventKeyPrefix};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Deref;
 use timer_job_queues::{BatchedTimerJobQueue, GroupedTimerJobQueue};
 use types::{
@@ -43,12 +44,9 @@ use types::{
     Rules, TimestampMillis, Timestamped, UserId, UserIdAndPrincipal, UserNotification, UserType, icrc1,
 };
 use types::{BotSubscriptions, CommunityId};
-use user_canister::CommunityCanisterEvent;
-use utils::async_work::AsyncWorkGuard;
 use utils::canister::trap_if_frozen;
 use utils::env::Environment;
 use utils::idempotency_checker::IdempotencyChecker;
-use utils::migrated_user_ids::MigratedUserIds;
 use utils::regular_jobs::RegularJobs;
 
 mod activity_notifications;
@@ -130,10 +128,12 @@ impl RuntimeState {
         Ok(self.member_user(user_id))
     }
 
-    // The member's wallet, for paying them. A user sharing a MultiUser canister with others holds
-    // their funds under the principal held for them, and everyone else under their user id.
+    // The member's wallet, for paying them. A user holds their funds under the principal held for them,
+    // and anyone else whose id carries no index, eg. a bot, under their user id, other than a User
+    // canister (see `verify_not_old_user_id`).
     pub fn member_wallet(&self, user_id: UserId) -> OCResult<icrc1::Account> {
         if !user_id.is_indexed() {
+            self.data.verify_not_old_user_id(user_id)?;
             return Ok(user_id.as_principal().into());
         }
         let user = self.member_user(user_id);
@@ -166,7 +166,7 @@ impl RuntimeState {
     }
 
     // The calling member, or when `user_id` is given, that member, whom the caller must hold (a
-    // MultiUser canister acting for one of its users, or a User canister for its own user)
+    // MultiUser canister acting for one of its users)
     pub fn get_calling_member(&self, user_id: Option<UserId>, verify: bool) -> Result<CommunityMemberInternal, OCErrorCode> {
         let caller = self.env.caller();
         let Some(user_id) = user_id else {
@@ -423,7 +423,10 @@ impl RuntimeState {
 
             files_to_delete.extend(result.files);
             final_prize_payments.extend(result.final_prize_payments);
-            threads_to_delete.insert(channel.id, result.threads);
+            threads_to_delete
+                .entry(channel.id)
+                .or_insert_with(Vec::new)
+                .extend(result.threads);
 
             if result.events.len() < BATCH_SIZE {
                 finished = true;
@@ -491,8 +494,6 @@ impl RuntimeState {
     }
 
     pub fn push_event_to_user(&mut self, user_id: UserId, event: CommunityCanisterEvent, now: TimestampMillis) {
-        // Sent to the user's latest id if they are known to have been migrated since having `user_id`
-        let user_id = self.data.migrated_user_ids.latest(user_id);
         self.data.user_events_queue.push(
             user_id.canister_id(),
             IdempotentEnvelope {
@@ -530,6 +531,14 @@ impl RuntimeState {
             groups_being_imported: self.data.groups_being_imported.summaries(),
             instruction_counts: self.data.instruction_counts_log.iter().collect(),
             timer_jobs: self.data.timer_jobs.len() as u32,
+            payments_awaiting_retry: self
+                .data
+                .timer_jobs
+                .iter()
+                // A job which has already run leaves an empty entry behind
+                .filter(|(_, wrapper)| matches!(wrapper.deref().borrow().as_ref(), Some(TimerJob::RetryPayment(_))))
+                .count() as u32,
+            parked_payments: self.data.pending_payments_queue.parked_len() as u32,
             queued_user_events: self.data.user_events_queue.len() as u32,
             queued_local_index_events: self.data.local_user_index_event_sync_queue.len() as u32,
             stable_memory_sizes: memory::memory_sizes(),
@@ -598,6 +607,55 @@ fn init_instruction_counts_log() -> InstructionCountsLog {
     InstructionCountsLog::init(get_instruction_counts_index_memory(), get_instruction_counts_data_memory())
 }
 
+#[cfg(test)]
+impl Data {
+    // A public community created by the given user, with the given channels, and a fresh stable
+    // memory map
+    fn new_for_tests(
+        creator_user_id: UserId,
+        creator_principal: Principal,
+        description: String,
+        channels: Vec<(ChannelId, String)>,
+    ) -> Data {
+        use ic_stable_structures::DefaultMemoryImpl;
+        use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
+        use rand::SeedableRng;
+
+        let memory = MemoryManager::init(DefaultMemoryImpl::default());
+        stable_memory_map::init_with_small_entries_map(memory.get(MemoryId::new(1)), memory.get(MemoryId::new(2)));
+
+        let canister_id = |i: u8| CanisterId::from_slice(&[0, 0, 0, 0, 0, 0, 0, i, 1, 1]);
+        Data::new(
+            Principal::from_slice(&[200]).into(),
+            creator_principal,
+            creator_user_id,
+            UserType::User,
+            true,
+            "name".to_string(),
+            description,
+            Rules::default(),
+            None,
+            None,
+            CommunityPermissions::default(),
+            "en".to_string(),
+            canister_id(10),
+            canister_id(11),
+            canister_id(12),
+            canister_id(13).into(),
+            canister_id(14),
+            canister_id(15),
+            None,
+            channels,
+            None,
+            0,
+            Vec::new(),
+            true,
+            &mut StdRng::seed_from_u64(1),
+            0,
+        )
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Data {
     is_public: Timestamped<bool>,
@@ -652,10 +710,10 @@ struct Data {
     public_channel_list_updated: TimestampMillis,
     #[serde(default)]
     certified_transfers: CertifiedTransfers,
-    // The latest ids of migrated users, as looked up from the LocalUserIndex whenever a user's id is found to
-    // have changed
+    // The channels imported from groups whose members are still being added to the community (see
+    // `import_groups::process_channel_members`)
     #[serde(default)]
-    migrated_user_ids: MigratedUserIds,
+    channels_importing_members: BTreeSet<ChannelId>,
 }
 
 impl Data {
@@ -767,8 +825,19 @@ impl Data {
             moderation_flags: Timestamped::default(),
             idempotency_checker: IdempotencyChecker::default(),
             certified_transfers: CertifiedTransfers::default(),
-            migrated_user_ids: MigratedUserIds::default(),
+            channels_importing_members: BTreeSet::new(),
             public_channel_list_updated: now,
+        }
+    }
+
+    // Refuses a User canister's id, which users had before being migrated to MultiUser canisters.
+    // Every user has been, so such an id names nobody, unless it is a bot's with a canister of its
+    // own, which is a member as a bot. Other bots and webhooks have ids which aren't canisters'.
+    pub fn verify_not_old_user_id(&self, user_id: UserId) -> OCResult {
+        if user_id.is_canister() && !self.members.bots().contains_key(&user_id) {
+            Err(OCErrorCode::TargetUserNotFound.into())
+        } else {
+            Ok(())
         }
     }
 
@@ -794,7 +863,22 @@ impl Data {
     pub fn is_invited(&self, caller: Principal) -> bool {
         self.members
             .lookup_user_id(caller)
-            .is_some_and(|u| self.invited_users.get(&u).is_some())
+            .is_some_and(|u| self.invited_users.contains(&u))
+    }
+
+    // Who referred a user joining the community: whoever invited them, if they were invited,
+    // otherwise the referrer the client gave. Either way, only a member is taken as the referrer, by
+    // the id they are held under (see `referring_member`).
+    pub fn referrer_of_joining_user(&self, user_id: UserId, referred_by: Option<UserId>) -> Option<UserId> {
+        match self.invited_users.get(&user_id) {
+            Some(invitation) => self.referring_member(invitation.invited_by),
+            None => referred_by.and_then(|referred_by| self.referring_member(referred_by)),
+        }
+    }
+
+    // The referrer, if they are a member, so that an id which isn't a member's is never stored
+    pub fn referring_member(&self, user_id: UserId) -> Option<UserId> {
+        self.members.contains(&user_id).then_some(user_id)
     }
 
     pub fn build_chat_metrics(&mut self, now: TimestampMillis) {
@@ -863,71 +947,13 @@ impl Data {
         principal: Option<Principal>,
         now: TimestampMillis,
     ) -> Option<CommunityMemberInternal> {
-        let removed = self.members.remove(user_id, principal, false, now);
+        let removed = self.members.remove(user_id, principal, now);
         self.channels.leave_all_channels(user_id, now);
         self.expiring_members.remove_member(user_id, None);
         self.expiring_member_actions.remove_member(user_id, None);
         self.achievements.remove_user(&user_id);
         self.user_cache.delete(user_id);
         removed
-    }
-
-    // Moves everything held under the previous ids of a user migrated to a MultiUser canister (their
-    // membership of the community and its channels, block, invitations, metrics, etc) onto their
-    // latest id, stepping through each migration in turn, so that from then on they only need to be
-    // looked up by their latest id. `previous_user_ids` must be ordered oldest first. `principal` is
-    // the user's principal, if known, which is needed to update the lookup of an invited user who
-    // isn't a member. If anything was held under a previous id, the migrations are also cached, since
-    // events may refer to the user by their previous ids. Returns whether anything was moved.
-    pub fn migrate_user_ids(
-        &mut self,
-        previous_user_ids: &[UserId],
-        user_id: UserId,
-        principal: Option<Principal>,
-        now: TimestampMillis,
-    ) -> bool {
-        let next_ids = previous_user_ids.iter().skip(1).chain([&user_id]);
-        let mut migrated = false;
-        for (&old_user_id, &new_user_id) in previous_user_ids.iter().zip(next_ids) {
-            migrated |= self.migrate_user_id(old_user_id, new_user_id, principal, now);
-        }
-        if migrated {
-            self.migrated_user_ids.insert_previous_ids(previous_user_ids, user_id);
-        }
-        migrated
-    }
-
-    fn migrate_user_id(
-        &mut self,
-        old_user_id: UserId,
-        new_user_id: UserId,
-        principal: Option<Principal>,
-        now: TimestampMillis,
-    ) -> bool {
-        if old_user_id == new_user_id {
-            return false;
-        }
-
-        let was_member = self.members.contains(&old_user_id);
-        let mut migrated = self.members.migrate_user_id(old_user_id, new_user_id, principal, now);
-        if was_member && !self.members.contains(&new_user_id) {
-            // The user has been blocked under their new id, so their membership under the old id was
-            // dropped, and they are removed from the community's channels as well
-            self.channels.leave_all_channels(old_user_id, now);
-            self.expiring_members.remove_member(old_user_id, None);
-            self.expiring_member_actions.remove_member(old_user_id, None);
-            self.achievements.remove_user(&old_user_id);
-            self.user_cache.delete(old_user_id);
-        }
-        for channel in self.channels.iter_mut() {
-            migrated |= channel.chat.migrate_user_id(old_user_id, new_user_id, now);
-        }
-        self.invited_users.migrate_user_id(old_user_id, new_user_id, now);
-        self.expiring_members.migrate_user_id(old_user_id, new_user_id);
-        self.expiring_member_actions.migrate_user_id(old_user_id, new_user_id);
-        self.achievements.migrate_user_id(old_user_id, new_user_id);
-        self.user_cache.migrate_user_id(old_user_id, new_user_id);
-        migrated
     }
 
     pub fn remove_user_from_channel(&mut self, user_id: UserId, channel_id: ChannelId, now: TimestampMillis) {
@@ -947,12 +973,23 @@ impl Data {
     }
 
     pub fn update_lapsed(&mut self, user_id: UserId, channel_id: Option<ChannelId>, lapsed: bool, now: TimestampMillis) {
+        self.update_lapsed_many(vec![user_id], channel_id, lapsed, now);
+    }
+
+    // As `update_lapsed` for each of the users, writing the members updated to stable memory together
+    pub fn update_lapsed_many(
+        &mut self,
+        user_ids: Vec<UserId>,
+        channel_id: Option<ChannelId>,
+        lapsed: bool,
+        now: TimestampMillis,
+    ) {
         if let Some(channel_id) = channel_id {
             if let Some(channel) = self.channels.get_mut(&channel_id) {
-                channel.chat.members.update_lapsed(user_id, lapsed, now);
+                channel.chat.members.update_lapsed_many(user_ids, lapsed, now);
             }
         } else {
-            self.members.update_lapsed(user_id, lapsed, now);
+            self.members.update_lapsed_many(user_ids, lapsed, now);
         }
     }
 
@@ -1080,16 +1117,22 @@ impl Data {
 
             let gate_expiry = channel.chat.gate_config.value.as_ref().and_then(|gc| gc.expiry());
 
-            for (user_id, user_type) in users_to_add {
-                match channel.chat.members.add(
-                    user_id,
+            // The members are added together, so that they're written to stable memory together
+            let mut members = MembersToAdd::default();
+            for (user_id, user_type) in users_to_add.iter() {
+                members.push(
+                    *user_id,
                     None,
-                    now,
                     min_visible_event_index,
                     min_visible_message_index,
                     channel.chat.is_public.value,
-                    user_type,
-                ) {
+                    *user_type,
+                );
+            }
+            let results = channel.chat.members.add_many(members, now);
+
+            for ((user_id, user_type), (_, result)) in users_to_add.into_iter().zip(results) {
+                match result {
                     AddResult::Success(_) => {
                         self.members.mark_member_joined_channel(user_id, channel.id);
 
@@ -1418,7 +1461,6 @@ async fn execute_update_async<F: FnOnce() -> Fut, Fut: Future<Output = R>, R>(f:
 }
 
 async fn execute_update_async_even_if_frozen<F: FnOnce() -> Fut, Fut: Future<Output = R>, R>(f: F) -> R {
-    let _guard = AsyncWorkGuard::new();
     run_regular_jobs();
     let result = f().await;
     flush_pending_events();
@@ -1454,6 +1496,8 @@ pub struct Metrics {
     pub groups_being_imported: Vec<GroupBeingImportedSummary>,
     pub instruction_counts: Vec<InstructionCountEntry>,
     pub timer_jobs: u32,
+    pub payments_awaiting_retry: u32,
+    pub parked_payments: u32,
     pub queued_user_events: u32,
     pub queued_local_index_events: u32,
     pub stable_memory_sizes: BTreeMap<u8, u64>,
@@ -1490,4 +1534,37 @@ pub enum CallerResult {
 
 fn new_user_events_queue() -> GroupedTimerJobQueue<UserEventBatch> {
     GroupedTimerJobQueue::new(5, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn canister_id(i: u8) -> CanisterId {
+        CanisterId::from_slice(&[0, 0, 0, 0, 0, 0, 0, i, 1, 1])
+    }
+
+    fn new_user_id(i: u8) -> UserId {
+        UserId::new_indexed(canister_id(1), i as u16)
+    }
+
+    #[test]
+    fn the_referrer_is_a_member() {
+        let owner = new_user_id(1);
+        let mut data = Data::new_for_tests(owner, Principal::from_slice(&[1]), String::new(), Vec::new());
+        data.members
+            .add(new_user_id(2), Principal::from_slice(&[2]), UserType::User, None, 0);
+
+        assert_eq!(data.referring_member(owner), Some(owner));
+        assert_eq!(data.referring_member(new_user_id(2)), Some(new_user_id(2)));
+        assert_eq!(data.referring_member(new_user_id(4)), None);
+
+        // Without an invitation, the referrer the client gives is taken, if they are a member
+        assert_eq!(
+            data.referrer_of_joining_user(new_user_id(6), Some(new_user_id(2))),
+            Some(new_user_id(2))
+        );
+        assert_eq!(data.referrer_of_joining_user(new_user_id(6), Some(new_user_id(4))), None);
+        assert_eq!(data.referrer_of_joining_user(new_user_id(6), None), None);
+    }
 }

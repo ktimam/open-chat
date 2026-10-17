@@ -3,8 +3,8 @@ use crate::{RuntimeState, execute_update};
 use canister_api_macros::update;
 use canister_tracing_macros::trace;
 use group_canister::register_poll_vote::{Response::*, *};
+use multi_user_canister::{GroupCanisterEvent, MessageActivity, MessageActivityEvent};
 use types::{Achievement, Chat, EventIndex, OCResult, PollVotes, TotalVotes};
-use user_canister::{GroupCanisterEvent, MessageActivity, MessageActivityEvent};
 
 #[update(msgpack = true)]
 #[trace]
@@ -26,7 +26,6 @@ fn register_poll_vote_impl(args: Args, state: &mut RuntimeState) -> OCResult<Pol
         args.poll_option,
         args.operation,
         now,
-        &state.data.migrated_user_ids,
     )?;
 
     if result.value.updated {

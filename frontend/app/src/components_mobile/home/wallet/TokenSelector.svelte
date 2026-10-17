@@ -5,7 +5,7 @@
     import { cryptoTokensSorted } from "@client";
     import type { Snippet } from "svelte";
     import { _ } from "svelte-i18n";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import NothingToSee from "../NothingToSee.svelte";
     import SelectTokenItem from "./SelectTokenItem.svelte";
 
@@ -29,7 +29,7 @@
         selected = new Set(),
     }: Props = $props();
 
-    let searching = $state(false);
+    const searching = $state(false);
     let searchTerm = $state<string>("");
     let searchTermLower = $derived(searchTerm?.toLowerCase());
     let filteredTokens = $derived(

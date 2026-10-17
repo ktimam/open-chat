@@ -10,9 +10,9 @@
         type FullMember,
         type MultiUserChat,
     } from "@client";
-    import { getContext, onDestroy } from "svelte";
+    import { getContext } from "svelte";
     import AccountPlus from "svelte-material-icons/AccountPlusOutline.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Separator from "../Separator.svelte";
     import MemberList from "./MemberList.svelte";
     import { MemberManagement } from "./membersState.svelte";
@@ -25,7 +25,7 @@
 
     let { collection }: Props = $props();
 
-    let membersState = new MemberManagement(getContext<OpenChat>("client"), collection);
+    const membersState = new MemberManagement(getContext<OpenChat>("client"), collection);
     // The collection is as it was when the page was opened, so the count is read from its summary
     // as it is now
     let memberCount = $derived.by(() => {
@@ -44,10 +44,6 @@
             [...membersState.members.values()].slice(0, TO_SHOW),
         ),
     );
-
-    onDestroy(() => {
-        membersState.destroy();
-    });
 </script>
 
 <Separator />

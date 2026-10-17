@@ -11,7 +11,9 @@
     } from "component-lib";
     import { namedAccountsStore, type NamedAccount } from "@client";
     import { i18nKey } from "../../../i18n/i18n";
-    import Translatable from "../../Translatable.svelte";
+    import { addressNetwork } from "../../../utils/cryptoAddress";
+    import Translatable from "@shared_components/Translatable.svelte";
+    import AddressNetworkIcon from "@shared_components/home/wallet/AddressNetworkIcon.svelte";
 
     interface Props {
         targetAccount: string;
@@ -19,7 +21,7 @@
     }
 
     let { targetAccount = $bindable(), onDismiss }: Props = $props();
-    let searching = $state(false);
+    const searching = $state(false);
     let searchTerm = $state<string>("");
     let searchTermLower = $derived(searchTerm?.toLowerCase());
     let filteredAccounts = $derived(
@@ -73,6 +75,7 @@
                 maxHeight="60vh"
                 gap="md">
                 {#each filteredAccounts as account}
+                    {@const network = addressNetwork(account.account)}
                     <Option
                         padding={["sm", "lg", "sm", "sm"]}
                         selected={account.account === targetAccount}
@@ -86,8 +89,13 @@
                                 variant="filled" />
                             <Column>
                                 <Subtitle fontWeight={"bold"}>{account.name}</Subtitle>
-                                <Body ellipsisTruncate colour={"textSecondary"}
-                                    >{collapseAccount(account.account)}</Body>
+                                <Container gap="xs" crossAxisAlignment="center">
+                                    {#if network !== undefined}
+                                        <AddressNetworkIcon {network} size={"1rem"} />
+                                    {/if}
+                                    <Body ellipsisTruncate colour={"textSecondary"}
+                                        >{collapseAccount(account.account)}</Body>
+                                </Container>
                             </Column>
                         </Container>
                     </Option>

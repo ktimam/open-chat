@@ -73,7 +73,6 @@ import type {
     P2PSwapContentInitial,
     P2PSwapStatus,
     PendingCryptocurrencyTransfer,
-    PendingCryptocurrencyWithdrawal,
     PermissionRole,
     PinMessageResponse,
     PollConfig,
@@ -124,7 +123,6 @@ import {
     isError,
     parseBigInt,
     CommonResponses,
-    ICP_SYMBOL,
     ProposalDecisionStatus,
     ProposalRewardStatus,
     ROLE_ADMIN,
@@ -139,7 +137,6 @@ import {
     codeToText,
     decodeIcrcAccount,
     encodeIcrcAccount,
-    isAccountIdentifierValid,
     messagePermissionsList,
     nullMembership,
     toBigInt32,
@@ -264,7 +261,6 @@ import type {
     ThreadPreview as TThreadPreview,
     ThreadSummary as TThreadSummary,
     TokenInfo as TTokenInfo,
-    Tokens as TTokens,
     TotalVotes as TTotalVotes,
     User as TUser,
     UserGroupSummary as TUserGroupSummary,
@@ -275,7 +271,6 @@ import type {
     UserCreateGroupSuccessResult,
     UserDeletedMessageSuccessResult,
     UserUndeleteMessagesSuccessResult,
-    UserWithdrawCryptoArgs,
     VideoCall,
     VideoCallParticipants,
 } from "../../typebox";
@@ -286,7 +281,6 @@ import {
     bytesToBigint,
     bytesToHexString,
     consolidateBytes,
-    hexStringToBytes,
     identity,
     mapOptional,
     principalBytesToString,
@@ -988,6 +982,7 @@ function prizeContent(value: TPrizeContent): PrizeContent {
         winnerCount: value.winner_count,
         userIsWinner: value.user_is_winner,
         token: value.token_symbol,
+        ledger: principalBytesToString(value.ledger),
         endDate: value.end_date,
         caption: value.caption,
         requiresCaptcha: value.requires_captcha,
@@ -1557,6 +1552,7 @@ export function groupPermissions(value: TGroupPermissions): ChatPermissions {
         deleteMessages: permissionRole(value.delete_messages),
         pinMessages: permissionRole(value.pin_messages),
         reactToMessages: permissionRole(value.react_to_messages),
+        tipMessages: permissionRole(value.tip_messages),
         mentionAllMembers: permissionRole(value.mention_all_members),
         startVideoCall: permissionRole(value.start_video_call),
         messagePermissions: messagePermissions(value.message_permissions),
@@ -1637,6 +1633,7 @@ export function apiGroupPermissions(permissions: ChatPermissions): TGroupPermiss
         delete_messages: apiPermissionRole(permissions.deleteMessages),
         pin_messages: apiPermissionRole(permissions.pinMessages),
         react_to_messages: apiPermissionRole(permissions.reactToMessages),
+        tip_messages: apiPermissionRole(permissions.tipMessages),
         mention_all_members: apiPermissionRole(permissions.mentionAllMembers),
         start_video_call: apiPermissionRole(permissions.startVideoCall),
         message_permissions: apiMessagePermissions(permissions.messagePermissions),
@@ -2334,45 +2331,6 @@ export function apiPendingTransaction(
     };
 }
 
-export function apiPendingCryptocurrencyWithdrawal(
-    domain: PendingCryptocurrencyWithdrawal,
-    pin: string | undefined,
-): UserWithdrawCryptoArgs {
-    if (domain.token === ICP_SYMBOL && isAccountIdentifierValid(domain.to)) {
-        return {
-            withdrawal: {
-                NNS: {
-                    ledger: principalStringToBytes(domain.ledger),
-                    token_symbol: domain.token,
-                    to: {
-                        Account: [...hexStringToBytes(domain.to)] as NumberArray32,
-                    },
-                    amount: apiICP(domain.amountE8s),
-                    fee: undefined,
-                    memo: domain.memo,
-                    created: domain.createdAtNanos,
-                },
-            },
-            pin,
-        };
-    } else {
-        return {
-            withdrawal: {
-                ICRC1: {
-                    ledger: principalStringToBytes(domain.ledger),
-                    token_symbol: domain.token,
-                    to: addressToIcrcAccount(domain.to),
-                    amount: domain.amountE8s,
-                    fee: domain.feeE8s ?? BigInt(0),
-                    memo: mapOptional(domain.memo, bigintToBytes),
-                    created: domain.createdAtNanos,
-                },
-            },
-            pin,
-        };
-    }
-}
-
 export function proposalVote(vote: number): boolean | undefined {
     if (vote === 1) return true;
     if (vote === 2) return false;
@@ -2407,12 +2365,6 @@ function apiFileContent(domain: FileContent): TFileContent {
         blob_reference: apiBlobReference(domain.blobReference),
         caption: domain.caption,
         file_size: domain.fileSize,
-    };
-}
-
-function apiICP(amountE8s: bigint): TTokens {
-    return {
-        e8s: amountE8s,
     };
 }
 

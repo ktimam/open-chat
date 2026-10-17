@@ -4,7 +4,7 @@
     // per-chat enablement (the actionable surface) lives in each chat's Apps settings.
     import { isLocalAiApp, type AiAppPresentation } from "@utils/localAppDirectoryPresentation";
     import { i18nKey } from "../../../../i18n/i18n";
-    import Translatable from "../../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AiAppIcon from "./AiAppIcon.svelte";
 
     interface Props {

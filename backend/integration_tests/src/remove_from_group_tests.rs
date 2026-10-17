@@ -1,6 +1,6 @@
 use crate::client::{start_canister, stop_canister};
 use crate::env::ENV;
-use crate::utils::{metrics, tick_many};
+use crate::utils::tick_many;
 use crate::{CanisterIds, TestEnv, User, client};
 use candid::Principal;
 use constants::OPENCHAT_BOT_USER_ID;
@@ -20,10 +20,12 @@ fn remove_group_member_succeeds(user_joins_group: bool) {
         env,
         canister_ids,
         controller,
+        platform_operator,
         ..
     } = wrapper.env();
 
-    let TestData { user1, user2, group_id } = init_test_data(env, canister_ids, *controller, false, user_joins_group);
+    let TestData { user1, user2, group_id } =
+        init_test_data(env, canister_ids, *controller, *platform_operator, false, user_joins_group);
 
     let remove_member_response = client::group::remove_participant(
         env,
@@ -58,10 +60,11 @@ fn removal_reaches_a_user_canister_unreachable_for_longer_than_the_direct_call_i
         env,
         canister_ids,
         controller,
+        platform_operator,
         ..
     } = wrapper.env();
 
-    let TestData { user1, user2, group_id } = init_test_data(env, canister_ids, *controller, false, true);
+    let TestData { user1, user2, group_id } = init_test_data(env, canister_ids, *controller, *platform_operator, false, true);
 
     stop_canister(env, user2.local_user_index, user2.canister());
 
@@ -99,45 +102,6 @@ fn removal_reaches_a_user_canister_unreachable_for_longer_than_the_direct_call_i
     assert_eq!(removed_messages(env, &user2), 1);
 }
 
-// A bot's canister takes no events from the group, so none is queued for it when it's removed
-#[test]
-fn removing_a_bot_queues_no_event_for_it() {
-    let mut wrapper = ENV.deref().get();
-    let TestEnv {
-        env,
-        canister_ids,
-        controller,
-        ..
-    } = wrapper.env();
-
-    let TestData { user1, group_id, .. } = init_test_data(env, canister_ids, *controller, true, false);
-
-    let bot = canister_ids.proposals_bot;
-    client::group::happy_path::join_group(env, bot, group_id);
-    tick_many(env, 3);
-    assert_eq!(queued_user_events(env, group_id), 0);
-
-    let remove_member_response = client::group::remove_participant(
-        env,
-        user1.principal,
-        group_id.into(),
-        &group_canister::remove_participant::Args { user_id: bot.into() },
-    );
-    assert!(matches!(
-        remove_member_response,
-        group_canister::remove_participant::Response::Success
-    ));
-
-    // A wrongly queued event is only counted again once its call to the bot, which may be on another
-    // subnet, has failed
-    tick_many(env, 15);
-    assert_eq!(queued_user_events(env, group_id), 0);
-}
-
-fn queued_user_events(env: &PocketIc, group_id: ChatId) -> u64 {
-    metrics(env, group_id.into())["queued_user_events"].as_u64().unwrap()
-}
-
 // The messages from the OpenChat bot telling the user they were removed from a group
 fn removed_messages(env: &PocketIc, user: &User) -> usize {
     client::user::happy_path::events(env, user, OPENCHAT_BOT_USER_ID, EventIndex::default(), true, 1000, 1000)
@@ -157,10 +121,11 @@ fn block_user_who_is_no_longer_group_member_succeeds() {
         env,
         canister_ids,
         controller,
+        platform_operator,
         ..
     } = wrapper.env();
 
-    let TestData { user1, user2, group_id } = init_test_data(env, canister_ids, *controller, true, true);
+    let TestData { user1, user2, group_id } = init_test_data(env, canister_ids, *controller, *platform_operator, true, true);
 
     client::user::happy_path::leave_group(env, &user2, group_id);
 
@@ -199,11 +164,13 @@ fn init_test_data(
     env: &mut PocketIc,
     canister_ids: &CanisterIds,
     controller: Principal,
+    platform_operator: Principal,
     public: bool,
     user_joins_group: bool,
 ) -> TestData {
     let user1 = client::register_diamond_user(env, canister_ids, controller);
-    let user2 = client::register_user(env, canister_ids);
+    // In a canister of their own, so that stopping it doesn't stop user1's
+    let user2 = client::register_user_in_new_multi_user_canister(env, canister_ids, platform_operator);
 
     let group_name = random_string();
 

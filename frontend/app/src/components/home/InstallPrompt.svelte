@@ -6,9 +6,9 @@
     import Checkbox from "../Checkbox.svelte";
     import ModalContent from "../ModalContent.svelte";
     import Overlay from "../Overlay.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
-    let installed = window.matchMedia("(display-mode: standalone)").matches;
+    const installed = window.matchMedia("(display-mode: standalone)").matches;
     let dismissed = $state(false);
     let show = $state(false);
 

@@ -6,21 +6,23 @@
         isDiamondStore,
         localUpdates,
         ONE_DAY,
+        P2P_SWAP_MAX_EXPIRY_DAYS,
         publish,
+        walletApprovalFee,
     } from "@client";
     import { getContext, onMount } from "svelte";
     import { _ } from "svelte-i18n";
     import Paperclip from "svelte-material-icons/Paperclip.svelte";
     import { i18nKey } from "../../i18n/i18n";
     import AreYouSure from "../AreYouSure.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import CryptoSelector from "./CryptoSelector.svelte";
     import DurationSelector from "./DurationSelector.svelte";
     import SlidingPageContent from "./SlidingPageContent.svelte";
     import SourceWalletSelector from "./SourceWalletSelector.svelte";
     import TokenInput from "./TokenInput.svelte";
     import TransferFeesMessage from "./TransferFeesMessage.svelte";
-    import { TokenState } from "./wallet/walletState.svelte";
+    import { TokenState } from "@shared_components/home/wallet/walletState.svelte";
     import { keyboard } from "@stores/keyboard.svelte";
 
     const client = getContext<OpenChat>("client");
@@ -52,7 +54,11 @@
     let sourceWallet = $state<SignerWallet | undefined>();
     let payFromWallet = $derived(sourceWallet !== undefined);
 
-    let totalFees = $derived(fromDetails.transferFee * BigInt(2));
+    // The offer is deposited in the escrow canister along with the fee for paying it out, so the
+    // deposit costs two fees. The wallet also pays for the approval it makes before the deposit is
+    // pulled from it.
+    let approvalFee = $derived(walletApprovalFee(fromDetails.transferFee));
+    let totalFees = $derived(fromDetails.transferFee * BigInt(2) + approvalFee);
     let minAmount = $derived(fromDetails.transferFee * BigInt(10));
     let valid = $derived(error === undefined && fromAmountValid && toAmountValid);
 
@@ -170,6 +176,7 @@
         message={i18nKey("p2pSwap.confirmSend", {
             amount: client.formatTokens(fromAmount + totalFees, fromDetails.decimals),
             token: fromDetails.symbol,
+            fees: approvalFee > 0n ? 3 : 2,
         })}
         action={send} />
 {/if}
@@ -202,6 +209,7 @@
                     hideBalance={payFromWallet}
                     bind:ledger={fromLedger}
                     draftAmount={fromAmount}
+                    fees={totalFees}
                     showRefresh
                     onSelect={onSelectFromToken} />
                 <SourceWalletSelector bind:wallet={sourceWallet} ledger={fromLedger} />
@@ -210,6 +218,7 @@
                     balance={fromState.cryptoBalance}
                     ledger={fromLedger}
                     {minAmount}
+                    maxAmount={payFromWallet ? undefined : fromState.cryptoBalance - totalFees}
                     converted={fromState.formatConvertedTokens(fromAmount)}
                     bind:status={tokenInputState}
                     bind:valid={fromAmountValid}
@@ -246,7 +255,9 @@
 
         <!-- Duration selection -->
         <Column padding={["zero", "lg"]}>
-            <DurationSelector bind:duration={expiresIn}>
+            <DurationSelector
+                maxMilliseconds={BigInt(P2P_SWAP_MAX_EXPIRY_DAYS * ONE_DAY)}
+                bind:duration={expiresIn}>
                 {#snippet title()}
                     <Subtitle fontWeight={"bold"}>
                         <Translatable resourceKey={i18nKey("Swap expiry time")} />

@@ -90,10 +90,7 @@ impl Translations {
             previously_approved,
         });
 
-        ApproveResponse::Success(ApproveSuccess {
-            proposed_by,
-            previously_approved,
-        })
+        ApproveResponse::Success(ApproveSuccess { previously_approved })
     }
 
     pub fn reject(&mut self, id: u64, reason: RejectReason, user_id: UserId, now: TimestampMillis) -> RejectResponse {
@@ -289,7 +286,6 @@ pub enum ApproveResponse {
 }
 
 pub struct ApproveSuccess {
-    pub proposed_by: UserId,
     pub previously_approved: bool,
 }
 

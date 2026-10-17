@@ -16,11 +16,14 @@ use group_index_canister::ChildCanisterType;
 use local_user_index_canister::{GroupIndexEvent as LocalIndexEvent, ModerationFlagsChanged, NameChanged, VerifiedChanged};
 use model::local_index_event_batch::LocalIndexEventBatch;
 use model::local_index_map::LocalIndexMap;
+use model::storage_index_accessors_to_remove_batch::StorageIndexAccessorsToRemoveBatch;
+use model::user_canister_event_batch::UserCanisterEventBatch;
+use multi_user_canister::GroupIndexEvent;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
-use timer_job_queues::GroupedTimerJobQueue;
+use timer_job_queues::{BatchedTimerJobQueue, GroupedTimerJobQueue};
 use types::{
     AccessGate, BuildVersion, CanisterId, ChatId, ChildCanisterWasms, CommunityId, Cycles, FrozenGroupInfo, IdempotentEnvelope,
     Milliseconds, TimestampMillis, Timestamped, UserId,
@@ -28,7 +31,6 @@ use types::{
 use utils::canister::{CanistersRequiringUpgrade, FailedUpgradeCount};
 use utils::env::Environment;
 use utils::idempotency_checker::IdempotencyChecker;
-use utils::migrated_user_ids::MigratedUserIds;
 
 mod guards;
 mod jobs;
@@ -112,6 +114,30 @@ impl RuntimeState {
                 value: event,
             },
         )
+    }
+
+    // Queues `event` for each of the users, grouped by canister so that the users a MultiUser
+    // canister holds have theirs sent to it together
+    pub fn push_event_to_users(
+        &mut self,
+        user_ids: impl IntoIterator<Item = UserId>,
+        event: GroupIndexEvent,
+        now: TimestampMillis,
+    ) {
+        let mut events_per_canister: BTreeMap<CanisterId, Vec<_>> = BTreeMap::new();
+        for user_id in user_ids {
+            events_per_canister
+                .entry(user_id.canister_id())
+                .or_default()
+                .push(IdempotentEnvelope {
+                    created_at: now,
+                    idempotency_id: self.env.rng().next_u64(),
+                    value: (user_id, event.clone()),
+                });
+        }
+        for (canister_id, events) in events_per_canister {
+            self.data.user_canister_events_queue.push_many(canister_id, events);
+        }
     }
 
     pub fn set_verified_community(&mut self, community_id: CommunityId, verified: bool) -> bool {
@@ -264,9 +290,7 @@ impl RuntimeState {
             active_private_communities: self.data.cached_metrics.active_private_communities,
             deleted_public_communities: self.data.cached_metrics.deleted_public_communities,
             deleted_private_communities: self.data.cached_metrics.deleted_private_communities,
-            group_deleted_notifications_pending: self.data.deleted_groups.notifications_pending() as u64,
-            community_deleted_notifications_pending: self.data.deleted_communities.notifications_pending() as u64,
-            community_deleted_notifications_failed: self.data.deleted_communities.notifications_failed() as u64,
+            user_canister_events_pending: self.data.user_canister_events_queue.len() as u64,
             frozen_groups: self.data.cached_metrics.frozen_groups.clone(),
             frozen_communities: self.data.cached_metrics.frozen_communities.clone(),
             public_group_gates: self.data.cached_metrics.public_group_gates.clone(),
@@ -295,6 +319,7 @@ impl RuntimeState {
                 escrow: self.data.escrow_canister_id,
                 event_relay: self.data.event_relay_canister_id,
                 registry: self.data.registry_canister_id,
+                storage_index: self.data.storage_index_canister_id,
             },
         }
     }
@@ -317,6 +342,7 @@ struct Data {
     pub escrow_canister_id: CanisterId,
     pub event_relay_canister_id: CanisterId,
     pub registry_canister_id: CanisterId,
+    pub storage_index_canister_id: CanisterId,
     pub internet_identity_canister_id: CanisterId,
     pub canisters_requiring_upgrade: CanistersRequiringUpgrade,
     pub test_mode: bool,
@@ -330,10 +356,16 @@ struct Data {
     pub rng_seed: [u8; 32],
     pub idempotency_checker: IdempotencyChecker,
     pub local_index_event_sync_queue: GroupedTimerJobQueue<LocalIndexEventBatch>,
-    // The latest ids of migrated users, as looked up from the UserIndex whenever a user's id is found to
-    // have changed
-    #[serde(default)]
-    pub migrated_user_ids: MigratedUserIds,
+    // The ids of deleted groups and communities, which the files sent in them name as their only
+    // accessor, to be removed from those files by the StorageIndex, which removes the files
+    pub storage_index_accessors_to_remove_queue: BatchedTimerJobQueue<StorageIndexAccessorsToRemoveBatch>,
+    // Events for users, each sent to the MultiUser canister holding the user
+    #[serde(default = "new_user_canister_events_queue")]
+    pub user_canister_events_queue: GroupedTimerJobQueue<UserCanisterEventBatch>,
+}
+
+fn new_user_canister_events_queue() -> GroupedTimerJobQueue<UserCanisterEventBatch> {
+    GroupedTimerJobQueue::new(5, true)
 }
 
 impl Data {
@@ -346,6 +378,7 @@ impl Data {
         escrow_canister_id: CanisterId,
         event_relay_canister_id: CanisterId,
         registry_canister_id: CanisterId,
+        storage_index_canister_id: CanisterId,
         internet_identity_canister_id: CanisterId,
         video_call_operators: Vec<Principal>,
         test_mode: bool,
@@ -366,6 +399,7 @@ impl Data {
             escrow_canister_id,
             event_relay_canister_id,
             registry_canister_id,
+            storage_index_canister_id,
             internet_identity_canister_id,
             canisters_requiring_upgrade: CanistersRequiringUpgrade::default(),
             test_mode,
@@ -379,7 +413,8 @@ impl Data {
             rng_seed: [0; 32],
             idempotency_checker: IdempotencyChecker::default(),
             local_index_event_sync_queue: GroupedTimerJobQueue::new(10, false),
-            migrated_user_ids: MigratedUserIds::default(),
+            storage_index_accessors_to_remove_queue: BatchedTimerJobQueue::new(storage_index_canister_id, false),
+            user_canister_events_queue: new_user_canister_events_queue(),
         }
     }
 
@@ -475,6 +510,7 @@ impl Default for Data {
             escrow_canister_id: Principal::anonymous(),
             event_relay_canister_id: Principal::anonymous(),
             registry_canister_id: Principal::anonymous(),
+            storage_index_canister_id: Principal::anonymous(),
             internet_identity_canister_id: Principal::anonymous(),
             canisters_requiring_upgrade: CanistersRequiringUpgrade::default(),
             test_mode: true,
@@ -488,7 +524,8 @@ impl Default for Data {
             rng_seed: [0; 32],
             idempotency_checker: IdempotencyChecker::default(),
             local_index_event_sync_queue: GroupedTimerJobQueue::new(10, false),
-            migrated_user_ids: MigratedUserIds::default(),
+            storage_index_accessors_to_remove_queue: BatchedTimerJobQueue::new(Principal::anonymous(), false),
+            user_canister_events_queue: new_user_canister_events_queue(),
         }
     }
 }
@@ -516,9 +553,7 @@ pub struct Metrics {
     pub active_private_communities: u64,
     pub deleted_public_communities: u64,
     pub deleted_private_communities: u64,
-    pub group_deleted_notifications_pending: u64,
-    pub community_deleted_notifications_pending: u64,
-    pub community_deleted_notifications_failed: u64,
+    pub user_canister_events_pending: u64,
     pub frozen_groups: Vec<ChatId>,
     pub frozen_communities: Vec<CommunityId>,
     pub public_group_gates: AccessGateMetrics,
@@ -561,6 +596,7 @@ pub struct CanisterIds {
     pub escrow: CanisterId,
     pub event_relay: CanisterId,
     pub registry: CanisterId,
+    pub storage_index: CanisterId,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

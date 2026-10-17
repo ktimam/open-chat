@@ -171,12 +171,12 @@
         };
     });
     $effect(() => {
-        consentScope;
+        void consentScope;
         acknowledged = false;
         retryConfirmed = false;
     });
     $effect(() => {
-        errorScope;
+        void errorScope;
         confirmationFailed = false;
         openAppFailed = false;
     });

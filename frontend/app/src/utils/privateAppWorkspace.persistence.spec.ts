@@ -14,7 +14,8 @@ import type { LocalAppSetupStorage } from "./localAppSetupStore";
 import type { LocalDraftDelivery } from "./localAppDrafts";
 import type { extractPrivateAppAction } from "./aiActionRunner";
 
-vi.mock("@client", () => ({ currentUserIdStore: { value: "synthetic" } }));
+vi.mock("@client", async () => ({
+        ...(await import("@client/utils/stores")), currentUserIdStore: { value: "synthetic" } }));
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
 vi.mock("./aiActionRunner", () => ({ extractPrivateAppAction: vi.fn() }));
 vi.mock("./isolatedAppProcessor", () => ({
@@ -24,7 +25,7 @@ vi.mock("./isolatedAppProcessor", () => ({
 vi.mock("./localAppRelayDelivery", async () => ({
     deliverLocalAppViaRelay: vi.fn(),
     cancelLocalAppHandoffs: vi.fn(),
-    localAppDeliveryStatus: (await import("svelte/store")).writable(undefined),
+    localAppDeliveryStatus: (await import("@client/utils/stores")).writable(undefined),
 }));
 
 const scope = { account: "account-a", backend: "backend-a" };

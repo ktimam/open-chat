@@ -28,8 +28,8 @@
 
     // The web version currently running, which after an OTA update is the
     // downloaded bundle rather than the one the shell shipped with.
-    //@ts-ignore
-    let version = window.OC_WEBSITE_VERSION;
+    // @ts-expect-error OC_WEBSITE_VERSION is injected at build time and not declared on Window
+    const version = window.OC_WEBSITE_VERSION;
 
     // The version of the installed binary. Only differs from `version` once an
     // OTA update has been applied, and knowing which is which matters when

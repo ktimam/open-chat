@@ -1,11 +1,11 @@
 use crate::User;
 use chat_events::{CallParticipantInternal, EventPusher, MessageContentInternal, PushMessageArgs, VideoCallContentInternal};
+use multi_user_canister::start_video_call_v2::Args;
 use oc_error_codes::OCErrorCode;
 use types::{
     CallFacts, CallKind, DirectChatUserNotificationPayload, DirectMessageNotification, EventWrapper, Message, MessageId,
     MessageIndex, OCResult, TimestampMillis, UserId, UserType, VideoCallPresence, VideoCallType,
 };
-use user_canister::start_video_call_v2::Args;
 
 // Checks the user may be called by the initiator, returning the kind of call
 pub fn prepare(user: &User, my_user_id: UserId, args: &Args) -> OCResult<CallKind> {
@@ -73,7 +73,7 @@ pub fn handle_start_video_call<P: EventPusher>(
         sender_context: None,
     };
 
-    let chat = user
+    let mut chat = user
         .direct_chats
         .get_or_create(my_user_id, other, UserType::User, anonymized_chat_id, now);
     let mute_notification = their_message_index.is_some() || chat.notifications_muted.value;

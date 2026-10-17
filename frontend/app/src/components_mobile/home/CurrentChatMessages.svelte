@@ -67,6 +67,7 @@
         canDelete: boolean;
         canSendAny: boolean;
         canReact: boolean;
+        canTipMessages: boolean;
         canInvite: boolean;
         footer: boolean;
         canReplyInThread: boolean;
@@ -86,6 +87,7 @@
         canDelete,
         canSendAny,
         canReact,
+        canTipMessages,
         canInvite,
         footer,
         canReplyInThread,
@@ -126,7 +128,7 @@
     });
 
     // Allows child nodes, like IntersectionObserver to access the root scrollable node to allow rootMargin to be used.
-    let scrollState = $state<{ node: HTMLElement | undefined }>({ node: undefined });
+    const scrollState = $state<{ node: HTMLElement | undefined }>({ node: undefined });
     setContext("scrollable-messages-div", scrollState);
     $effect(() => {
         if (messagesDiv) {
@@ -385,6 +387,7 @@
                         {canDelete}
                         {canSendAny}
                         {canReact}
+                        {canTipMessages}
                         {canInvite}
                         {canReplyInThread}
                         collapsed={isCollapsed(evt, filteredProposals)}

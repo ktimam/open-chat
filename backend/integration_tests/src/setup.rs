@@ -2,7 +2,7 @@ use crate::client::{create_canister, create_canister_with_id, install_canister};
 use crate::env::VIDEO_CALL_OPERATOR;
 use crate::utils::tick_many;
 use crate::{CanisterIds, T, TestEnv, client, wasms};
-use candid::{CandidType, Nat, Principal};
+use candid::{CandidType, Empty, Nat, Principal};
 use constants::{CHAT_LEDGER_CANISTER_ID, CHAT_SYMBOL, CHAT_TRANSFER_FEE, SNS_GOVERNANCE_CANISTER_ID};
 use ic_ledger_types::{AccountIdentifier, DEFAULT_SUBACCOUNT, Tokens};
 use icrc_ledger_types::icrc::generic_metadata_value::MetadataValue;
@@ -10,7 +10,6 @@ use icrc_ledger_types::icrc1::account::Account;
 use identity_canister::WEBAUTHN_ORIGINATING_CANISTER;
 use pocket_ic::common::rest::{IcpConfig, IcpConfigFlag, IcpFeatures, IcpFeaturesConfig};
 use pocket_ic::{PocketIc, PocketIcBuilder, PocketIcState, StartServerParams, start_server};
-use rand::{RngExt, SeedableRng, rngs::StdRng};
 use reqwest::Url;
 use sha256::sha256;
 use std::collections::{HashMap, HashSet};
@@ -21,7 +20,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 use storage_index_canister::init::CyclesDispenserConfig;
 use testing::NNS_INTERNET_IDENTITY_CANISTER_ID;
-use types::{BuildVersion, CanisterId, CanisterWasm, Hash};
+use types::{BuildVersion, CanisterId, CanisterWasm};
 
 pub static POCKET_IC_BIN: &str = "./pocket-ic";
 
@@ -36,14 +35,14 @@ static POCKET_IC_SERVER_URL: OnceLock<Url> = OnceLock::new();
 // This base state is set at the end of the initialization process, so each thread (other than
 // the one doing the initialization) waits until the state is available at which point they
 // create their own PocketIC instance which is initialized with this state.
-static BASE_STATE: OnceLock<(PocketIcState, CanisterIds)> = OnceLock::new();
+static BASE_STATE: OnceLock<(PocketIcState, CanisterIds, Principal)> = OnceLock::new();
 
-pub fn setup_new_env(seed: Option<Hash>) -> TestEnv {
+pub fn setup_new_env() -> TestEnv {
     verify_pocket_ic_exists();
 
     let controller = Principal::from_text("xuxyr-xopen-chatx-xxxbu-cai").unwrap();
 
-    let (state, canister_ids) = BASE_STATE.get_or_init(|| initialize_base_state_or_exit(controller, seed));
+    let (state, canister_ids, platform_operator) = BASE_STATE.get_or_init(|| initialize_base_state_or_exit(controller));
 
     let env = PocketIcBuilder::new()
         .with_server_url(pocket_ic_server_url())
@@ -55,13 +54,14 @@ pub fn setup_new_env(seed: Option<Hash>) -> TestEnv {
         env,
         canister_ids: canister_ids.clone(),
         controller,
+        platform_operator: *platform_operator,
     }
 }
 
 // If initializing the base state fails, every other test would fail the same way trying it again,
 // so end the test run
-fn initialize_base_state_or_exit(controller: Principal, seed: Option<Hash>) -> (PocketIcState, CanisterIds) {
-    std::panic::catch_unwind(|| initialize_base_state(controller, seed)).unwrap_or_else(|payload| {
+fn initialize_base_state_or_exit(controller: Principal) -> (PocketIcState, CanisterIds, Principal) {
+    std::panic::catch_unwind(|| initialize_base_state(controller)).unwrap_or_else(|payload| {
         let message = payload
             .downcast_ref::<String>()
             .map(String::as_str)
@@ -76,7 +76,7 @@ fn initialize_base_state_or_exit(controller: Principal, seed: Option<Hash>) -> (
     })
 }
 
-fn initialize_base_state(controller: Principal, seed: Option<Hash>) -> (PocketIcState, CanisterIds) {
+fn initialize_base_state(controller: Principal) -> (PocketIcState, CanisterIds, Principal) {
     let started = Instant::now();
 
     // This thread is first, so it is the only one which will run the full initialization
@@ -103,17 +103,26 @@ fn initialize_base_state(controller: Principal, seed: Option<Hash>) -> (PocketIc
 
     println!("PocketIC instance ready. Installing canisters...");
 
-    let ticks: u8 = seed.map_or(0, |s| StdRng::from_seed(s).random());
-    tick_many(&mut env, ticks as usize);
-
     let canister_ids = install_canisters(&mut env, controller);
+
+    // Registered here rather than by each test needing one, since registering a user can create a
+    // MultiUser canister, which would throw off tests counting them
+    let platform_operator = client::register_user(&mut env, &canister_ids);
+    client::user_index::happy_path::add_platform_operator(
+        &mut env,
+        controller,
+        canister_ids.user_index,
+        platform_operator.user_id,
+    );
+    tick_many(&mut env, 5);
+
     let duration = Instant::now().duration_since(started);
 
     println!("Initialization complete. Took: {}s", duration.as_secs());
 
     let state = env.drop_and_take_state().unwrap();
 
-    (state, canister_ids)
+    (state, canister_ids, platform_operator.principal)
 }
 
 // PocketIC's beta features consist of the `flexible_http_requests` flag, which lets HTTPS outcalls
@@ -184,7 +193,6 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
     let storage_bucket_canister_wasm = wasms::STORAGE_BUCKET.clone();
     let storage_index_canister_wasm = wasms::STORAGE_INDEX.clone();
     let translations_canister_wasm = wasms::TRANSLATIONS.clone();
-    let user_canister_wasm = wasms::USER.clone();
     let user_index_canister_wasm = wasms::USER_INDEX.clone();
 
     let wasm_version = BuildVersion::min();
@@ -457,7 +465,6 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
         sign_in_with_email_init_args,
     );
 
-    client::user_index::happy_path::upgrade_user_canister_wasm(env, controller, user_index_canister_id, user_canister_wasm);
     client::user_index::happy_path::upgrade_local_user_index_canister_wasm(
         env,
         controller,
@@ -517,7 +524,7 @@ fn install_canisters(env: &mut PocketIc, controller: Principal) -> CanisterIds {
     let application_subnets = env.topology().get_app_subnets();
     let subnets: Vec<_> = application_subnets
         .into_iter()
-        .map(|s| client::registry::happy_path::expand_onto_subnet(env, controller, registry_canister_id, s))
+        .map(|s| client::registry::happy_path::expand_onto_subnet(env, controller, registry_canister_id, s, None))
         .collect();
 
     let sns_wasm_canister_init_args = SnsWasmCanisterInitPayload::default();
@@ -623,6 +630,209 @@ pub fn install_icrc_ledger(
     canister_id
 }
 
+// Installs an SNS governance canister with a neuron for each of `neurons`, given as the principals
+// it lists as hotkeys and its stake, each with a dissolve delay of `dissolve_delay_seconds`
+pub fn install_sns_governance(
+    env: &mut PocketIc,
+    controller: Principal,
+    neurons: Vec<(Vec<Principal>, u64)>,
+    dissolve_delay_seconds: u64,
+) -> CanisterId {
+    // Only the fields which aren't optional, plus those set below. Those left empty are typed with
+    // `empty`, which is a subtype of every type, so a vector of `empty` (or of `record { key; empty }`
+    // for a map) stands in for any vector (or map).
+    #[derive(CandidType)]
+    struct Governance {
+        root_canister_id: Option<Principal>,
+        ledger_canister_id: Option<Principal>,
+        swap_canister_id: Option<Principal>,
+        id_to_nervous_system_functions: Vec<(u64, Empty)>,
+        mode: i32,
+        parameters: Option<NervousSystemParameters>,
+        sns_initialization_parameters: String,
+        proposals: Vec<(u64, Empty)>,
+        in_flight_commands: Vec<(String, Empty)>,
+        sns_metadata: Option<SnsMetadata>,
+        neurons: Vec<(String, Neuron)>,
+        genesis_timestamp_seconds: u64,
+    }
+
+    #[derive(CandidType)]
+    struct NervousSystemParameters {
+        reject_cost_e8s: Option<u64>,
+        neuron_minimum_stake_e8s: Option<u64>,
+        transaction_fee_e8s: Option<u64>,
+        max_proposals_to_keep_per_action: Option<u32>,
+        initial_voting_period_seconds: Option<u64>,
+        wait_for_quiet_deadline_increase_seconds: Option<u64>,
+        default_followees: Option<DefaultFollowees>,
+        max_number_of_neurons: Option<u64>,
+        neuron_minimum_dissolve_delay_to_vote_seconds: Option<u64>,
+        max_followees_per_function: Option<u64>,
+        max_dissolve_delay_seconds: Option<u64>,
+        max_neuron_age_for_age_bonus: Option<u64>,
+        max_number_of_proposals_with_ballots: Option<u64>,
+        neuron_claimer_permissions: Option<NeuronPermissionList>,
+        neuron_grantable_permissions: Option<NeuronPermissionList>,
+        max_number_of_principals_per_neuron: Option<u64>,
+        voting_rewards_parameters: Option<VotingRewardsParameters>,
+        max_dissolve_delay_bonus_percentage: Option<u64>,
+        max_age_bonus_percentage: Option<u64>,
+        maturity_modulation_disabled: Option<bool>,
+    }
+
+    #[derive(CandidType)]
+    struct DefaultFollowees {
+        followees: Vec<(u64, Empty)>,
+    }
+
+    #[derive(CandidType)]
+    struct NeuronPermissionList {
+        permissions: Vec<i32>,
+    }
+
+    #[derive(CandidType)]
+    struct VotingRewardsParameters {
+        round_duration_seconds: Option<u64>,
+        reward_rate_transition_duration_seconds: Option<u64>,
+        initial_reward_rate_basis_points: Option<u64>,
+        final_reward_rate_basis_points: Option<u64>,
+    }
+
+    #[derive(CandidType)]
+    struct SnsMetadata {
+        url: Option<String>,
+        name: Option<String>,
+        description: Option<String>,
+    }
+
+    #[derive(CandidType)]
+    struct Neuron {
+        id: Option<NeuronId>,
+        permissions: Vec<NeuronPermission>,
+        maturity_e8s_equivalent: u64,
+        cached_neuron_stake_e8s: u64,
+        created_timestamp_seconds: u64,
+        aging_since_timestamp_seconds: u64,
+        dissolve_state: Option<DissolveState>,
+        voting_power_percentage_multiplier: u64,
+        disburse_maturity_in_progress: Vec<Empty>,
+        followees: Vec<(u64, Empty)>,
+        neuron_fees_e8s: u64,
+    }
+
+    #[derive(CandidType)]
+    struct NeuronId {
+        id: Vec<u8>,
+    }
+
+    #[derive(CandidType)]
+    struct NeuronPermission {
+        principal: Option<Principal>,
+        permission_type: Vec<i32>,
+    }
+
+    #[derive(CandidType)]
+    enum DissolveState {
+        DissolveDelaySeconds(u64),
+    }
+
+    const MODE_NORMAL: i32 = 1;
+    const PERMISSION_MANAGE_PRINCIPALS: i32 = 2;
+    const PERMISSION_SUBMIT_PROPOSAL: i32 = 3;
+    const PERMISSION_VOTE: i32 = 4;
+    const DAY_IN_SECONDS: u64 = 24 * 60 * 60;
+    const YEAR_IN_SECONDS: u64 = 365 * DAY_IN_SECONDS;
+
+    let neurons = neurons
+        .into_iter()
+        .enumerate()
+        .map(|(index, (hotkeys, stake_e8s))| {
+            // A neuron's id is its subaccount, and it is keyed by the id in hex
+            let id = vec![index as u8 + 1; 32];
+            let key = id.iter().map(|b| format!("{b:02x}")).collect();
+            let neuron = Neuron {
+                id: Some(NeuronId { id }),
+                // The permissions a hotkey has
+                permissions: hotkeys
+                    .into_iter()
+                    .map(|hotkey| NeuronPermission {
+                        principal: Some(hotkey),
+                        permission_type: vec![PERMISSION_SUBMIT_PROPOSAL, PERMISSION_VOTE],
+                    })
+                    .collect(),
+                maturity_e8s_equivalent: 0,
+                cached_neuron_stake_e8s: stake_e8s,
+                // Set to the genesis time when the canister is initialized
+                created_timestamp_seconds: 0,
+                aging_since_timestamp_seconds: 0,
+                dissolve_state: Some(DissolveState::DissolveDelaySeconds(dissolve_delay_seconds)),
+                voting_power_percentage_multiplier: 100,
+                disburse_maturity_in_progress: Vec::new(),
+                followees: Vec::new(),
+                neuron_fees_e8s: 0,
+            };
+            (key, neuron)
+        })
+        .collect();
+
+    // The default parameters, which the canister checks are all set
+    let parameters = NervousSystemParameters {
+        reject_cost_e8s: Some(100_000_000),
+        neuron_minimum_stake_e8s: Some(100_000_000),
+        transaction_fee_e8s: Some(CHAT_TRANSFER_FEE as u64),
+        max_proposals_to_keep_per_action: Some(100),
+        initial_voting_period_seconds: Some(4 * DAY_IN_SECONDS),
+        wait_for_quiet_deadline_increase_seconds: Some(DAY_IN_SECONDS),
+        default_followees: Some(DefaultFollowees { followees: Vec::new() }),
+        max_number_of_neurons: Some(200_000),
+        neuron_minimum_dissolve_delay_to_vote_seconds: Some(YEAR_IN_SECONDS / 2),
+        max_followees_per_function: Some(15),
+        max_dissolve_delay_seconds: Some(8 * YEAR_IN_SECONDS),
+        max_neuron_age_for_age_bonus: Some(4 * YEAR_IN_SECONDS),
+        max_number_of_proposals_with_ballots: Some(700),
+        neuron_claimer_permissions: Some(NeuronPermissionList {
+            permissions: vec![PERMISSION_MANAGE_PRINCIPALS, PERMISSION_VOTE, PERMISSION_SUBMIT_PROPOSAL],
+        }),
+        neuron_grantable_permissions: Some(NeuronPermissionList { permissions: Vec::new() }),
+        max_number_of_principals_per_neuron: Some(5),
+        voting_rewards_parameters: Some(VotingRewardsParameters {
+            round_duration_seconds: Some(DAY_IN_SECONDS),
+            reward_rate_transition_duration_seconds: Some(0),
+            initial_reward_rate_basis_points: Some(0),
+            final_reward_rate_basis_points: Some(0),
+        }),
+        max_dissolve_delay_bonus_percentage: Some(100),
+        max_age_bonus_percentage: Some(25),
+        maturity_modulation_disabled: Some(false),
+    };
+
+    // The SNS's root and swap canisters must be set, but aren't called while it is in normal mode
+    // with no upgrade in progress
+    let args = Governance {
+        root_canister_id: Some(controller),
+        ledger_canister_id: Some(CHAT_LEDGER_CANISTER_ID),
+        swap_canister_id: Some(controller),
+        id_to_nervous_system_functions: Vec::new(),
+        mode: MODE_NORMAL,
+        parameters: Some(parameters),
+        sns_initialization_parameters: String::new(),
+        proposals: Vec::new(),
+        in_flight_commands: Vec::new(),
+        sns_metadata: Some(SnsMetadata {
+            url: Some("https://example.com".to_string()),
+            name: Some("Test SNS".to_string()),
+            description: Some("An SNS for testing".to_string()),
+        }),
+        neurons,
+        genesis_timestamp_seconds: 0,
+    };
+
+    let canister_id = create_canister(env, controller);
+    install_canister(env, controller, canister_id, wasms::SNS_GOVERNANCE.clone(), args);
+    canister_id
+}
+
 // The instances in a test run all share this server. It is started here rather than by
 // `PocketIcBuilder`, which has no way to set its hard TTL. It isn't reused, as reusing keys the
 // server on the test process id, so a run whose id had been recycled could attach to a server left
@@ -661,7 +871,7 @@ fn verify_pocket_ic_exists() {
 I looked for it at {:?}. You can specify another path with the environment variable POCKET_IC_BIN (note that I run from {:?}).
 
 Running the testing script will automatically place the PocketIC binary at the right place to be run without setting the POCKET_IC_BIN environment variable:
-    ./scripts/run-integration-tests.sh", &path, &env::current_dir().map(|x| x.display().to_string()).unwrap_or_else(|_| "an unknown directory".to_string()));
+    ./scripts/run-integration-tests.sh", path, env::current_dir().map(|x| x.display().to_string()).unwrap_or_else(|_| "an unknown directory".to_string()));
     }
 }
 

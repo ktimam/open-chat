@@ -4,7 +4,7 @@
     import { onMount, untrack } from "svelte";
     import { _ } from "svelte-i18n";
     import { i18nKey, interpolate } from "../i18n/i18n";
-    import Translatable from "./Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     const MIN_DISPLAY_NAME_LENGTH = 3;
     const MAX_DISPLAY_NAME_LENGTH = 25;
@@ -37,7 +37,7 @@
     $effect(() => {
         if (typeof displayName !== "string") return;
 
-        let d = displayName;
+        const d = displayName;
 
         untrack(() => {
             if (d.length === 0) {

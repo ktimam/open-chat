@@ -14,7 +14,6 @@
         MultiUserChatIdentifier,
         NervousSystemDetails,
         OpenChat,
-        PubSubEvents,
         ResourceKey,
         RouteParams,
     } from "@client";
@@ -34,6 +33,7 @@
         localUpdates,
         offlineStore,
         pinNumberResolverStore,
+        postLoginJoin,
         publish,
         querystringStore,
         routeForChatIdentifier,
@@ -45,12 +45,14 @@
         subscribe,
         suspendedUserStore,
     } from "@client";
-    import { getContext, onMount, untrack } from "svelte";
+    import { getContext, onMount, tick, untrack } from "svelte";
+    import { openCommunityCreation } from "./communities/createOrUpdate/createCommunity";
+    import { communityPreviewState, groupPreviewState } from "@src/utils/preview.svelte";
     import { _ } from "svelte-i18n";
     import { i18nKey } from "../../i18n/i18n";
     import { chitPopup, disableChit } from "../../stores/settings";
     import { toastStore } from "../../stores/toast";
-    import { activeVideoCall, incomingVideoCall } from "../../stores/video";
+    import { ringForRemoteCall, stopRingingForRemoteCall } from "../../stores/video";
     import { removeQueryStringParam } from "../../utils/urls";
     import AreYouSure from "../AreYouSure.svelte";
     import LegacyInstallBanner from "../LegacyInstallBanner.svelte";
@@ -90,6 +92,7 @@
         | ConfirmLeaveEvent
         | ConfirmLeaveCommunityEvent
         | ConfirmDeleteDirectChatEvent
+        | ConfirmDeleteEvent
         | ConfirmDeleteCommunityEvent;
 
     type ConfirmLeaveCommunityEvent = {
@@ -107,6 +110,14 @@
         kind: "leave";
         chatId: MultiUserChatIdentifier;
         level: Level;
+    };
+
+    type ConfirmDeleteEvent = {
+        kind: "delete";
+        chatId: MultiUserChatIdentifier;
+        level: Level;
+        doubleCheck: { challenge: ResourceKey; response: ResourceKey };
+        after?: () => void;
     };
 
     type ConfirmDeleteCommunityEvent = {
@@ -139,15 +150,17 @@
             subscribe("leaveCommunity", onTriggerConfirm),
             subscribe("makeProposal", showMakeProposalModal),
             subscribe("leaveGroup", onTriggerConfirm),
+            subscribe("deleteGroup", onTriggerConfirm),
             subscribe("unarchiveChat", unarchiveChat),
+            subscribe("joinGroup", (group) => groupPreviewState.joinGroup(client, group)),
             subscribe("toggleMuteNotifications", toggleMuteNotifications),
             subscribe("successfulImport", successfulImport),
             subscribe("clearSelection", () => navigate(routeForScope($chatListScopeStore))),
             subscribe("userSuspensionChanged", reload),
             subscribe("selectedChatInvalid", selectedChatInvalid),
             subscribe("sendMessageFailed", sendMessageFailed),
-            subscribe("remoteVideoCallStarted", remoteVideoCallStarted),
-            subscribe("remoteVideoCallEnded", remoteVideoCallEnded),
+            subscribe("remoteVideoCallStarted", (ev) => ringForRemoteCall(ev)),
+            subscribe("remoteVideoCallEnded", stopRingingForRemoteCall),
             subscribe("notification", (n) => client.notificationReceived(n)),
             subscribe("noAccess", () => (modal = { kind: "no_access" })),
             subscribe("restrictedContent", () => (modal = { kind: "restricted_content" })),
@@ -192,25 +205,6 @@
         if (alert) {
             toastStore.showFailureToast(i18nKey("errorSendingMessage"));
         }
-    }
-
-    function remoteVideoCallEnded(messageId: bigint) {
-        if ($incomingVideoCall?.messageId === messageId) {
-            incomingVideoCall.set(undefined);
-        }
-    }
-
-    function remoteVideoCallStarted(ev: PubSubEvents["remoteVideoCallStarted"]) {
-        // If current user is already in the call, or has previously been in the call, or the call started more than 2 hours ago, exit
-        if (
-            chatIdentifiersEqual($activeVideoCall?.chatId, ev.chatId) ||
-            ev.currentUserIsParticipant ||
-            Number(ev.timestamp) < Date.now() - 2 * 60 * 60 * 1000
-        ) {
-            return;
-        }
-
-        incomingVideoCall.set(ev);
     }
 
     async function routeChange(initialised: boolean, route: RouteParams): Promise<void> {
@@ -281,6 +275,8 @@
                 return i18nKey("communities.leaveMessage");
             case "delete_community":
                 return i18nKey("communities.deleteMessage");
+            case "delete":
+                return i18nKey("irreversible", undefined, confirmActionEvent.level, true);
         }
     }
 
@@ -306,6 +302,10 @@
                 return leaveCommunity(confirmActionEvent.communityId);
             case "delete_community":
                 return deleteCommunity(confirmActionEvent.communityId);
+            case "delete":
+                return deleteGroup(confirmActionEvent.chatId, confirmActionEvent.level).then(() =>
+                    confirmActionEvent.after?.(),
+                );
             default:
                 return Promise.reject();
         }
@@ -322,6 +322,25 @@
         return client.deleteDirectChat(chatId, blockUser).then((success) => {
             if (!success) {
                 toastStore.showFailureToast(i18nKey("deleteDirectChatFailure"));
+                if (viewingThisChat) {
+                    navigate(routeForChatIdentifier($chatListScopeStore.kind, chatId));
+                }
+            }
+        });
+    }
+
+    function deleteGroup(chatId: MultiUserChatIdentifier, level: Level): Promise<void> {
+        // Only redirect when deleting the chat we're viewing: other channels can be deleted
+        // from the community's channel list without opening them.
+        const viewingThisChat = chatIdentifiersEqual($selectedChatIdStore, chatId);
+        if (viewingThisChat) {
+            navigate(routeForScope($chatListScopeStore));
+        }
+        return client.deleteGroup(chatId).then((success) => {
+            if (success) {
+                toastStore.showSuccessToast(i18nKey("deleteGroupSuccess", undefined, level));
+            } else {
+                toastStore.showFailureToast(i18nKey("deleteGroupFailure", undefined, level, true));
                 if (viewingThisChat) {
                     navigate(routeForChatIdentifier($chatListScopeStore.kind, chatId));
                 }
@@ -507,14 +526,20 @@
     let showOnboarding = $derived(client.isHomeRoute($routeStore) && $anonUserStore);
 
     trackedEffect("identity-state", () => {
-        if (
-            $identityStateStore.kind === "logged_in" &&
-            $identityStateStore.postLogin?.kind === "join_group" &&
-            $chatsInitialisedStore
-        ) {
-            // const join = { ...$identityStateStore.postLogin };
+        const join = postLoginJoin($identityStateStore, $chatsInitialisedStore);
+        if (join !== undefined) {
             client.clearPostLoginState();
-            // tick().then(() => joinGroup(join));
+            tick().then(() =>
+                join.kind === "join_group"
+                    ? groupPreviewState.joinGroup(client, join.group)
+                    : communityPreviewState.joinCommunity(client, join.community),
+            );
+        } else if (
+            $identityStateStore.kind === "logged_in" &&
+            $identityStateStore.postLogin?.kind === "create_community"
+        ) {
+            client.clearPostLoginState();
+            tick().then(() => openCommunityCreation(client));
         }
     });
 
@@ -582,7 +607,8 @@
 
 {#if confirmActionEvent !== undefined}
     <AreYouSure
-        doubleCheck={confirmActionEvent.kind === "delete_community"
+        doubleCheck={confirmActionEvent.kind === "delete" ||
+        confirmActionEvent.kind === "delete_community"
             ? confirmActionEvent.doubleCheck
             : undefined}
         message={confirmMessage}

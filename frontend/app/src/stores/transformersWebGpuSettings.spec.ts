@@ -1,4 +1,4 @@
-import { get } from "svelte/store";
+import { get } from "@client/utils/stores";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const SETTINGS_KEY = "openchat_transformers_webgpu_runtime_settings_v1";

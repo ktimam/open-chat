@@ -22,7 +22,7 @@
     import { getContext, onDestroy } from "svelte";
     import { Ringtone } from "../../../stores/video";
     import Setting from "../../Setting.svelte";
-    import Translatable from "../../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import SlidingPageContent from "../SlidingPageContent.svelte";
     import VideoCallRingtone from "../profile/VideoCallRingtone.svelte";
 
@@ -32,7 +32,7 @@
         client.setModerationFlags($moderationFlagsEnabledStore ^ flag);
     }
 
-    let ringtones: Ringtone[] = [
+    const ringtones: Ringtone[] = [
         new Ringtone("boring", "Boring"),
         new Ringtone("pleasant", "Pleasant"),
         new Ringtone("boomboom", "Boom boom"),
@@ -48,7 +48,6 @@
                 r.stop();
             }
         });
-        ringtones = ringtones;
     }
 
     onDestroy(() => {

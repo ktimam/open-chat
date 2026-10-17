@@ -3,14 +3,14 @@
     import { getContext, onDestroy } from "svelte";
     import { i18nKey } from "../i18n/i18n";
     import { activeVideoCall } from "../stores/video";
-    import Translatable from "./Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
 
     const VERSION_INTERVAL = 60 * 1000;
     const client = getContext<OpenChat>("client");
 
-    let poller = new Poller(checkVersion, VERSION_INTERVAL);
-    // @ts-ignore
-    let clientVersion = Version.parse(window.OC_WEBSITE_VERSION);
+    const poller = new Poller(checkVersion, VERSION_INTERVAL);
+    // @ts-expect-error OC_WEBSITE_VERSION is injected at build time and not declared on Window
+    const clientVersion = Version.parse(window.OC_WEBSITE_VERSION);
     let serverVersion = $state(clientVersion);
     let countdown = $state(30);
     let showBanner = $state(false);

@@ -8,6 +8,7 @@
         ResourceKey,
     } from "@client";
     import {
+        calculateDollarAmount,
         cryptoLookup,
         currentUserIdStore,
         exchangeRatesLookupStore as exchangeRatesLookup,
@@ -23,12 +24,11 @@
     import { rtlStore } from "../../stores/rtl";
     import { now500 } from "../../stores/time";
     import { toastStore } from "../../stores/toast";
-    import { calculateDollarAmount } from "../../utils/exchange";
     import AreYouSure from "../AreYouSure.svelte";
     import Button from "../Button.svelte";
     import ButtonGroup from "../ButtonGroup.svelte";
-    import SpinningToken from "../icons/SpinningToken.svelte";
-    import Translatable from "../Translatable.svelte";
+    import SpinningToken from "@shared_components/icons/SpinningToken.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import AcceptP2PSwapModal from "./AcceptP2PSwapModal.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
     import P2PSwapProgress from "./P2PSwapProgress.svelte";
@@ -73,7 +73,7 @@
         fromDetails
             ? calculateDollarAmount(
                   content.token0Amount,
-                  $exchangeRatesLookup.get(fromDetails.symbol.toLowerCase())?.toUSD,
+                  $exchangeRatesLookup.get(fromDetails.ledger)?.toUSD,
                   fromDetails.decimals,
               )
             : "0",
@@ -82,7 +82,7 @@
         toDetails
             ? calculateDollarAmount(
                   content.token1Amount,
-                  $exchangeRatesLookup.get(toDetails.symbol.toLowerCase())?.toUSD,
+                  $exchangeRatesLookup.get(toDetails.ledger)?.toUSD,
                   toDetails.decimals,
               )
             : "0",

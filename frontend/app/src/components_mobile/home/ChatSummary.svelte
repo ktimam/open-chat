@@ -66,15 +66,15 @@
     import { rtlStore } from "../../stores/rtl";
     import { toastStore } from "../../stores/toast";
     import { buildDisplayName } from "../../utils/user";
-    import Bitcoin from "../icons/Bitcoin.svelte";
-    import HeartMinus from "../icons/HeartMinus.svelte";
-    import HeartPlus from "../icons/HeartPlus.svelte";
-    import MemeFighter from "../icons/MemeFighter.svelte";
+    import Bitcoin from "@shared_components/icons/Bitcoin.svelte";
+    import HeartMinus from "@shared_components/icons/HeartMinus.svelte";
+    import HeartPlus from "@shared_components/icons/HeartPlus.svelte";
+    import MemeFighter from "@shared_components/icons/MemeFighter.svelte";
     import Puzzle from "svelte-material-icons/Puzzle.svelte";
     import WithVerifiedBadge from "../icons/WithVerifiedBadge.svelte";
-    import Translatable from "../Translatable.svelte";
+    import Translatable from "@shared_components/Translatable.svelte";
     import Typing from "@shared_components/Typing.svelte";
-    import ArchiveOffIcon from "./ArchiveOffIcon.svelte";
+    import ArchiveOffIcon from "@shared_components/home/ArchiveOffIcon.svelte";
     import Markdown from "@shared_components/Markdown.svelte";
     import BotBadge from "./profile/BotBadge.svelte";
     import { scrollStatus } from "../../stores/scroll.svelte";
@@ -122,7 +122,7 @@
     });
 
     trackedEffect("unarchive-chat", () => {
-        if (chatSummary.membership.archived && unreadMessages > 0 && !chat.bot) {
+        if (chatSummary.membership.archived && unreadMessages > 0) {
             unarchiveChat();
         }
     });
@@ -143,7 +143,7 @@
 
             unreadMentions = getUnreadMentionCount(chatSummary);
 
-            if (chatSummary.membership.archived && unreadMessages > 0 && !chat.bot) {
+            if (chatSummary.membership.archived && unreadMessages > 0) {
                 unarchiveChat();
             }
         });
@@ -190,7 +190,7 @@
             ? { muted: muted ? 1 : 0, unmuted: muted ? 0 : 1 }
             : { muted: 0, unmuted: 0 };
         switch (chatSummary.kind) {
-            case "direct_chat":
+            case "direct_chat": {
                 const them = $allUsersStore.get(chatSummary.them.userId);
                 return {
                     name: client.displayName(them),
@@ -213,6 +213,7 @@
                     uniquePerson: them?.isUniquePerson ?? false,
                     bot: them?.kind === "bot",
                 };
+            }
             default:
                 return {
                     name: chatSummary.name,
@@ -438,22 +439,20 @@
             <Translatable resourceKey={i18nKey("markAllRead")} />
         </MenuItem>
     {/if}
-    {#if !chat.bot}
-        {#if chatSummary.membership.archived}
-            <MenuItem onclick={selectChat}>
-                {#snippet icon(color, size)}
-                    <ArchiveOffIcon {color} {size} />
-                {/snippet}
-                <Translatable resourceKey={i18nKey("unarchiveChat")} />
-            </MenuItem>
-        {:else}
-            <MenuItem onclick={archiveChat}>
-                {#snippet icon(color, size)}
-                    <ArchiveIcon {color} {size} />
-                {/snippet}
-                <Translatable resourceKey={i18nKey("archiveChat")} />
-            </MenuItem>
-        {/if}
+    {#if chatSummary.membership.archived}
+        <MenuItem onclick={selectChat}>
+            {#snippet icon(color, size)}
+                <ArchiveOffIcon {color} {size} />
+            {/snippet}
+            <Translatable resourceKey={i18nKey("unarchiveChat")} />
+        </MenuItem>
+    {:else}
+        <MenuItem onclick={archiveChat}>
+            {#snippet icon(color, size)}
+                <ArchiveIcon {color} {size} />
+            {/snippet}
+            <Translatable resourceKey={i18nKey("archiveChat")} />
+        </MenuItem>
     {/if}
     {#if chatSummary.kind !== "direct_chat" && client.canLeaveGroup(chatSummary.id)}
         <MenuItem danger onclick={leaveGroup}>

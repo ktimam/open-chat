@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { get } from "svelte/store";
+    import { get } from "@client";
     import {
         privateAppWorkspace as workspace,
         privateAppWorkspaceState,

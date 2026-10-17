@@ -13,6 +13,7 @@ import {
 import { Principal } from "@icp-sdk/core/principal";
 import { utf8ToBytes } from "@noble/hashes/utils";
 import type { Static, TSchema } from "@sinclair/typebox";
+import { redactSecrets } from "@shared";
 import { deserializeFromMsgPack, serializeToMsgPack } from "../../utils/msgpack";
 import { typeboxValidate } from "../../utils/typebox";
 import { toCanisterResponseError } from "../error";
@@ -39,7 +40,11 @@ abstract class MsgpackCanisterAgent extends CanisterAgent {
         let isError = false;
         try {
             const canisterIdPrincipal = Principal.fromText(canisterId);
-            const payload = MsgpackCanisterAgent.prepareMsgpackArgs(args, requestValidator);
+            const payload = MsgpackCanisterAgent.prepareMsgpackArgs(
+                methodName,
+                args,
+                requestValidator,
+            );
 
             return await this.executeQuery(
                 () =>
@@ -104,6 +109,7 @@ abstract class MsgpackCanisterAgent extends CanisterAgent {
         try {
             const canisterIdPrincipal = Principal.fromText(canisterId);
             const payload = MsgpackCanisterAgent.prepareMsgpackArgs(
+                methodName,
                 args,
                 requestValidator,
                 options,
@@ -229,7 +235,7 @@ abstract class MsgpackCanisterAgent extends CanisterAgent {
                     valuesRedacted: true,
                 });
             } else {
-                console.log(err, args);
+                console.log(err, redactSecrets(args, methodName));
             }
             throw toCanisterResponseError(err as Error, this.identity);
         } finally {
@@ -238,11 +244,12 @@ abstract class MsgpackCanisterAgent extends CanisterAgent {
     }
 
     private static prepareMsgpackArgs<T extends TSchema>(
+        methodName: string,
         value: unknown,
         validator: T,
         options?: MsgpackCallOptions,
     ): Uint8Array {
-        const validated = typeboxValidate(value, validator, options);
+        const validated = typeboxValidate(value, validator, methodName, options);
         return serializeToMsgPack(validated);
     }
 

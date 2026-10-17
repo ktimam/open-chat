@@ -1,9 +1,6 @@
-use serde::de::value::{MapAccessDeserializer, SeqAccessDeserializer};
-use serde::de::{MapAccess, SeqAccess, Visitor};
-use serde::ser::SerializeStruct;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 use stable_memory_map::{ChatEventKeyPrefix, KeyPrefix, MessageEventIndexesKeyPrefix, with_map, with_map_mut};
-use std::fmt::Formatter;
 use std::io::Cursor;
 use types::{EventIndex, MessageIndex};
 
@@ -21,16 +18,16 @@ const CHUNK_SIZE: usize = 128;
 // Each chunk is encoded as a sequence of unsigned LEB128 values, being its first event index
 // followed by the difference between each event index and the previous one. Most messages directly
 // follow the previous message, so most event indexes take a single byte.
-#[derive(Default)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct MessageEventIndexes {
     // The event indexes of the messages which aren't in stable memory, starting from the message
     // index `chunk_first_event_indexes.len() * CHUNK_SIZE`. This holds fewer than `CHUNK_SIZE`
-    // entries, other than for lists which haven't yet been migrated, for which the full chunks are
-    // moved into stable memory in batches by `migrate_to_stable_memory`. This can be simplified
-    // once every list has been migrated.
+    // entries.
+    #[serde(rename = "h")]
     on_heap: Vec<EventIndex>,
     // The first event index of each chunk in stable memory, so that an event index can be mapped to
     // a message index by reading a single chunk
+    #[serde(rename = "c")]
     chunk_first_event_indexes: Vec<EventIndex>,
 }
 
@@ -110,66 +107,31 @@ impl MessageEventIndexes {
             }))
     }
 
-    // Copies every chunk in stable memory onto the heap, so that they are included when the chat is
-    // serialized to be imported into a community. The community moves them back into stable memory,
-    // under the new channel's prefix, via `migrate_to_stable_memory`.
-    //
-    // The chunks are left in stable memory, and will simply be overwritten with the same values if
-    // they are migrated again.
-    pub fn copy_to_heap(&mut self, events_prefix: &ChatEventKeyPrefix) {
-        let chunk_count = self.chunk_first_event_indexes.len();
-        if chunk_count == 0 {
-            return;
-        }
-
+    // The chunks in stable memory, in order, eg. to carry them over when a group is imported into a
+    // community (see `import_chunks`)
+    pub fn export_chunks(&self, events_prefix: &ChatEventKeyPrefix) -> Vec<ByteBuf> {
         let prefix = MessageEventIndexesKeyPrefix::from(events_prefix);
         let start = prefix.create_key(&0);
-        let end = prefix.create_key(&(chunk_count as u32));
-        let mut event_indexes = Vec::with_capacity(self.len());
-
-        with_map(|m| {
-            for (key, bytes) in m.range(start..end) {
-                assert_eq!(key.chunk_index() as usize, event_indexes.len() / CHUNK_SIZE);
-                event_indexes.extend(decode_chunk(bytes));
-            }
-        });
-        assert_eq!(event_indexes.len(), self.stable_memory_len());
-
-        event_indexes.append(&mut self.on_heap);
-        self.on_heap = event_indexes;
-        self.chunk_first_event_indexes = Vec::new();
+        let end = prefix.create_key(&(self.chunk_first_event_indexes.len() as u32));
+        let chunks: Vec<_> = with_map(|m| m.range(start..end).map(|(_, bytes)| ByteBuf::from(bytes)).collect());
+        assert_eq!(chunks.len(), self.chunk_first_event_indexes.len());
+        chunks
     }
 
-    // Moves up to `max_count` full chunks from the heap into stable memory, returning how many were
-    // moved
-    pub fn migrate_to_stable_memory(&mut self, events_prefix: &ChatEventKeyPrefix, max_count: usize) -> usize {
-        let count = self.on_heap_count_to_migrate().min(max_count);
-        if count == 0 {
-            return 0;
-        }
-
+    // Writes the chunks exported from another list (see `export_chunks`) under this list's prefix.
+    // This list must be a copy of that one, so that it has the same chunks.
+    pub fn import_chunks(&self, events_prefix: &ChatEventKeyPrefix, chunks: Vec<ByteBuf>) {
+        assert_eq!(chunks.len(), self.chunk_first_event_indexes.len());
         let prefix = MessageEventIndexesKeyPrefix::from(events_prefix);
-        let mut entries = Vec::with_capacity(count);
-        for chunk in self.on_heap.chunks_exact(CHUNK_SIZE).take(count) {
-            let chunk_index = self.chunk_first_event_indexes.len() as u32;
-            entries.push((prefix.create_key(&chunk_index), encode_chunk(chunk)));
-            self.chunk_first_event_indexes.push(chunk[0]);
-        }
-        // The chunk indexes are increasing, so the entries are already in key order
-        with_map_mut(|m| m.insert_many(entries));
-
-        self.on_heap.drain(..count * CHUNK_SIZE);
-        if self.on_heap.len() < CHUNK_SIZE {
-            // Release the rest of the allocation, keeping enough space to fill the latest chunk
-            self.on_heap.shrink_to(CHUNK_SIZE);
-        }
-
-        count
-    }
-
-    // The number of full chunks on the heap which are yet to be moved into stable memory
-    pub fn on_heap_count_to_migrate(&self) -> usize {
-        self.on_heap.len() / CHUNK_SIZE
+        // The chunk indexes are increasing, so the entries are in key order
+        with_map_mut(|m| {
+            m.insert_many(
+                chunks
+                    .into_iter()
+                    .enumerate()
+                    .map(|(chunk_index, bytes)| (prefix.create_key(&(chunk_index as u32)), bytes.into_vec())),
+            )
+        });
     }
 
     fn stable_memory_len(&self) -> usize {
@@ -204,62 +166,6 @@ fn decode_chunk(bytes: Vec<u8>) -> impl Iterator<Item = EventIndex> {
         previous += leb128::read::unsigned(&mut cursor).unwrap() as u32;
         Some(EventIndex::from(previous))
     })
-}
-
-// Serialized as a plain list of event indexes while nothing is in stable memory, which is the format
-// used before the event indexes were moved into stable memory. So a list which hasn't yet been
-// migrated, or which has been copied onto the heap to be imported into a community, can be read by a
-// canister which expects that format.
-impl Serialize for MessageEventIndexes {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if self.chunk_first_event_indexes.is_empty() {
-            self.on_heap.serialize(serializer)
-        } else {
-            let mut state = serializer.serialize_struct("MessageEventIndexes", 2)?;
-            state.serialize_field("h", &self.on_heap)?;
-            state.serialize_field("c", &self.chunk_first_event_indexes)?;
-            state.end()
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for MessageEventIndexes {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(MessageEventIndexesVisitor)
-    }
-}
-
-struct MessageEventIndexesVisitor;
-
-#[derive(Deserialize)]
-struct MessageEventIndexesFields {
-    #[serde(rename = "h")]
-    on_heap: Vec<EventIndex>,
-    #[serde(rename = "c")]
-    chunk_first_event_indexes: Vec<EventIndex>,
-}
-
-impl<'de> Visitor<'de> for MessageEventIndexesVisitor {
-    type Value = MessageEventIndexes;
-
-    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-        formatter.write_str("a list of event indexes or a map")
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Self::Value, A::Error> {
-        Ok(MessageEventIndexes {
-            on_heap: Vec::deserialize(SeqAccessDeserializer::new(seq))?,
-            chunk_first_event_indexes: Vec::new(),
-        })
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-        let fields = MessageEventIndexesFields::deserialize(MapAccessDeserializer::new(map))?;
-        Ok(MessageEventIndexes {
-            on_heap: fields.on_heap,
-            chunk_first_event_indexes: fields.chunk_first_event_indexes,
-        })
-    }
 }
 
 #[cfg(test)]
@@ -315,41 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn serialized_as_vec_if_nothing_in_stable_memory() {
-        init_stable_memory_map();
-        let events_prefix = events_prefix(1);
-        let model = random_event_indexes(3 * CHUNK_SIZE + 5);
-
-        // Deserialize from the previous format, then check reads work before and after migrating
-        let bytes = msgpack::serialize_then_unwrap(&model);
-        let mut message_event_indexes: MessageEventIndexes = msgpack::deserialize_then_unwrap(&bytes);
-        assert_eq!(msgpack::serialize_then_unwrap(&message_event_indexes), bytes);
-        assert_eq!(message_event_indexes.on_heap_count_to_migrate(), 3);
-        assert_matches_model(&message_event_indexes, &events_prefix, &model);
-
-        assert_eq!(message_event_indexes.migrate_to_stable_memory(&events_prefix, 2), 2);
-        assert_eq!(message_event_indexes.on_heap_count_to_migrate(), 1);
-        assert_matches_model(&message_event_indexes, &events_prefix, &model);
-
-        assert_eq!(message_event_indexes.migrate_to_stable_memory(&events_prefix, 2), 1);
-        assert_eq!(message_event_indexes.migrate_to_stable_memory(&events_prefix, 2), 0);
-        assert_eq!(message_event_indexes.on_heap.len(), 5);
-        assert_matches_model(&message_event_indexes, &events_prefix, &model);
-
-        // Once there are chunks in stable memory, the serialized form is a map
-        let bytes = msgpack::serialize_then_unwrap(&message_event_indexes);
-        assert!(msgpack::deserialize::<Vec<EventIndex>, _>(bytes.as_slice()).is_err());
-        let deserialized: MessageEventIndexes = msgpack::deserialize_then_unwrap(&bytes);
-        assert_eq!(deserialized.on_heap, message_event_indexes.on_heap);
-        assert_eq!(
-            deserialized.chunk_first_event_indexes,
-            message_event_indexes.chunk_first_event_indexes
-        );
-        assert_matches_model(&deserialized, &events_prefix, &model);
-    }
-
-    #[test]
-    fn copy_to_heap_then_migrate_under_new_prefix() {
+    fn chunks_are_exported_then_imported_under_a_new_prefix() {
         init_stable_memory_map();
         let events_prefix = events_prefix(1);
         let new_events_prefix = events_prefix_for_thread(2, 5);
@@ -360,17 +232,12 @@ mod tests {
             message_event_indexes.push(&events_prefix, MessageIndex::from(message_index as u32), *event_index);
         }
 
-        message_event_indexes.copy_to_heap(&events_prefix);
-        assert!(message_event_indexes.chunk_first_event_indexes.is_empty());
-        assert_eq!(message_event_indexes.on_heap, model);
-
         // This is what the community receives
+        let chunks = message_event_indexes.export_chunks(&events_prefix);
+        assert_eq!(chunks.len(), 5);
         let bytes = msgpack::serialize_then_unwrap(&message_event_indexes);
-        assert_eq!(bytes, msgpack::serialize_then_unwrap(&model));
         let mut imported: MessageEventIndexes = msgpack::deserialize_then_unwrap(&bytes);
-
-        while imported.migrate_to_stable_memory(&new_events_prefix, 2) > 0 {}
-        assert_eq!(imported.chunk_first_event_indexes.len(), 5);
+        imported.import_chunks(&new_events_prefix, chunks);
         assert_matches_model(&imported, &new_events_prefix, &model);
 
         let mut next_event_index = u32::from(*model.last().unwrap());
@@ -384,7 +251,6 @@ mod tests {
         assert_matches_model(&imported, &new_events_prefix, &model);
 
         // The original chunks are untouched
-        message_event_indexes.migrate_to_stable_memory(&events_prefix, usize::MAX);
         assert_matches_model(&message_event_indexes, &events_prefix, &model[..5 * CHUNK_SIZE + 3]);
         assert_eq!(chunk_count_in_stable_memory(&events_prefix), 5);
         assert_eq!(chunk_count_in_stable_memory(&new_events_prefix), 6);

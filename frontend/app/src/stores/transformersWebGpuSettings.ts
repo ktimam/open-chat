@@ -1,4 +1,4 @@
-import { get, writable } from "svelte/store";
+import { get, writable } from "@client/reactiveStores";
 import { TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS } from "../utils/transformersWebGpuOutputLimits";
 
 export const TRANSFORMERS_WEBGPU_SETTINGS_KEY = "openchat_transformers_webgpu_runtime_settings_v1";

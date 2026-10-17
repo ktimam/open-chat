@@ -41,7 +41,10 @@ describe("direct AI-app card client routing", () => {
         }
 
         const worker = source("../openchat-worker/src/worker.ts");
-        expect(worker).toContain('case "createAiAppPrivateMatchCapability":');
+        expect(worker).toContain("createAiAppPrivateMatchCapability: (payload, agent) => {");
+        expect(worker).toContain(
+            "return agent.createAiAppPrivateMatchCapability( payload.chatId, payload.threadRootMessageIndex, payload.messageId, payload.appId, payload.appRevision, payload.actionId, payload.recipientKeyScheme, payload.recipientPublicKey, );",
+        );
         const publicClient = source("../openchat-client/src/openchat.ts");
         expect(publicClient).toContain('kind: "createAiAppPrivateMatchCapability"');
         expect(publicClient).toContain("recipientPublicKey: recipientPublicKey.slice()");

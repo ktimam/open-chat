@@ -8,15 +8,87 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Look up a member's previous user ids in the LocalUserIndex when checking their gate again ([#9970](https://github.com/open-chat-labs/open-chat/pull/9970))
+- Stop tracking the async work in progress, since nothing reads it any more ([#9972](https://github.com/open-chat-labs/open-chat/pull/9972))
+
+### Removed
+
+- Remove the code which read event data from the heap now that it has all moved into stable memory ([#9968](https://github.com/open-chat-labs/open-chat/pull/9968))
+- Remove the jobs which replaced users' old ids, and the mapping of old ids to new, now that every id held is the latest ([#9970](https://github.com/open-chat-labs/open-chat/pull/9970))
+
+## [[2.0.2141](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2141-group)] - 2026-10-14
+
+### Changed
+
+- Replace the ids users had before being migrated with their latest ids in every event ([#9929](https://github.com/open-chat-labs/open-chat/pull/9929))
+- Replace the ids of mentioned users and of direct chats replied to with their latest ids ([#9939](https://github.com/open-chat-labs/open-chat/pull/9939))
+- Write the members and proposal events updated in bulk to stable memory together ([#9940](https://github.com/open-chat-labs/open-chat/pull/9940))
+- Replace the ids users had before being migrated with their latest ids throughout the rest of the group's state ([#9943](https://github.com/open-chat-labs/open-chat/pull/9943))
+- Tell the LocalUserIndex when the jobs replacing migrated users' old ids have completed ([#9949](https://github.com/open-chat-labs/open-chat/pull/9949))
+- Show in the metrics whether the jobs replacing migrated users' old ids were last reported complete ([#9950](https://github.com/open-chat-labs/open-chat/pull/9950))
+- Resolve a User canister's id to the user's latest id when removing, blocking or paying a member, and refuse one which can't be resolved, unless it's a bot's ([#9953](https://github.com/open-chat-labs/open-chat/pull/9953))
+- Replace old user ids in the mentions in the created event's description, report notes, freeze reasons and bot command text ([#9954](https://github.com/open-chat-labs/open-chat/pull/9954))
+
+### Removed
+
+- Remove the one-off which checked recurring gates again for lapsed migrated members, now that it has run ([#9915](https://github.com/open-chat-labs/open-chat/pull/9915))
+- Remove what was only used for users in User canisters, including `register_proposal_vote` and `c2c_tip_message` ([#9919](https://github.com/open-chat-labs/open-chat/pull/9919))
+- Remove what was only needed while users were being migrated, including the `UserIdMigrated` event and the record of former members ([#9922](https://github.com/open-chat-labs/open-chat/pull/9922))
+- Remove moving chat events data from the heap into stable memory, refusing to upgrade while any is left, and export users' metrics and message event indexes alongside the group when importing it ([#9955](https://github.com/open-chat-labs/open-chat/pull/9955))
+
+### Fixed
+
+- Apply changes sent by other canisters while frozen by a platform moderator ([#9912](https://github.com/open-chat-labs/open-chat/pull/9912))
+- Keep the cached copy of an event up to date once earlier cached events have been removed ([#9929](https://github.com/open-chat-labs/open-chat/pull/9929))
+
+## [[2.0.2133](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2133-group)] - 2026-10-12
+
+### Added
+
+- Add a `tip_messages` permission, defaulting to `react_to_messages`, and apply it to `tip_message` requests ([#9900](https://github.com/open-chat-labs/open-chat/pull/9900))
+
+### Fixed
+
+- Check a recurring gate under a migrated member's old ids before they lapse ([#9892](https://github.com/open-chat-labs/open-chat/pull/9892))
+- Check recurring gates again for lapsed migrated members, unlapsing those who pass ([#9893](https://github.com/open-chat-labs/open-chat/pull/9893))
+- Check an SNS neuron gate under a MultiUser user's principal and old ids ([#9894](https://github.com/open-chat-labs/open-chat/pull/9894))
+
+## [[2.0.2122](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2122-group)] - 2026-10-08
+
+### Changed
+
+- Cancel the job to mark a P2P swap expired once the swap has ended ([#9832](https://github.com/open-chat-labs/open-chat/pull/9832))
+
+### Fixed
+
+- Delete the files sent in a thread's replies when its root message is removed ([#9850](https://github.com/open-chat-labs/open-chat/pull/9850))
+
+## [[2.0.2111](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2111-group)] - 2026-10-07
+
+### Fixed
+
+- Accept tips on a migrated user's messages sent before their migration, paying and notifying them under their new id ([#9816](https://github.com/open-chat-labs/open-chat/pull/9816))
+- Notify a migrated user of activity on their messages sent before their migration, and refund their prizes sent before their migration to their new wallet ([#9817](https://github.com/open-chat-labs/open-chat/pull/9817))
+
+## [[2.0.2102](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2102-group)] - 2026-10-06
+
+### Changed
+
 - Tell a removed user's canister only via the queue of events for users, among the other events ([#9743](https://github.com/open-chat-labs/open-chat/pull/9743))
 - Check the cycles balance as background jobs run, not only as updates are handled ([#9747](https://github.com/open-chat-labs/open-chat/pull/9747))
 - Ask for a top up once the cycles above the freezing threshold fall below 1T, or below twice the threshold ([#9748](https://github.com/open-chat-labs/open-chat/pull/9748))
 - Return the details in full when there are more member updates than `max_members` ([#9767](https://github.com/open-chat-labs/open-chat/pull/9767))
+- Instantiate the msgpack (de)serializers of widely shared types once, in `types`, cutting the code by 198KB ([#9804](https://github.com/open-chat-labs/open-chat/pull/9804))
+- Bump the rmp-serde fork to one which reads numbers before visiting them, cutting the code by 754KB ([#9808](https://github.com/open-chat-labs/open-chat/pull/9808))
 
 ### Removed
 
 - Remove the one-off `post_upgrade` jobs and the legacy user event queue now that they have run on prod ([#9738](https://github.com/open-chat-labs/open-chat/pull/9738))
 - Remove the fallback to an approval of the group's default account when taking an access gate's payment ([#9738](https://github.com/open-chat-labs/open-chat/pull/9738))
+
+### Fixed
+
+- Retry payments whose ledger can't be called after a growing delay rather than every round, and park those to uninstalled or deleted ledgers ([#9792](https://github.com/open-chat-labs/open-chat/pull/9792))
 
 ## [[2.0.2088](https://github.com/open-chat-labs/open-chat/releases/tag/v2.0.2088-group)] - 2026-10-02
 

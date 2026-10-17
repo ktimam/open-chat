@@ -5,7 +5,6 @@ export * from "./state";
 export * from "./state/bots.svelte";
 export { debouncedDerived, withEqCheck } from "./state/reactivity.svelte";
 export * from "./stores";
-export { immutableStore } from "./stores/immutable";
 export { createMapStore } from "./stores/mapStore";
 export { createSetStore } from "./stores/setStore";
 export type { TypersByKey } from "./stores/typing";
@@ -28,10 +27,31 @@ export {
     TimelineGrouper,
 } from "./utils/chat";
 export * from "./utils/cryptoFormatter";
+export { candidateGroupFromChat, groupChanges, hasAccessGateChanged } from "./utils/group.svelte";
+export { communityChanges } from "./utils/community";
+export { executionPaymentAmount, proposalFundsRequired } from "./utils/proposal";
+export { inviteLinkUrl } from "./utils/inviteLink";
+export { postLoginJoin } from "./utils/join";
+export { profileChanges } from "./utils/profile";
 export type { TrackingCategory } from "./utils/ga";
 export { toRecord } from "./utils/list";
 export { quantiseWaveform, type Dimensions } from "./utils/media";
 export * from "./utils/permissions";
 export { Poller } from "./utils/poller";
 export * from "./utils/routes";
+export { formatTimeRemaining } from "./utils/time";
 export * from "./utils/url";
+export { writable, readable, derived, get } from "./utils/stores";
+export type { Readable, Writable, Subscriber } from "./utils/stores";
+export { prepareServiceWorkerBeforeApplicationStart } from "./utils/updateSw";
+export {
+    BrowserAccountLinkFlow,
+    createBrowserLinkPasskey,
+    browserSignInError,
+} from "./utils/browserAccountLink";
+export {
+    createNativeBrowserAuthVerifier,
+    type NativeBrowserAuthChallenge,
+} from "./utils/nativeBrowserAuth";
+export { signNativeBrowserChallenge } from "./utils/nativeBrowserSigner";
+export { startLocalBrowserAuthPage } from "./utils/localBrowserAuthPage";

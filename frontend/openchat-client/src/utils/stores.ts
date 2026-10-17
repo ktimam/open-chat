@@ -90,6 +90,9 @@ function executeCallbacks(callbacks: (() => void)[]) {
     if (thrown) throw error;
 }
 
+// `start` runs when the first subscriber arrives, and the function it returns when the last one
+// leaves. Unlike svelte/store, `get()` and `.value` don't start the store: a store with a `start`
+// reads its initial value until something subscribes to it.
 export function writable<T>(
     value: T,
     start?: StartStopNotifier<T>,
@@ -107,8 +110,12 @@ export function readable<T>(
     return {
         subscribe: (subscriber: Subscriber<T>, invalidate?: () => void) =>
             store.subscribe(subscriber, invalidate),
-        value: store.value,
-        dirty: store.dirty,
+        get value() {
+            return store.value;
+        },
+        get dirty() {
+            return store.dirty;
+        },
     };
 }
 
@@ -120,6 +127,7 @@ export function derived<S extends Stores, T>(
     return new _Derived(stores, fn, equalityCheck ?? ((a, b) => a === b));
 }
 
+// Reads `.value`, so unlike svelte/store's `get` it doesn't start a store nobody subscribes to.
 export function get<T>(store: Readable<T>): T {
     return store.value;
 }
@@ -150,7 +158,10 @@ class _Writable<T> {
 
         if (this.#subscriptions.size === 1) {
             if (this.#start !== undefined) {
-                const stop = this.#start(this.set, this.update);
+                const stop = this.#start(
+                    (value) => this.set(value),
+                    (fn) => this.update(fn),
+                );
                 if (typeof stop === "function") {
                     this.#stop = stop;
                 }

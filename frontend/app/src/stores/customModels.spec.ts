@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
     addCustomModel,
+    customModels,
     type CustomModelEntry,
     fileNameFromUrl,
     getCustomModels,
@@ -70,6 +71,28 @@ describe("custom-models store", () => {
         expect(addCustomModel(e)).toEqual({ ok: true });
         const list = getCustomModels();
         expect(list.map((m) => m.id)).toEqual([e.id]);
+    });
+
+    it("keeps the readonly store usable by mounted subscribers and direct client reads", () => {
+        const e = entry();
+        const observed: string[][] = [];
+        const { subscribe } = customModels;
+        const unsubscribe = subscribe((models) => observed.push(models.map((model) => model.id)));
+        try {
+            expect(addCustomModel(e)).toEqual({ ok: true });
+            expect(observed.at(-1)).toEqual([e.id]);
+            expect(customModels.value).toEqual(getCustomModels());
+
+            removeCustomModel(e.id);
+            expect(observed.at(-1)).toEqual([]);
+            expect(customModels.value).toEqual([]);
+        } finally {
+            unsubscribe();
+        }
+
+        const count = observed.length;
+        expect(addCustomModel(e)).toEqual({ ok: true });
+        expect(observed).toHaveLength(count);
     });
 
     it("rejects a duplicate id", () => {

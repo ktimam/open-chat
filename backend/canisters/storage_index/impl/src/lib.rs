@@ -1,7 +1,6 @@
 use crate::model::bucket_event_batch::{BucketEventBatch, EventToSync};
 use crate::model::buckets::{BucketRecord, Buckets};
 use crate::model::files::Files;
-use crate::model::files_reconciliation::{FilesReconciliation, FilesReconciliationMetrics};
 use crate::model::vault_event_batch::VaultEventBatch;
 use candid::{CandidType, Principal};
 use canister_state_macros::canister_state;
@@ -96,7 +95,6 @@ impl RuntimeState {
             bucket_upgrades_in_progress: bucket_upgrade_metrics.in_progress,
             bucket_upgrades_failed: bucket_upgrade_metrics.failed,
             bucket_canister_wasm: self.data.bucket_canister_wasm.version,
-            files_reconciliation: self.data.files_reconciliation.metrics(),
             cycles_dispenser_config: self.data.cycles_dispenser_config.clone(),
             stable_memory_sizes: memory::memory_sizes(),
             canister_ids: CanisterIds {
@@ -141,8 +139,6 @@ struct Data {
     #[serde(default)]
     pub fire_and_forget_handler: FireAndForgetHandler,
     pub canisters_requiring_upgrade: CanistersRequiringUpgrade,
-    #[serde(default)]
-    pub files_reconciliation: FilesReconciliation,
     pub total_cycles_spent_on_canisters: Cycles,
     pub cycles_dispenser_config: CyclesDispenserConfig,
     #[serde(default = "icp_ledger_canister_id")]
@@ -191,7 +187,6 @@ impl Data {
             user_index_canister_id: None,
             fire_and_forget_handler: FireAndForgetHandler::default(),
             canisters_requiring_upgrade: CanistersRequiringUpgrade::default(),
-            files_reconciliation: FilesReconciliation::default(),
             total_cycles_spent_on_canisters: 0,
             cycles_dispenser_config,
             icp_ledger_canister_id,
@@ -213,20 +208,7 @@ impl Data {
                 let allowance_exceeded_by = bytes_used_after_upload.saturating_sub(user.byte_limit);
                 if allowance_exceeded_by > 0 {
                     if user.delete_oldest_if_limit_exceeded {
-                        let mut total_size = 0u64;
-                        let files_to_delete: Vec<_> = self
-                            .files
-                            .iter_user_files_from_oldest(user_id)
-                            .take_while(|f| {
-                                if total_size < allowance_exceeded_by {
-                                    let size = self.files.blob_size(&f.hash).unwrap_or_default();
-                                    total_size = total_size.saturating_add(size);
-                                    true
-                                } else {
-                                    false
-                                }
-                            })
-                            .collect();
+                        let files_to_delete = self.files.oldest_user_files_totalling(user_id, allowance_exceeded_by);
 
                         for file_to_delete in files_to_delete {
                             self.bucket_event_sync_queue
@@ -389,7 +371,6 @@ pub struct Metrics {
     pub bucket_upgrades_in_progress: u64,
     pub bucket_upgrades_failed: Vec<FailedUpgradeCount>,
     pub bucket_canister_wasm: BuildVersion,
-    pub files_reconciliation: FilesReconciliationMetrics,
     pub cycles_dispenser_config: CyclesDispenserConfig,
     pub stable_memory_sizes: BTreeMap<u8, u64>,
     pub canister_ids: CanisterIds,

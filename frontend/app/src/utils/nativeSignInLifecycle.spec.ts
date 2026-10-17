@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { flushSync, mount, tick, unmount } from "svelte";
-import { get } from "svelte/store";
+import { get } from "@client/utils/stores";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import HomeRouteV1 from "../components/home/HomeRoute.svelte";
 import HomeRouteV2 from "../components_mobile/home/HomeRoute.svelte";
@@ -23,8 +23,9 @@ const calls = vi.hoisted(() => ({
     stopVersionChecker: vi.fn(),
 }));
 vi.mock("@client", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return {
+        ...(await import("@client/utils/stores")),
         OpenChat: class {},
         AuthProvider: {
             PASSKEY: "Passkey",
@@ -43,7 +44,8 @@ vi.mock("@client", async () => {
         routeStore: writable({ kind: "home_route", scope: { kind: "none" } }),
     };
 });
-vi.mock("@shared", () => ({
+vi.mock("@shared", async () => ({
+    ...(await import("@shared/utils/configKeys")),
     ErrorCode: { AlreadyRegistered: 1, LinkingCodeNotFound: 2, MaxLinkedIdentitiesLimitReached: 3 },
 }));
 vi.mock("@utils/navigation", () => ({ navigate: calls.navigate }));
@@ -55,7 +57,7 @@ vi.mock("@src/i18n/i18n", () => ({
     supportedLanguages: [{ code: "en", name: "English" }],
 }));
 vi.mock("svelte-i18n", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return { locale: writable("en"), _: writable((key: string) => key) };
 });
 vi.mock("@src/utils/version.svelte", () => ({
@@ -65,10 +67,12 @@ vi.mock("@src/utils/version.svelte", () => ({
     },
 }));
 vi.mock("@src/utils/signin", async () => {
-    const { writable } = await import("svelte/store");
+    const { writable } = await import("@client/utils/stores");
     return {
         EmailSigninHandler: class {
-            subscribe = writable(false).subscribe;
+            #state = writable(false);
+            subscribe = (run: (value: boolean) => void, invalidate?: () => void) =>
+                this.#state.subscribe(run, invalidate);
         },
     };
 });
@@ -87,17 +91,16 @@ vi.mock("../components/Button.svelte", layout);
 vi.mock("../components/ButtonGroup.svelte", layout);
 vi.mock("../components/Input.svelte", layout);
 vi.mock("../components/Select.svelte", layout);
-vi.mock("../components/Translatable.svelte", layout);
+vi.mock("@shared_components/Translatable.svelte", layout);
 vi.mock("../components/ErrorMessage.svelte", layout);
 vi.mock("../components/icons/FancyLoader.svelte", layout);
-vi.mock("../components/home/EmailSigninFeedback.svelte", layout);
+vi.mock("@shared_components/home/EmailSigninFeedback.svelte", layout);
 vi.mock("../components/home/profile/OnBoardOptionLogo.svelte", layout);
 vi.mock("../components/home/profile/SignInOption.svelte", layout);
 vi.mock("../components/onboard/SignUp.svelte", layout);
 vi.mock("../components_mobile/onboard/SignUp.svelte", layout);
 vi.mock("../components_mobile/ErrorMessage.svelte", layout);
 vi.mock("../components_mobile/Progress.svelte", layout);
-vi.mock("../components_mobile/Translatable.svelte", layout);
 vi.mock("@shared_components/Markdown.svelte", layout);
 vi.mock("@shared_components/Loading.svelte", layout);
 vi.mock("../components/landingpages/LandingPage.svelte", layout);
