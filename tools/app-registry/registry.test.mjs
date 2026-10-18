@@ -166,6 +166,52 @@ const inboxEndpoint = {
   host: "https://gateway.example",
   canisterId: "rrkah-fqaaa-aaaaa-aaaaq-cai",
 };
+test("preparation accepts a public setup-code endpoint without adding authority to the descriptor", async () => {
+  const sample = await fixture({ catalogChange: value => { value.apps[0].setupCode = inboxEndpoint; } });
+  const result = await prepareRegistration(sample.options);
+  const descriptor = JSON.parse(await readFile(path.join(sample.options.outputDirectory, "registration-descriptor.json"), "utf8"));
+  assert.equal(Object.hasOwn(descriptor, "setupCode"), false);
+  assert.equal(result.verified.catalog.sha256, hash(await readFile(sample.catalogFile)));
+  assert.equal(result.processorExecuted, false);
+  assert.equal(result.registered, false);
+  assert.equal(result.published, false);
+});
+for (const [name, endpoint] of [
+  ["null", null],
+  ["missing field", { version: 1, kind: "ic-canister", host: "https://gateway.example" }],
+  ["version", { ...inboxEndpoint, version: 2 }],
+  ["kind", { ...inboxEndpoint, kind: "http" }],
+  ["trailing slash", { ...inboxEndpoint, host: "https://gateway.example/" }],
+  ["path", { ...inboxEndpoint, host: "https://gateway.example/api" }],
+  ["query", { ...inboxEndpoint, host: "https://gateway.example?x=1" }],
+  ["fragment", { ...inboxEndpoint, host: "https://gateway.example#x" }],
+  ["credentials", { ...inboxEndpoint, host: "https://user:secret@gateway.example" }],
+  ["insecure", { ...inboxEndpoint, host: "http://gateway.example" }],
+  ["unapproved loopback", { ...inboxEndpoint, host: "http://localhost:8080" }],
+  ["unapproved TLS loopback", { ...inboxEndpoint, host: "https://localhost:8080" }],
+  ["malformed principal", { ...inboxEndpoint, canisterId: "not-a-principal" }],
+  ["noncanonical principal", { ...inboxEndpoint, canisterId: "RRKAH-FQAAA-AAAAA-AAAAQ-CAI" }],
+  ["anonymous", { ...inboxEndpoint, canisterId: "2vxsx-fae" }],
+  ["management", { ...inboxEndpoint, canisterId: "aaaaa-aa" }],
+  ["write capability", { ...inboxEndpoint, writeCapability: "A".repeat(43) }],
+  ["inbox ID", { ...inboxEndpoint, inboxId: "a".repeat(64) }],
+  ["private expiry", { ...inboxEndpoint, expiresAtMs: 123456789 }],
+  ["unknown field", { ...inboxEndpoint, transport: "browser" }],
+]) test(`preparation rejects ${name} in a public setup-code endpoint`, async () => {
+  const sample = await fixture({ catalogChange: value => { value.apps[0].setupCode = endpoint; } });
+  await assert.rejects(prepareRegistration(sample.options));
+  await assert.rejects(stat(sample.options.outputDirectory), { code: "ENOENT" });
+});
+test("local setup-code endpoints require the explicit loopback preparation option", async () => {
+  const sample = await fixture({ catalogChange: value => {
+    value.apps[0].setupCode = { ...inboxEndpoint, host: "http://127.0.0.1:8080" };
+  } });
+  await assert.rejects(prepareRegistration(sample.options));
+  const result = await prepareRegistration({ ...sample.options, allowLoopback: true });
+  assert.equal(result.allowLoopback, true);
+  assert.equal(result.published, false);
+});
+
 test("preparation accepts a public inbox endpoint without changing the registry descriptor", async () => {
   const sample = await fixture({
     catalogChange: (value) => {

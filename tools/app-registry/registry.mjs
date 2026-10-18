@@ -258,12 +258,15 @@ function validateCatalog(bytes, descriptor, allowLoopback) {
       "processor",
       "actions",
     ],
-    ["deliveryInbox", "setupScopes"],
+    ["deliveryInbox", "setupScopes", "setupCode"],
   );
   if (app.setupScopes !== undefined)
     assert.deepEqual(app.setupScopes, ["account", "chat"], "Invalid public setup scopes");
   if (app.deliveryInbox !== undefined)
     publicInbox(app.deliveryInbox, allowLoopback);
+  // Setup-code transport advertises only the same public canister coordinates, never a grant.
+  if (app.setupCode !== undefined)
+    publicInbox(app.setupCode, allowLoopback);
   for (const key of ["id", "revision", "name", "description"])
     assert.equal(
       app[key],

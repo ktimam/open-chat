@@ -1,6 +1,7 @@
 import type { AiActionDefinition } from "@shared";
 import {
     validateLocalAppInbox,
+    isLocalAppInboxGrant,
     type LocalAppInboxEndpoint,
     type LocalAppInboxGrant,
 } from "./localAppInbox";
@@ -49,6 +50,8 @@ export interface LocalAppCatalogEntry {
     readonly destination: string;
     /** Generic opt-in to separate account connection and opaque per-chat setup. */
     readonly setupScopes?: readonly ["account", "chat"];
+    /** Public, publisher-pinned rendezvous for copy/paste connection codes. */
+    readonly setupCode?: LocalAppInboxEndpoint;
     // Declared review context, not proof of the account/sheet that will ultimately save the action.
     readonly recipientLabel?: string;
     readonly deliveryEncryption?: LocalAppDeliveryEncryption;
@@ -225,7 +228,14 @@ export function parseLocalAppCatalog(json: string): LocalAppCatalog {
         exact(
             app,
             ["id", "revision", "name", "description", "destination", "actions"],
-            ["processor", "recipientLabel", "deliveryEncryption", "deliveryInbox", "setupScopes"],
+            [
+                "processor",
+                "recipientLabel",
+                "deliveryEncryption",
+                "deliveryInbox",
+                "setupScopes",
+                "setupCode",
+            ],
         );
         if (
             app.setupScopes !== undefined &&
@@ -246,6 +256,11 @@ export function parseLocalAppCatalog(json: string): LocalAppCatalog {
             app.deliveryEncryption = validateLocalAppDeliveryEncryption(app.deliveryEncryption);
         if (app.deliveryInbox !== undefined)
             app.deliveryInbox = validateLocalAppInbox(app.deliveryInbox);
+        if (app.setupCode !== undefined) {
+            const endpoint = validateLocalAppInbox(app.setupCode);
+            if (isLocalAppInboxGrant(endpoint)) invalid();
+            app.setupCode = endpoint;
+        }
         text(app.destination, 2048);
         let destination: URL;
         try {

@@ -76,6 +76,37 @@ function fixture() {
     };
 }
 
+describe("code connection endpoint declarations", () => {
+    const endpoint = {
+        version: 1,
+        kind: "ic-canister",
+        host: "https://icp-api.io",
+        canisterId: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+    };
+    it("accepts optional public endpoints while retaining old catalogs", () => {
+        const input = fixture();
+        expect(parseLocalAppCatalog(JSON.stringify(input)).apps[0].setupCode).toBeUndefined();
+        Object.assign(input.apps[0], { setupCode: endpoint });
+        expect(parseLocalAppCatalog(JSON.stringify(input)).apps[0].setupCode).toEqual(endpoint);
+    });
+    it.each([
+        { ...endpoint, host: "http://remote.example" },
+        { ...endpoint, host: "https://user:secret@example.test" },
+        { ...endpoint, canisterId: "2vxsx-fae" },
+        {
+            ...endpoint,
+            inboxId: "a".repeat(64),
+            writeCapability: "A".repeat(43),
+            expiresAtMs: Date.now() + 1000,
+        },
+        { ...endpoint, extra: true },
+    ])("rejects unsafe or authority-bearing code endpoints %j", (setupCode) => {
+        const input = fixture();
+        Object.assign(input.apps[0], { setupCode });
+        expect(() => parseLocalAppCatalog(JSON.stringify(input))).toThrow();
+    });
+});
+
 describe("imported declarative local app catalog", () => {
     it("validates and freezes an optional app view against the canonical handoff row", () => {
         const input = fixture();

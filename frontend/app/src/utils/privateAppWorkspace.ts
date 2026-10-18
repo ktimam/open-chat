@@ -44,6 +44,7 @@ import {
 } from "./localAppDraftChoices";
 import type { LocalAppDraftScalar } from "./localAppDraftFields";
 import { APP_SETUP_TIMEOUT_MS } from "./localAppSetupPopup";
+import { AppSetupCodeUnavailableError } from "./aiAppCodeTransport";
 import { parseLocalAppScopedSetupResult, type LocalAppSetupContext } from "./localAppScopedSetup";
 import {
     resolveLocalAppForChat,
@@ -83,6 +84,7 @@ export type ConnectLocalAppSetup = (
     descriptor: LocalAppDirectoryDescriptor,
     signal: AbortSignal,
     context?: LocalAppSetupContext | Promise<LocalAppSetupContext | undefined>,
+    publicApp?: Promise<LocalAppCatalogEntry>,
 ) => Promise<string>;
 
 export interface PrivateAppWorkspaceState {
@@ -1053,6 +1055,10 @@ export class PrivateAppWorkspace {
                     updates[app.id] = "Connect to approve the changed destination.";
                     continue;
                 }
+                if (!sameCardConfiguration(pkg.catalog.apps[0].setupCode, app.setupCode)) {
+                    updates[app.id] = "Connect to approve the changed code connection service.";
+                    continue;
+                }
                 if (
                     !sameCardConfiguration(
                         pkg.catalog.apps[0].deliveryInbox
@@ -1234,7 +1240,7 @@ export class PrivateAppWorkspace {
             busy: true,
             pendingConnectionAppId: appId,
             message:
-                "Checking the app recipe and opening its account connection. No chat content is sent.",
+                "Checking the app recipe and preparing its connection code. No chat content is sent.",
         });
         try {
             const cancelled = new Promise<never>((_resolve, reject) => {
@@ -1251,8 +1257,8 @@ export class PrivateAppWorkspace {
                     reject(new Error("App connection deadline exceeded"));
                 }, APP_SETUP_TIMEOUT_MS);
             });
-            // The explicit Connect gesture opens the exact directory setup URL before awaiting
-            // downloads. Neither result is adopted until both are verified as one package.
+            // Download once; the code transport receives only the verified public recipe.
+            // Neither result is adopted until both are verified as one package.
             const packagePromise = (this.deps.loadPublicPackage ?? loadLocalAppPublicPackage)(
                 descriptor,
                 abort.signal,
@@ -1263,9 +1269,16 @@ export class PrivateAppWorkspace {
                 return this.#setupContext(pkg.catalog.apps[0], descriptor, source, chatKey);
             });
             void contextPromise.catch(() => {});
-            // Opening remains synchronous with the user gesture; the hello waits for the
-            // verified public recipe and never sends private setup to an unverified publisher.
-            const connection = this.#connectAppSetup(descriptor, abort.signal, contextPromise);
+            const publicAppPromise = packagePromise.then((pkg) => pkg.catalog.apps[0]);
+            // Alternate transports may not consume this optional promise. Retain its rejection
+            // for the real transport without an unhandled rejection in that compatibility case.
+            void publicAppPromise.catch(() => {});
+            const connection = this.#connectAppSetup(
+                descriptor,
+                abort.signal,
+                contextPromise,
+                publicAppPromise,
+            );
             const [pkg, json] = await Promise.race([
                 Promise.all([packagePromise, connection]),
                 deadline,
@@ -1331,14 +1344,16 @@ export class PrivateAppWorkspace {
                         : "App connected. Existing chat assignments are retained. Enable it and use Open setup for a new chat. No chat content was sent.",
             });
             return true;
-        } catch {
+        } catch (error) {
             abort.abort();
             if (epoch === this.#epoch)
                 this.#set({
                     message:
                         this.#cancelledConnection === abort
                             ? "Connection cancelled. Existing apps and saved cards are unchanged."
-                            : "The app connection could not be verified. Previously installed setup is unchanged; retry Connect explicitly.",
+                            : error instanceof AppSetupCodeUnavailableError
+                              ? new AppSetupCodeUnavailableError().message
+                              : "The app connection could not be verified. Previously installed setup is unchanged; retry Connect explicitly.",
                 });
             return false;
         } finally {

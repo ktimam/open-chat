@@ -9,6 +9,7 @@
     import { localAppDeliveryStatus } from "../utils/localAppRelayDelivery";
     import PrivateAppDraftFields from "./PrivateAppDraftFields.svelte";
     import { connectLocalAppSetup } from "../utils/localAppSetupConnection";
+    import { localAppCodeConnection } from "../utils/localAppSetupCode";
     import LocalAppCardSurface from "./LocalAppCardSurface.svelte";
     import ActionCardLayout from "./ActionCardLayout.svelte";
     import AiAppIcon from "../components/home/communities/explore/AiAppIcon.svelte";
@@ -283,7 +284,30 @@
     onDestroy(() => workspace.clear());
 </script>
 
-{#if client.clientOnlyApps() && accountReady && (workspaceView.open || fieldEditBlocked)}
+{#if $localAppCodeConnection}
+    {@const connection = $localAppCodeConnection}
+    {#key connection}
+        {#if client.mobileLayout === "v2"}
+            {#await import("../components_mobile/home/AiAppLinkSheet.svelte") then component}
+                <component.default
+                    app={connection.app}
+                    codeTransport={connection.transport}
+                    onDismiss={() => {}}
+                    onLinked={() => {}}
+                />
+            {/await}
+        {:else}
+            {#await import("../components/home/AiAppLinkModal.svelte") then component}
+                <component.default
+                    app={connection.app}
+                    codeTransport={connection.transport}
+                    onDismiss={() => {}}
+                    onLinked={() => {}}
+                />
+            {/await}
+        {/if}
+    {/key}
+{/if}{#if client.clientOnlyApps() && accountReady && (workspaceView.open || fieldEditBlocked)}
     <!-- One live editor: virtualization/closing must not replace a pending invalid edit. -->
     <LocalAppCardSurface target={anchor} {inline} open={workspaceView.open} onClose={closeCard}>
         <div

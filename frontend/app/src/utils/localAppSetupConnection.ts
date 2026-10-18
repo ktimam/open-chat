@@ -1,4 +1,5 @@
-import { isTauri } from "@tauri-apps/api/core";
+import type { LocalAppCatalogEntry } from "./localAppCatalog";
+import { connectCodeAppSetup } from "./localAppSetupCode";
 import type { LocalAppDirectoryDescriptor } from "./localAppDirectory";
 import { localAppSessionNonce } from "./localAppHandoff";
 import {
@@ -16,14 +17,16 @@ export type LocalAppSetupContextInput =
     | LocalAppSetupContext
     | Promise<LocalAppSetupContext | undefined>;
 
-/** Called directly by the Connect click: browser popup creation must precede any await. */
+/** Active Connect path: the original code UI; Open app is a separate explicit gesture. */
 export function connectLocalAppSetup(
     descriptor: LocalAppDirectoryDescriptor,
     signal: AbortSignal,
     setupContext?: LocalAppSetupContextInput,
+    publicApp?: Promise<LocalAppCatalogEntry>,
 ): Promise<string> {
-    if (isTauri()) return connectNativeAppSetup(descriptor, signal, setupContext);
-    return connectBrowserAppSetup(descriptor, signal, setupContext);
+    // The original copy/open/check flow is shared by browser and APK. Never fall back
+    // to a localhost wrapper when a publisher has not enabled the code protocol.
+    return connectCodeAppSetup(descriptor, signal, setupContext, publicApp);
 }
 export function connectBrowserAppSetup(
     descriptor: Pick<LocalAppDirectoryDescriptor, "id" | "setupUrl">,

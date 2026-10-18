@@ -5,7 +5,20 @@ the checked-in official canister IDs without deploying modified OpenChat caniste
 Public branding, hosting and public Android-provider qualification remain outside
 the local-only acceptance below.
 
-## Current scoped-setup checkpoint — October 9, 2026
+## Current connection design — October 18, 2026
+
+The source now uses the original PR code dialog/sheet for both browser and APK:
+**Copy code → Open app → Check connection**, with Cancel available throughout.
+Open app navigates directly to the verified publisher's HTTPS connection page.
+There is no active localhost wrapper, iframe or browser callback in this setup
+path. The app's own canister exchanges encrypted setup under an expiring code;
+official OpenChat canisters are unchanged. Existing app-account/chat bindings,
+private cards and encrypted inbox delivery are preserved. See the
+[code connection contract](private-app-encrypted-delivery.md#app-owned-code-connection).
+This is a source/test description, not a claim that an installed APK is updated.
+Historical runtime results below apply only to their stated builds.
+
+## Historical scoped-setup checkpoint — October 9, 2026
 
 The verified local frontends are active and public registry generation 10 is
 published. The updated x86 local-test APK was installed in place; a cold emulator
@@ -797,13 +810,12 @@ Valid matching inbox grants are reused; reconnect is not a new grant for every
 chat. Pending encrypted entries remain in the IOU inbox and still require the
 normal IOU review/save. No official OpenChat canister change is required.
 
-The local-test APK uses a separate ten-minute setup bridge. A one-use random launch
-fragment is immediately removed from the browser URL and authenticates the initial
-local request; it never goes to the app publisher. The app's response is accepted
-only from the expected app frame/origin and nonce, then revalidated against the public
-package before installation. Neither HTTP GET nor the app receives an OpenChat
-session, chat history or draft. Closing/reloading an unfinished bridge requires a
-fresh Connect; it does not automatically retry.
+The browser and local-test APK now share the code connection described above.
+Earlier builds used a separate ten-minute localhost/frame setup bridge. Its
+compatibility helpers remain in source for existing tests, but the active Connect
+entry point never calls them or falls back to them when a publisher lacks the new
+code endpoint. This change concerns setup only; older encrypted delivery cards
+may still use the separate delivery transport documented below.
 
 The explicitly enabled unofficial browser profile offers all-WebGPU models on
 desktop as well as mobile. Select/download them in **On-device models** before

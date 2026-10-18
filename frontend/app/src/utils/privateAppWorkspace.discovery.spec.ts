@@ -22,7 +22,9 @@ import { verifyImportedLocalProcessor, type runIsolatedAppProcessor } from "./is
 import type { LocalDraftDelivery } from "./localAppDrafts";
 
 vi.mock("@client", async () => ({
-        ...(await import("@client/utils/stores")), currentUserIdStore: { value: "synthetic-account" } }));
+    ...(await import("@client/utils/stores")),
+    currentUserIdStore: { value: "synthetic-account" },
+}));
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
 vi.mock("./aiActionRunner", () => ({ extractPrivateAppAction: vi.fn() }));
 vi.mock("./nativeAppDelivery", () => ({
@@ -315,7 +317,14 @@ describe("automatic app setup atomicity and privacy", () => {
         expect(deps.deliver).not.toHaveBeenCalled();
     });
 
-    it.each(["private setup", "publisher", "destination", "inbox", "recipe"] as const)(
+    it.each([
+        "private setup",
+        "publisher",
+        "destination",
+        "inbox",
+        "code connection",
+        "recipe",
+    ] as const)(
         "reports a changed %s with a reviewed card without changing its approval or setup",
         async (change) => {
             const { workspace, deps, packages, setDirectory } = await fixture(
@@ -335,17 +344,24 @@ describe("automatic app setup atomicity and privacy", () => {
             let pkg = update.pkg;
             if (change === "publisher") {
                 descriptor = { ...descriptor, setupUrl: "https://publisher.test/new-connection" };
-            } else if (change === "destination" || change === "inbox") {
+            } else if (
+                change === "destination" ||
+                change === "inbox" ||
+                change === "code connection"
+            ) {
                 const document = JSON.parse(update.catalogJson);
                 if (change === "destination") {
                     document.apps[0].destination = "https://publisher.test/new-import";
                 } else {
-                    document.apps[0].deliveryInbox = {
-                        version: 1,
-                        kind: "ic-canister",
-                        host: "https://publisher.test",
-                        canisterId: Principal.fromUint8Array(new Uint8Array([1, 2, 3, 2])).toText(),
-                    };
+                    document.apps[0][change === "code connection" ? "setupCode" : "deliveryInbox"] =
+                        {
+                            version: 1,
+                            kind: "ic-canister",
+                            host: "https://publisher.test",
+                            canisterId: Principal.fromUint8Array(
+                                new Uint8Array([1, 2, 3, 2]),
+                            ).toText(),
+                        };
                 }
                 const catalogJson = JSON.stringify(document);
                 const bytes = new TextEncoder().encode(catalogJson);

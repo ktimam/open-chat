@@ -5,6 +5,7 @@
         privateAppWorkspaceState,
     } from "@utils/privateAppWorkspace";
     import { localAppDirectoryPresentation } from "@utils/localAppDirectoryPresentation";
+    import { localAppCodeConnection } from "@utils/localAppSetupCode";
     import { navigateToMainApps } from "@utils/mainAppsNavigation";
     import AiAppCard from "../components/home/communities/explore/AiAppCard.svelte";
     import AiAppModal from "../components/home/AiAppModal.svelte";
@@ -103,6 +104,9 @@
         ++operation;
     }
     function dismiss() {
+        // The original modal/sheet also dismisses during programmatic teardown.
+        // Swapping this detail for its code UI must not cancel that same attempt.
+        if ($localAppCodeConnection && $localAppCodeConnection.app.id === ownedConnectionId) return;
         cancelOwnedConnection();
         selectedId = undefined;
     }
@@ -112,7 +116,7 @@
         const id = selected.id;
         ownedConnectionId = id;
         connectionMessage =
-            "Opening the app's connection screen. Confirm your selected setup there.";
+            "Preparing a connection code. Copy it into the app, then check the connection here.";
         let ok = false;
         try {
             ok = await workspace.connectApp(id);
@@ -191,11 +195,12 @@
     {/each}
 </div>
 
-{#if selected}
+{#if selected && !$localAppCodeConnection}
+    {@const detailApp = selected}
     {#if mobile}
         <AiAppSheet
-            app={selected}
-            connected={selected.connected}
+            app={detailApp}
+            connected={detailApp.connected}
             {busy}
             connectionMessage={detailConnectionMessage}
             onDismiss={dismiss}
@@ -206,8 +211,8 @@
         />
     {:else}
         <AiAppModal
-            app={selected}
-            connected={selected.connected}
+            app={detailApp}
+            connected={detailApp.connected}
             {busy}
             connectionMessage={detailConnectionMessage}
             onDismiss={dismiss}

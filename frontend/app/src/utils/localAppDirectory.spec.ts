@@ -57,6 +57,33 @@ describe("public app inbox destination binding", () => {
     });
 });
 
+describe("public app code connection binding", () => {
+    const endpoint = {
+        version: 1,
+        kind: "ic-canister",
+        host: "https://icp-api.io",
+        canisterId: "rrkah-fqaaa-aaaaa-aaaaq-cai",
+    };
+    it("pins presence, host and canister in private and persisted setup", async () => {
+        const fixture = await directoryFixture();
+        const value = JSON.parse(fixture.catalogJson);
+        value.apps[0].setupCode = endpoint;
+        const advertised = parseLocalAppCatalog(JSON.stringify(value));
+        expect(bindConnectedLocalApp(JSON.stringify(value), advertised).setupCode).toEqual(
+            endpoint,
+        );
+        expect(() => bindConnectedLocalApp(JSON.stringify(value), fixture.pkg.catalog)).toThrow();
+        for (const changed of [
+            undefined,
+            { ...endpoint, host: "https://other.example" },
+            { ...endpoint, canisterId: "ryjl3-tyaaa-aaaaa-aaaba-cai" },
+        ]) {
+            value.apps[0].setupCode = changed;
+            expect(() => bindConnectedLocalApp(JSON.stringify(value), advertised)).toThrow();
+        }
+    });
+});
+
 type DirectoryJson = {
     version: number;
     apps: { name: string; processor: { byteLength: number }; [key: string]: unknown }[];

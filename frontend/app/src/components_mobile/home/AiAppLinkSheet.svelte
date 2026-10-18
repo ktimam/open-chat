@@ -12,7 +12,7 @@
     import { connectSurfaceOpening, openSurfaceExternally } from "@utils/aiAppSurfaces";
     import { aiAppLinkCompleted, cancelAiAppLinkConsent } from "@utils/aiAppLinkConsent";
     import { Body, BodySmall, CommonButton, Container, Sheet, Title } from "component-lib";
-    import type { AiAppLinkCode, AiAppRegistration, OpenChat } from "@client";
+    import type { AiAppLinkCode, OpenChat } from "@client";
     import { getContext } from "svelte";
     import Check from "svelte-material-icons/Check.svelte";
     import ContentCopy from "svelte-material-icons/ContentCopy.svelte";
@@ -22,11 +22,14 @@
     import { toastStore } from "../../stores/toast";
     import Translatable from "@shared_components/Translatable.svelte";
     import AiAppSurfaceDestination from "../../components/home/AiAppSurfaceDestination.svelte";
+    import { isLocalAiApp, type AiAppPresentation } from "@utils/localAppDirectoryPresentation";
+    import type { AiAppCodeTransport } from "@utils/aiAppCodeTransport";
 
     const client = getContext<OpenChat>("client");
 
     interface Props {
-        app: AiAppRegistration;
+        app: AiAppPresentation;
+        codeTransport?: AiAppCodeTransport;
         onDismiss: () => void;
         // The app has claimed the code (the user's key is now registered) — the caller closes the
         // sheet and resumes the propose that triggered it.
@@ -40,6 +43,7 @@
 
     let {
         app,
+        codeTransport,
         onDismiss,
         onLinked,
         purpose = "connect",
@@ -57,7 +61,17 @@
     // The app's registered "connect" surface — its pairing-code entry page. When declared, the
     // sheet offers a one-tap "open the right page" shortcut instead of leaving the user to hunt
     // through the app's menus for where the code goes.
-    let connectSurface = $derived(connectSurfaceOpening(app));
+    let connectSurface = $derived(isLocalAiApp(app) ? undefined : connectSurfaceOpening(app));
+    let connectUrl = $derived(codeTransport?.setupUrl ?? connectSurface?.url);
+
+    async function openConnectPage() {
+        try {
+            if (codeTransport) await codeTransport.openApp();
+            else if (connectUrl) openSurfaceExternally(client, connectUrl);
+        } catch {
+            linkCheckFailed = true;
+        }
+    }
 
     let loadingCode = $state(false);
     let codeFailed = $state(false);
@@ -92,7 +106,11 @@
             try {
                 // Creating a new code for the same (user, app) replaces the old one, so this doubles
                 // as the "get a new code" action once the current one expires.
-                linkCode = await client.createAiAppLinkCode(app.id);
+                linkCode = codeTransport
+                    ? await codeTransport.createCode()
+                    : !isLocalAiApp(app)
+                      ? await client.createAiAppLinkCode(app.id)
+                      : undefined;
                 codeFailed = linkCode === undefined;
             } catch {
                 linkCode = undefined;
@@ -115,7 +133,9 @@
     async function cancelLink() {
         if (completed || cancelling) return;
         cancelling = true;
-        await cancelAiAppLinkConsent(client, () => linkCode?.code, pendingCodeRequest);
+        if (codeTransport) await codeTransport.cancel();
+        else if (!isLocalAiApp(app))
+            await cancelAiAppLinkConsent(client, () => linkCode?.code, pendingCodeRequest);
         completed = true;
         onDismiss();
     }
@@ -135,13 +155,15 @@
         notLinkedYet = false;
         linkCheckFailed = false;
         try {
-            const keys = await client.myAiAppKeys();
+            const keys = codeTransport || isLocalAiApp(app) ? [] : await client.myAiAppKeys();
             if (cancelling || completed) return;
-            const linked =
-                purpose === "connect"
-                    ? aiAppLinkCompleted(keys, app.id)
-                    : previousConnection !== undefined &&
-                      aiAppLinkCompleted(keys, app.id, previousConnection);
+            const linked = codeTransport
+                ? await codeTransport.checkConnection()
+                : !isLocalAiApp(app) &&
+                  (purpose === "connect"
+                      ? aiAppLinkCompleted(keys, app.id)
+                      : previousConnection !== undefined &&
+                        aiAppLinkCompleted(keys, app.id, previousConnection));
             if (linked) {
                 completed = true;
                 onLinked();
@@ -205,8 +227,13 @@
             </Body>
         {/if}
         <BodySmall colour={"textSecondary"}>
-            Only the exact registered app canister can redeem this code. Replacement keys are
-            versioned so an old disconnect proof cannot revoke the new connection.
+            {#if codeTransport}
+                Paste this single-use code only into the app shown below. Setup is encrypted; no
+                chat messages or draft fields are sent. Use this code before the countdown expires.
+            {:else}
+                Only the exact registered app canister can redeem this code. Replacement keys are
+                versioned so an old disconnect proof cannot revoke the new connection.
+            {/if}
         </BodySmall>
 
         {#if linkCode !== undefined}
@@ -233,7 +260,7 @@
                     </BodySmall>
                 </li>
                 <li>
-                    {#if connectSurface !== undefined}
+                    {#if connectUrl !== undefined}
                         <BodySmall>
                             <Translatable
                                 resourceKey={i18nKey("aiApps.linkStepOpen", {
@@ -244,14 +271,11 @@
                         <div class="connect-destination">
                             <AiAppSurfaceDestination
                                 title={app.manifest.name}
-                                displayUrl={connectSurface.url}
-                                dataDisclosures={connectSurface.dataDisclosures}
+                                displayUrl={connectUrl}
+                                dataDisclosures={connectSurface?.dataDisclosures ?? []}
                             />
                         </div>
-                        <CommonButton
-                            onClick={() => openSurfaceExternally(client, connectSurface.url)}
-                            size={"small_text"}
-                        >
+                        <CommonButton onClick={openConnectPage} size={"small_text"}>
                             {#snippet icon(color, size)}
                                 <OpenInNew {color} {size} />
                             {/snippet}
@@ -339,7 +363,7 @@
                     {/if}
                 </CommonButton>
             {/if}
-            {#if purpose === "recovery"}
+            {#if purpose === "recovery" || codeTransport}
                 <CommonButton
                     disabled={loadingCode || cancelling}
                     onClick={cancelLink}

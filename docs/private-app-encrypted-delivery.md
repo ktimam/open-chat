@@ -14,12 +14,17 @@ See [the inbox contract](#optional-app-owned-durable-inbox) and the distinct
 ## User workflow
 
 1. Open Apps → AI Apps, open the app's card and choose Connect in its details.
-   Normal setup needs no file uploads or separate app-management page.
-2. Sign in to the app and select the intended account/sheet. The app recovers or creates
+   The original code dialog/sheet appears in both layouts: Copy code, Open app,
+   Check connection and Cancel. Normal setup needs no file uploads, localhost
+   connection wrapper or separate app-management page.
+2. Open app opens the publisher's exact verified HTTPS connection page directly.
+   Paste the code there, sign in to the app and select the intended account/sheet. The app recovers or creates
    the user's delivery keypair using its existing user-controlled key recovery.
 3. After explicit connection consent, the app provides its public delivery key and an
    opaque recipient binding alongside its prompts, schemas and private setup. Neither
    the private delivery key nor the sheet storage key is shared with OpenChat.
+   Return to OpenChat and choose Check connection. An account reconnect preserves
+   existing per-chat assignments; configuring a new chat is a separate scoped choice.
 4. Propose on the selected message/image. The selected local model or local reader and
    app-owned constrained processor extract fields on-device. No plaintext remote card
    verification is permitted. OpenChat has no app-specific field or business rules.
@@ -73,6 +78,43 @@ wait so they cannot replace a card's frozen configuration. Explicit connection i
 allowed without deleting cards. This uses client-side publisher discovery and the
 app's own connection page, not custom OpenChat registry/card canister APIs; no
 OpenChat canister change or deployment is required.
+
+## App-owned code connection
+
+The public catalog optionally declares `setupCode: { version: 1, kind:
+"ic-canister", host, canisterId }`. The endpoint uses the same strict host/canister
+validation as the app inbox, but cannot contain an inbox grant. The publisher's
+verified catalog, private setup binding and saved installation pin this endpoint.
+Adding, removing or changing it requires explicit Connect; automatic directory
+refresh never silently changes an existing connection or erases chat assignments.
+An older publisher without this field must update its connection service; there is
+no active fallback to the old localhost/BroadcastChannel setup wrapper.
+
+OpenChat creates a fresh ephemeral signing identity and a 32-byte random code held
+only in memory. The app-owned canister stores encrypted setup context/results with
+a hard ten-minute maximum lifetime; it never receives the raw code or plaintext configuration.
+OpenChat requests nine minutes, leaving one minute of headroom for small device/replica
+clock differences without loosening the server limit. The countdown shows the actual
+deadline. This is bounded clock-skew tolerance, not support for arbitrarily incorrect
+device clocks; a late create reply is rejected at the exact deadline.
+Only the creator may poll/cancel, while the authenticated app user must prove the
+code's claim secret to claim and complete. All operations are update calls. The
+code is copied separately and never added to the app URL, logs or saved settings.
+Explicit create retries reuse the same request ID, identity and ciphertext; no
+automatic network retry creates a second connection.
+
+Context binds the app ID, exact setup URL, client origin, expiry and scoped setup
+request. The encrypted result binds the app ID, setup URL, request ID and complete
+returned catalog. OpenChat validates those bindings, the public recipe and existing
+account/chat scope before adopting it. Cancel, navigation, expiry or an account
+change invalidates the attempt; late replies cannot reconnect it. Setup carries no
+chat messages or proposed field values. The origin is contextual information, not
+proof that the remote app authenticated the OpenChat account.
+
+This restores the original PR connection presentation without calling its custom
+`user_index` methods. The official OpenChat backend remains unchanged; the app's
+own backend supplies the code service. Durable encrypted inbox delivery and the
+app's second review/save step are unchanged.
 
 ## App-owned card presentation
 
