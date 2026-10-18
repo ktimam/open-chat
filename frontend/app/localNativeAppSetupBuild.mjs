@@ -3,7 +3,10 @@ import { fileURLToPath, URL } from "node:url";
 import { build } from "esbuild";
 
 /** Fixed app-setup page, independently gated from financial-draft and authentication transports. */
-export function localNativeAppSetupBuildPlugin({ enabled = false, applicationId = "dev.openchatfork.localtest" } = {}) {
+export function localNativeAppSetupBuildPlugin({
+    enabled = false,
+    applicationId = "dev.openchatfork.localtest",
+} = {}) {
     if (!["dev.openchatfork.localtest", "io.github.ktimam.openchatprivate"].includes(applicationId))
         throw new Error("Unsupported private app setup package");
     return {

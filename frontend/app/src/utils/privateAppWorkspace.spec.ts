@@ -19,7 +19,7 @@ import type {
 } from "./localAppSetupStore";
 
 vi.mock("@client", async () => ({
-        ...(await import("@client/utils/stores")),
+    ...(await import("@client/utils/stores")),
     currentUserIdStore: { value: "synthetic-account" },
 }));
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));

@@ -314,37 +314,37 @@ export interface AccessGatesCardsState {
 
 /** CreateGroupDialog `onCreate` value. */
 export interface CreateGroupResult {
-  name: string;
-  about: string;
-  /** Avatar gradient key when there is no photo. */
-  color: string;
-  coverKey: string;
-  /** The picked photo file (upload it yourself; the dialog's preview URL is revoked when it closes). */
-  avatarFile: File | null;
-  kind: 'group' | 'community' | 'channel' | 'embedded';
-  embedded: boolean;
-  /** Communities only. */
-  /** Communities only: a language code such as 'en' or 'fr'. */
-  language: string | null;
-  /** The picked cover image file, or null for a swatch (coverKey). */
-  coverFile: File | null;
-  /** Communities: the public channels to create. */
-  channels: string[];
-  /** Embedded channels: the page shown. */
-  url: string;
-  previewForNonMembers: boolean;
-  isPublic: boolean;
-  visibleHistory: boolean;
-  /** e.g. "12 hours", or null when messages are kept. */
-  disappearAfter: string | null;
-  /** The same duration in milliseconds, or null when messages are kept. */
-  disappearAfterMs: number | null;
-  /** User ids added (channels) or invited (groups, communities). */
-  members: string[];
-  /** Channels: user ids invited from outside the community. */
-  invites: string[];
-  /** `{ count: 0 }` when no gate was touched. */
-  gates: AccessGatesState | { count: 0 };
-  rules: { enabled: boolean; text: string };
-  permissions: GroupSettings['permissions'];
+    name: string;
+    about: string;
+    /** Avatar gradient key when there is no photo. */
+    color: string;
+    coverKey: string;
+    /** The picked photo file (upload it yourself; the dialog's preview URL is revoked when it closes). */
+    avatarFile: File | null;
+    kind: "group" | "community" | "channel" | "embedded";
+    embedded: boolean;
+    /** Communities only. */
+    /** Communities only: a language code such as 'en' or 'fr'. */
+    language: string | null;
+    /** The picked cover image file, or null for a swatch (coverKey). */
+    coverFile: File | null;
+    /** Communities: the public channels to create. */
+    channels: string[];
+    /** Embedded channels: the page shown. */
+    url: string;
+    previewForNonMembers: boolean;
+    isPublic: boolean;
+    visibleHistory: boolean;
+    /** e.g. "12 hours", or null when messages are kept. */
+    disappearAfter: string | null;
+    /** The same duration in milliseconds, or null when messages are kept. */
+    disappearAfterMs: number | null;
+    /** User ids added (channels) or invited (groups, communities). */
+    members: string[];
+    /** Channels: user ids invited from outside the community. */
+    invites: string[];
+    /** `{ count: 0 }` when no gate was touched. */
+    gates: AccessGatesState | { count: 0 };
+    rules: { enabled: boolean; text: string };
+    permissions: GroupSettings["permissions"];
 }

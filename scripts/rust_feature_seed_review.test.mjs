@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { localApkBuildPlan } from "./build-unofficial-local-apk.mjs";
+import { productionApkBuildPlan } from "./build-unofficial-production-apk.mjs";
+import { productionApkBundleMarker } from "../frontend/unofficialProductionApkProfile.mjs";
 import { UNOFFICIAL_LOCAL_CANISTERS } from "../frontend/unofficialLocalProfile.mjs";
 import { localApkBundleMarker } from "../frontend/unofficialLocalApkProfile.mjs";
 import { lockIdentities } from "./rust_feature_scope.mjs";
@@ -80,13 +83,35 @@ function currentClientFixture() {
   };
 }
 
+// These tests assert historical merge facts, not facts about today's merged lock.
+// Scoped CI requires fetch-depth: 0; missing pinned history must fail, never skip.
+function historicalClientFixture() {
+  const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const revision = "a701e878fac15d51683b31a56b7b49fb98b7306c";
+  const read = (path) => execFileSync("git", ["show", `${revision}:${path}`], {
+    cwd: repo,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  }).replaceAll("\r\n", "\n");
+  const cargoLock = read("Cargo.lock"), manifest = read("Cargo.toml");
+  assert.equal(hash(cargoLock), "cc7cd15531376a0f560e4626682a43deca6373bf01df1e7a064f7a4bdcb6493f");
+  assert.equal(hash(manifest), "102d09f9ebc6da1b015e8d8ad38798dbb2dc1ec49bae5768ca697e876449acf0");
+  return {
+    cargoLock,
+    sourceBytes: { "Cargo.toml": manifest },
+    config: JSON.parse(read("scripts/rust_feature_scope.current-client.json")),
+    review: JSON.parse(read("scripts/rust_feature_review.current-client.json")),
+  };
+}
+
 test("current-client live source review binds native model/auth/handoff/setup without claiming backend or release acceptance", () => {
   const value = currentClientFixture();
   const { config } = value;
   const result = verifyRustFeatureScopeReview(value);
   assert.equal(config.seeds.length, 26);
   assert.equal(config.profiles.length, 10);
-  assert.equal(result.reviewedSourceCount, 29);
+  assert.equal(result.reviewedSourceCount, 32);
   assert.equal(result.reviewedSeedProfileCount, 196);
   assert.equal(result.reviewedUnitCount, 31);
   assert.equal(result.rootCompletenessVerified, true);
@@ -138,6 +163,9 @@ test("current-client live source review binds native model/auth/handoff/setup wi
     "frontend/tauri-plugin-oc/permissions/local-app-setup.toml",
     "scripts/build-unofficial-local-apk.mjs",
     "frontend/unofficialLocalApkProfile.mjs",
+    "frontend/unofficialProductionApkProfile.mjs",
+    "frontend/src-tauri/tauri.private.conf.json",
+    "scripts/build-unofficial-production-apk.mjs",
   ]) {
     assert.throws(
       () =>
@@ -156,8 +184,17 @@ test("current-client live source review binds native model/auth/handoff/setup wi
   }
 });
 
-test("current-client review preserves historical merge provenance without changing native dependency owners or auth", () => {
-  const { config, review, sourceBytes } = currentClientFixture();
+test("current-client review binds merged main while preserving historical owner/auth provenance", () => {
+  const current = currentClientFixture();
+  const { config, review } = historicalClientFixture();
+  const { sourceBytes } = current;
+  assert.equal(current.config.sourceRevision.head, "54f3307bc6cc3a2b88a6afbdc06d90720f227f52");
+  assert.equal(current.config.sourceRevision.pendingMergeHead, "11ed95078e3ae8ae76bf2bdc094dd57b47459622");
+  assert.match(current.review.boundary, /upstream merge 5a77b86fdd4b6dc8819b6f615d183a7ff0e971d2/u);
+  assert.match(current.review.boundary, /previously deferred handoff\/setup changes/u);
+  assert.match(current.review.boundary, /no external Rust owner/u);
+  assert.match(current.review.boundary, /does not run Cargo/u);
+  assert.deepEqual(current.config.seeds.map(seed => seed.expected), config.seeds.map(seed => seed.expected));
   assert.equal(
     config.sourceRevision.head,
     "3b259b2f53c4d7b6bad30d9747bf3554281ca72f",
@@ -315,7 +352,7 @@ function restoreLockBefore0519Merge(cargoLock) {
 }
 
 test("0519 merge changes only two upstream backend edges, not any package identity", () => {
-  const { cargoLock } = currentClientFixture();
+  const { cargoLock } = historicalClientFixture();
   const previous = restoreLockBefore0519Merge(cargoLock);
   assert.deepEqual(lockIdentities(cargoLock), lockIdentities(previous));
   assert.equal(lockIdentities(cargoLock).size, 1235);
@@ -346,7 +383,7 @@ function restoreLockBeforePendingBackendRemoval(cargoLock) {
 }
 
 test("historical 5ca upstream lock-only merge preserves all conservative native package blocks and edges", () => {
-  const { config, cargoLock } = currentClientFixture();
+  const { config, cargoLock } = historicalClientFixture();
   const previous = restoreLockBeforePendingBackendRemoval(cargoLock);
   const closure = (bytes) => {
     const text = Buffer.from(bytes).toString("utf8").replaceAll("\r\n", "\n");
@@ -422,7 +459,7 @@ test("historical 5ca upstream lock-only merge preserves all conservative native 
 });
 
 test("historical bb2a merge lock refresh still reverses only backend edges and workspace registration", () => {
-  const { config, cargoLock, sourceBytes } = currentClientFixture();
+  const { config, cargoLock, sourceBytes } = historicalClientFixture();
   const lf = (bytes) =>
     Buffer.from(bytes).toString("utf8").replaceAll("\r\n", "\n");
   const current = restoreLockBeforePendingBackendRemoval(cargoLock);
@@ -478,6 +515,97 @@ test("historical bb2a merge lock refresh still reverses only backend edges and w
   assert(
     config.seeds.every((seed) => !seed.ownerManifest.startsWith("backend/")),
   );
+});
+
+function conservativeNativeClosure(bytes, seeds) {
+  const text = Buffer.from(bytes).toString("utf8").replaceAll("\r\n", "\n");
+  const identities = lockIdentities(text);
+  const blocks = new Map(text.split(/^\[\[package\]\]\n/mu).slice(1).map(raw => {
+    const scalar = key => raw.match(new RegExp(`^${key} = "([^"\\n]+)"$`, "mu"))?.[1] ?? null;
+    const id = JSON.stringify([scalar("name"), scalar("version"), scalar("source")]);
+    assert(identities.has(id));
+    const dependencies = raw.match(/^dependencies = \[\n([\s\S]*?)^\]$/mu)?.[1]
+      .split("\n").filter(Boolean).map(line => JSON.parse(line.trim().replace(/,$/u, ""))) ?? [];
+    return [id, { ...identities.get(id), raw, dependencies }];
+  }));
+  const pending = seeds.map(({ expected }) => JSON.stringify([expected.name, expected.version, expected.source]));
+  const reached = new Map();
+  while (pending.length) {
+    const id = pending.pop();
+    if (reached.has(id)) continue;
+    const block = blocks.get(id);
+    assert(block, `Missing scoped root/dependency ${id}`);
+    reached.set(id, block.raw);
+    for (const dependency of block.dependencies) {
+      const match = /^([^ ]+)(?: ([^ ]+))?(?: \(([^)]+)\))?$/u.exec(dependency);
+      assert(match, `Unsupported lock dependency ${dependency}`);
+      const matches = [...blocks.entries()].filter(([, entry]) => entry.name === match[1]
+        && (!match[2] || entry.version === match[2]) && (!match[3] || entry.source === match[3]));
+      assert.equal(matches.length, 1, `Ambiguous scoped dependency ${dependency}`);
+      pending.push(matches[0][0]);
+    }
+  }
+  return [...reached.entries()].sort(([a], [b]) => a.localeCompare(b));
+}
+
+test("current merged lock binds the unchanged roots and exact changed native closure, not a stale historical closure", () => {
+  const current = currentClientFixture(), prior = historicalClientFixture();
+  assert.equal(hash(Buffer.from(current.cargoLock).toString("utf8").replaceAll("\r\n", "\n")),
+    "e868bffd4efea6e411f2d701ad53a2d30d1f1c05629b11a01c174b5fd6659a1f");
+  assert.deepEqual(current.config.seeds.map(seed => seed.expected), prior.config.seeds.map(seed => seed.expected));
+  for (const path of ["frontend/tauri-plugin-oc/Cargo.toml", "frontend/src-tauri/Cargo.toml"])
+    assert.equal(current.config.sourceFiles[path], prior.config.sourceFiles[path]);
+  const before = conservativeNativeClosure(prior.cargoLock, prior.config.seeds);
+  const after = conservativeNativeClosure(current.cargoLock, current.config.seeds);
+  assert.equal(before.length, 512); assert.equal(after.length, 512);
+  assert.equal(hash(JSON.stringify(before)), "e0b6fa2f2b3f5f92774a6cae11c3c44e1428c64db3ff8a08974950163c718fc5");
+  assert.equal(hash(JSON.stringify(after)), "6514dab0a65000f02e04d4ed6d15a0044748994c685d2895284462abb11ffdbe");
+  const old = new Map(before), next = new Map(after);
+  const versions = rows => rows.map(([id]) => JSON.parse(id).slice(0, 2));
+  assert.deepEqual(versions(after.filter(([id]) => !old.has(id))), [
+    ["aws-lc-rs", "1.18.1"], ["aws-lc-sys", "0.45.0"], ["rustls-webpki", "0.103.15"], ["rustls", "0.23.45"],
+  ]);
+  assert.deepEqual(versions(before.filter(([id]) => !next.has(id))), [
+    ["aws-lc-rs", "1.17.3"], ["aws-lc-sys", "0.43.0"], ["rustls-webpki", "0.103.13"], ["rustls", "0.23.42"],
+  ]);
+  assert.deepEqual(versions(after.filter(([id, raw]) => old.has(id) && old.get(id) !== raw)), [
+    ["hyper-rustls", "0.27.9"], ["quinn-proto", "0.11.16"], ["quinn", "0.11.11"],
+    ["reqwest", "0.12.28"], ["reqwest", "0.13.4"], ["rustls-platform-verifier", "0.7.0"], ["tokio-rustls", "0.26.4"],
+  ]);
+  assert.ok(after.every(([id]) => JSON.parse(id)[2] !== null), "No backend-local package becomes a feature audit root");
+  assert.throws(() => verifyRustFeatureScopeReview({ ...current, cargoLock: prior.cargoLock }), /Cargo.lock identity mismatch/u);
+});
+
+test("production and local APK wrappers select the same scoped Rust features without auth, inference or release acceptance expansion", () => {
+  const { config, review, sourceBytes } = currentClientFixture();
+  const canisters = Object.fromEntries(Object.values(UNOFFICIAL_LOCAL_CANISTERS).map(name => [name, { ic: "aaaaa-aa" }]));
+  const fixtureSigning = Object.fromEntries(["OC_ANDROID_KEYSTORE_PATH", "OC_ANDROID_KEYSTORE_PASSWORD",
+    "OC_ANDROID_KEY_ALIAS", "OC_ANDROID_KEY_PASSWORD"].map(key => [key, "synthetic-not-a-real-credential"]));
+  for (const target of ["aarch64", "x86_64"]) {
+    const local = localApkBuildPlan(".", canisters, { target, frontendOnly: false, rpId: "fork-test.tail000000.ts.net" });
+    const production = productionApkBuildPlan(".", canisters, { target, frontendOnly: false }, fixtureSigning);
+    assert.equal(production.args[production.args.indexOf("--features") + 1], local.args[local.args.indexOf("--features") + 1]);
+    assert.equal(production.options.env.OC_ANDROID_NATIVE_AUTH, "android-credential-manager-v1");
+    assert.equal(production.options.env.OC_OTA_UPDATES, "none");
+    assert.equal(production.options.env.OC_ANDROID_REQUIRE_RELEASE_SIGNING, "true");
+    assert.equal(production.options.env.OC_UNOFFICIAL_PRODUCTION_APK, "true");
+    assert.equal(production.options.env.OC_UNOFFICIAL_LOCAL_APK, "false");
+    assert.ok(!production.args.some(arg => /browser-auth|inference|install|uninstall/.test(arg)));
+  }
+  const marker = productionApkBundleMarker("aaaaa-aa", "ABCD");
+  assert.equal(Object.hasOwn(marker, "digitalAssetLinksVerified"), false);
+  assert.equal(Object.hasOwn(marker, "providerQualified"), false);
+  assert.doesNotMatch(JSON.stringify(marker), /synthetic-not-a-real-credential/);
+  const privateConfig = JSON.parse(sourceBytes["frontend/src-tauri/tauri.private.conf.json"]);
+  const capabilities = privateConfig.app.security.capabilities.filter(value => typeof value === "object");
+  assert.deepEqual(capabilities.map(value => value.identifier), ["local-app-handoff", "local-app-setup"]);
+  for (const capability of capabilities) { assert.equal(capability.local, true); assert.deepEqual(capability.windows, ["main"]); }
+  assert.equal(config.seeds.length, 26); assert.equal(config.profiles.length, 10);
+  for (const path of ["frontend/src-tauri/tauri.private.conf.json", "frontend/unofficialProductionApkProfile.mjs", "scripts/build-unofficial-production-apk.mjs"]) {
+    const unit = review.units.find(value => value.id === "shell-asset-selection");
+    assert.equal(unit.disposition, "no-additional-external-owner-edge");
+    assert.deepEqual(unit.seeds, []); assert.ok(unit.sources.some(source => source.path === path));
+  }
 });
 
 test("current-client setup reuses reviewed owners while its exact sys ABI constraint stays host-inference-only", () => {
@@ -650,6 +778,7 @@ test("current-client APK selection uses original native auth with dormant browse
     const plan = localApkBuildPlan(".", canisters, {
       target,
       frontendOnly: false,
+      rpId: "fork-test.tail000000.ts.net",
     });
     const features = plan.args[plan.args.indexOf("--features") + 1];
     assert.equal(
@@ -671,7 +800,7 @@ test("current-client APK selection uses original native auth with dormant browse
       !plan.args.some((arg) => /browser-auth|install|uninstall/.test(arg)),
     );
   }
-  const marker = localApkBundleMarker("aaaaa-aa", "ABCD");
+  const marker = localApkBundleMarker("aaaaa-aa", "ABCD", "fork-test.tail000000.ts.net");
   assert.equal(marker.nativeAuthentication, "android-credential-manager-v1");
   assert.equal(Object.hasOwn(marker, "digitalAssetLinksVerified"), false);
   assert.equal(Object.hasOwn(marker, "providerQualified"), false);

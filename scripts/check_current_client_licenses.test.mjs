@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { ownedSecurityRules } from "./security_owned_rules.mjs";
+import { lockIdentities } from "./rust_feature_scope.mjs";
 import {
   CURRENT_CLIENT_LICENSE_NOTICES,
   currentClientInputPath,
@@ -126,6 +128,44 @@ test("live current-client license policy binds normalized source and lock identi
   assert.equal(policy.sourceScopeSha256, normalizedHash(configBytes));
   assert.equal(policy.cargoLockSha256, normalizedHash(cargoLock));
   assert.equal(config.cargoLockSha256, policy.cargoLockSha256);
+});
+test("current license binding preserves every historical license decision and exact locked package", () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const revision = "a701e878fac15d51683b31a56b7b49fb98b7306c";
+  // Full-history scoped CI is required; unavailable provenance fails closed.
+  const historical = (path) =>
+    execFileSync("git", ["show", `${revision}:${path}`], {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  const policyPath = "scripts/rust_feature_licenses.current-client.json";
+  const previous = JSON.parse(historical(policyPath));
+  const current = JSON.parse(readFileSync(resolve(root, policyPath)));
+  const previousLock = historical("Cargo.lock");
+  assert.equal(
+    previous.cargoLockSha256,
+    "cc7cd15531376a0f560e4626682a43deca6373bf01df1e7a064f7a4bdcb6493f",
+  );
+  assert.equal(normalizedHash(Buffer.from(previousLock)), previous.cargoLockSha256);
+  assert.equal(
+    previous.sourceScopeSha256,
+    "8b335057c48bd9eb3c658a0e0128a80e48eaa068ae1bde0ae1514540a22464e9",
+  );
+  assert.deepEqual(current, {
+    ...previous,
+    cargoLockSha256: current.cargoLockSha256,
+    sourceScopeSha256: current.sourceScopeSha256,
+  });
+  assert.equal(current.packages.length, 39);
+  const before = lockIdentities(previousLock);
+  const after = lockIdentities(readFileSync(resolve(root, "Cargo.lock")));
+  for (const value of current.packages) {
+    const key = JSON.stringify([value.name, value.version, value.source]);
+    assert.ok(before.has(key), `Missing historical license package ${key}`);
+    assert.deepEqual(after.get(key), before.get(key), `Changed license package ${key}`);
+  }
 });
 test("lifecycle test profiles reuse existing owner roots and exact license identities", () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");

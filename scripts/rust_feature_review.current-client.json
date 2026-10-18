@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "configSha256": "8b335057c48bd9eb3c658a0e0128a80e48eaa068ae1bde0ae1514540a22464e9",
-  "boundary": "Current unofficial local client only: source-traced native model store/IPC, optional nonshipping host llama.cpp checks, encrypted private-app loopback handoff/setup, retained dormant browser-auth source/protocols, nested generic schemas/errors, native build hooks and bundled asset selection. The prior eight-profile checkpoint bound the two all-WebGPU APK source configurations and existing Linux/Windows default-library/inference/inference+store checks. Both APK profiles select original native Credential Manager authentication, not the browser-auth listener. The imported environment/marker helper controls packaged native-auth selection and adds no Rust dependency owner. Browser WebGPU/NPM and Android JVM dependencies have separate inventories; no OpenChat backend, removed custom card/action-inbox canisters, release-canister tooling, core dependency audit, advisory acceptance, model quality, provider/Digital Asset Links qualification, device runtime or publication approval is claimed. Historical PR2 inventories remain verbatim historical evidence. The sourceRevision base remains the native feature's reviewed inception, not the latest whole-fork formatter baseline. The previous checkpoint bound main 6249be2431cdae3c4b9fd61b44aa186e223121e6 plus the approved 2026-10-01 working-tree encrypted-only handoff; its lock refresh covered two upstream backend edges. The earlier 2026-10-02 refresh bound committed merge bb2a8d712bdac6f59c183951e453bc0e18bb64bb. All 27 native/build source identities other than the root workspace manifest remained exact. That workspace change added only a backend chat_rooms member and its development optimization. Cargo.lock added that local package and changed four other backend-local blocks; a conservative traversal from all 26 unchanged seeds reproduced exactly the same 512 package blocks and edges. The prior 2026-10-02 lock-only refresh bound fork parent 33888e4f58f6b9374c3b7250dd564138acb5ca0b with the then-pending upstream second parent 5ca61b627809807b5c29300a46d539567249f1cd before merge 064eda188571f9cfc962b98d48842d83c51bdbd2 was committed. It removed only the backend group_community_common dev-dependency edge to msgpack. All 28 scoped source identities and the same conservative 512 package blocks/edges remained exact; native package identities, seeds, the optional wrapper/sys ABI pair and all eight profiles were unchanged. Neither comparison ran Cargo or claimed a refreshed target/feature-filtered collection. The native boundary accepts the client-encrypted envelope, not payload/recipient plaintext, uses only existing serde/JSON/URL/hash and standard-library owners, and performs no field decryption. That refresh introduced no advisory waiver, crate upgrade or profile expansion. The historical committed upstream merge 8ac17d9e63d19b7388fa9df914a1e93ed6c8c40c binds fork parent 3b259b2f53c4d7b6bad30d9747bf3554281ca72f and upstream parent 319fb436857f35f61e12a9d47bebf6ddb0a72307. The schema's legacy pendingMergeHead field records the completed merge's second parent; it does not claim that 8ac17d9e63d19b7388fa9df914a1e93ed6c8c40c remains pending. Cargo.lock and all 28 scoped source identities are unchanged from the fork parent, while upstream 5ca61b627809807b5c29300a46d539567249f1cd through 319fb436857f35f61e12a9d47bebf6ddb0a72307 likewise makes no change to those scoped inputs. Consequently the same 26 seeds, conservative 512-package closure, optional wrapper/sys ABI pair and eight profiles remain exact. This provenance-only refresh does not rerun Cargo, perform an advisory query or waive new advisories. The approved 2026-10-04 retention refresh now binds 29 source files and ten explicit profiles: the same eight plus Linux/Windows plugin-only local-app-handoff listener tests. All 26 dependency seeds, Cargo manifests, Cargo.lock identities and the optional wrapper/sys ABI pair remain unchanged. The five existing loopback owners and default plugin owners are selected by the two new host profiles; shell/inference owners are not. The new local_app_retention module uses only standard-library synchronization and a narrow platform capability, while Android mobile dispatch retains existing Tauri/serde/JSON owners. It carries no draft payload, grants no consent and leaves the encrypted envelope protocol unchanged. Android service/manifest/dependency review is separate. This working-tree source review does not bind a final whole-repository commit or APK, perform an advisory query, replace historical provenance, or confer compilation/device/release acceptance.",
+  "configSha256": "d2b5d752aafb9e2af76266d4400b3dca3bec38c282fbc3d4d3d97a8511f5f800",
+  "boundary": "Current unofficial client source-owner review based on main 54f3307bc6cc3a2b88a6afbdc06d90720f227f52 plus the reviewed formatter-only CI repair, after upstream merge 5a77b86fdd4b6dc8819b6f615d183a7ff0e971d2 (upstream 11ed95078e3ae8ae76bf2bdc094dd57b47459622). sourceRevision.head is predecessor provenance; exact source hashes bind this candidate, not a future commit. sourceRevision.base remains the native feature inception; the legacy pendingMergeHead field records that completed upstream parent, not a pending merge. The boundary is model store/IPC, optional nonshipping llama.cpp, encrypted private handoff, retained compatibility setup/auth protocols, nested schemas/errors, retention, and local/production native build/asset selection. Browser WebGPU/NPM, Android JVM and app-owned code-exchange dependencies have separate scopes. No backend source, removed custom card/action-inbox canister, core dependency audit, key recovery, model quality, provider/Digital Asset Links qualification, binary/runtime or release approval is claimed. The October 7 deferred RP review is retained and completed by source review of explicit parent/child RP propagation and the previously deferred handoff/setup changes; source hashes are not blindly rebaselined. Exact-origin framing, fixed compatibility ports, one-use scoped cancellation, preserved accepted results and bounded task drain use existing owners. The current top-level connection-code flow does not invoke the retained Rust setup listener. Three production builder/profile/config inputs add no external Rust owner and select the same Android feature pair. There are 32 source inputs, the same 26 seeds, ten profiles and 196 seed/profile edges; no browser-auth or native-inference feature enters Android. The same exact optional wrapper/sys ABI pair remains host-only. Cargo.lock is pinned to e868bffd4efea6e411f2d701ad53a2d30d1f1c05629b11a01c174b5fd6659a1f. Its conservative seed closure remains 512 package blocks, with four upstream transitive identities changed: aws-lc-rs 1.17.3 to 1.18.1, aws-lc-sys 0.43.0 to 0.45.0, rustls 0.23.42 to 0.23.45 and rustls-webpki 0.103.13 to 0.103.15; seven existing blocks retarget those edges. The exact new closure digest is 6514dab0a65000f02e04d4ed6d15a0044748994c685d2895284462abb11ffdbe. All direct owner identities/checksums and feature manifests remain unchanged. These bytes are upstream provenance, not an advisory assessment or acceptance of changed transitive versions. Historical PR and October merge assertions remain anchored to actual hash-pinned Git inputs at a701e878fac15d51683b31a56b7b49fb98b7306c, including their original 512-package closure; no historical evidence is overwritten. The required full-history CI checkout supplies those inputs and missing history fails closed. This offline review does not run Cargo, refresh target/feature-filtered metadata, query advisories, waive failures, or authorize core audits or publication.",
   "units": [
     {
       "id": "plugin.model.stream",
@@ -58,7 +58,11 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
-          "lines": [77]
+          "lines": [94]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [113]
         }
       ],
       "seeds": ["plugin.model-and-handoff.url"]
@@ -122,7 +126,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
-          "lines": [4, 93]
+          "lines": [4, 113]
         }
       ],
       "seeds": ["plugin.json"]
@@ -154,7 +158,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
-          "lines": [5, 146, 175, 205]
+          "lines": [5, 297, 326, 355]
         }
       ],
       "seeds": ["plugin.hash"]
@@ -186,7 +190,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [105]
+          "lines": [132]
         }
       ],
       "seeds": ["plugin.hex"]
@@ -406,11 +410,11 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [66]
+          "lines": [93]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [104]
+          "lines": [131]
         }
       ],
       "seeds": ["plugin.loopback.getrandom"]
@@ -654,7 +658,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/build.rs",
-          "lines": [14, 15, 16, 54]
+          "lines": [14, 15, 16, 55]
         }
       ],
       "seeds": ["plugin.build"]
@@ -710,7 +714,7 @@
     {
       "id": "composition-manifests",
       "disposition": "no-additional-external-owner-edge",
-      "explanation": "Workspace versions and exact feature forwarding are bound, not whole-workspace audit roots. No new target-specific Cargo declarations are added. The optional direct sys ABI constraint is covered by plugin.native.inference-sys. Both APK profiles retain all-WebGPU and private-app handoff (also gating setup), but the app no longer forwards local-test-browser-auth. The dormant plugin local-browser-auth declaration is not selected. Host commands remain separate nonshipping checks.",
+      "explanation": "Workspace versions and exact feature forwarding are bound, not whole-workspace audit roots. The upstream merge changes backend workspace registrations and dependency selections but adds no feature owner manifest or seed. Both local-test and production APK builders select exactly transformers-webgpu-android plus local-test-app-handoff; the shared Android profile pair and eight nonshipping host profiles are unchanged. Production signing/environment selection and its Tauri JSON add no Rust owner. The optional exact llama-cpp wrapper/sys ABI pair remains host-inference-only. Browser-auth forwarding remains absent. No Cargo collection, target-filtered resolution, advisory decision or runtime acceptance is inferred.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -726,7 +730,7 @@
       "sources": [
         {
           "path": "Cargo.toml",
-          "lines": [1, 122, 288, 298, 325, 326]
+          "lines": [1, 120, 288, 298, 325, 326]
         },
         {
           "path": "frontend/tauri-plugin-oc/Cargo.toml",
@@ -738,7 +742,11 @@
         },
         {
           "path": "scripts/build-unofficial-local-apk.mjs",
-          "lines": [40, 66, 67]
+          "lines": [51, 78, 79]
+        },
+        {
+          "path": "scripts/build-unofficial-production-apk.mjs",
+          "lines": [28, 37, 39, 40, 41]
         }
       ],
       "seeds": []
@@ -746,7 +754,7 @@
     {
       "id": "plugin-module-and-schema-closure",
       "disposition": "no-additional-external-owner-edge",
-      "explanation": "Reviewed native dispatch, commands, errors and model nested structs. The unchanged browser-auth protocol remains compiled and its listener remains dormant source behind unselected local-browser-auth; it is not the APK sign-in path. Original Credential Manager auth/session restoration is reviewed in its frontend/JVM boundaries, not a new Rust credential store. Always-compiled handoff validation now accepts only the exact client-encrypted envelope and rejects plaintext payload/recipient fields, malformed encodings and wrong bounds with existing serde/JSON/reqwest/SHA owners and standard-library validation; Rust never decrypts its fields. Setup validates a bounded opaque catalog envelope with those same owners; full catalog/package/processor/origin validation remains frontend responsibility. Optional inference retains llama-cpp-2/minijinja/minijinja-contrib plus the reviewed exact sys ABI constraint. Embedded tests add no separate dev dependencies or downgraded production edges.",
+      "explanation": "Reviewed native dispatch, commands, errors and model nested structs. The unchanged browser-auth protocol is compiled but its listener is unselected; original Credential Manager has separate frontend/JVM review. Handoff still accepts only the exact client-encrypted envelope and rejects plaintext payload/recipient fields; its launch-fragment comment changes no owner or authorization. Retained compatibility setup now validates bounded version-2 account/chat context, matching account/app/scope/route handles and one-use cancellation using existing serde/JSON/reqwest/SHA owners and standard-library validation. Full package/processor/origin validation remains frontend responsibility. Current top-level code connection is frontend/app-owned, not new Rust recovery logic. Optional inference retains the exact reviewed llama-cpp wrapper/sys ABI pair and template owners. Embedded regressions add no separate dev dependency or downgraded production edge.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -785,7 +793,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
-          "lines": [3, 77, 93, 146, 175, 205]
+          "lines": [3, 94, 113, 297, 326, 355]
         }
       ],
       "seeds": []
@@ -793,7 +801,7 @@
     {
       "id": "local-listener-closure",
       "disposition": "no-additional-external-owner-edge",
-      "explanation": "The selected handoff/setup listeners retain bytes/getrandom/http-body-util/hyper/hyper-util, serde/JSON/hex/Tokio and standard-library owners. Setup shares the local-app-handoff gate and transports a bounded opaque catalog, not drafts or credentials. The retained browser-auth listener source uses the same owners but is unselected in every reviewed profile. The two APK profiles and two explicit nonshipping host listener-test profiles enable handoff/setup listeners. Default and inference host checks still do not. The retained server tasks cancel authority on platform loss, drain bounded terminal HTTP responses and release the owner without a further UI poll. Host listener tests with a fake retention backend do not qualify the Android foreground service or installed APK.",
+      "explanation": "Selected retained compatibility listeners use existing bytes/getrandom/http-body-util/hyper/hyper-util, serde/JSON/hex/Tokio, reqwest URL parsing and standard-library owners. Dedicated loopback ports 5192/5193 replace ephemeral production ports; tests retain a cfg(test)-only port override. Exact approved app origins bound frame-src and do not grant cross-origin fetch. Local-test and production package IDs are enumerated. The setup /cancel endpoint requires the same-origin metadata and one-use proof and cannot erase an accepted result. Task handles now drain bounded terminal responses before port reuse/cancellation, then abort on timeout and release retention. Dormant browser-auth stays unselected. These source-owner conclusions do not qualify Android foreground service, provider/Digital Asset Links, process isolation, current frontend code connection or installed APK behavior.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -807,7 +815,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [5, 83]
+          "lines": [5, 110]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/mobile.rs",
@@ -815,7 +823,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [6, 7, 8, 12, 13, 20, 104, 105, 316]
+          "lines": [6, 7, 8, 12, 13, 20, 131, 132, 358]
         }
       ],
       "seeds": []
@@ -823,7 +831,7 @@
     {
       "id": "shell-asset-selection",
       "disposition": "no-additional-external-owner-edge",
-      "explanation": "Current shell entry/navigation uses Tauri and the local oc plugin only at the changed feature boundary. Standard-library main calls app_lib; local-test capability JSON adds no Rust external owner. Existing unrelated notification/deep-link/media/update-download implementation and disabled devtools telemetry are outside the feature-owned roots, not claimed as audited. The bundled cache gate retains tauri, serde/JSON, semver and mime_guess owners; zip is only the unchanged legacy OTA downloader, not the selected local APK policy-none path. Local handoff/setup capabilities remain restricted to the bundled main window; browser-auth capability is absent. The builder requires the original Credential Manager marker and handoff/setup assets while rejecting browser-auth HTML/JS assets. Its imported profile helper selects the original RP identifier and account-linking UI without granting or asserting provider/Digital Asset Links authorization. These build inputs add no Rust dependency owner.",
+      "explanation": "Current shell entry/navigation uses existing Tauri and oc plugin owners. Local and production Tauri configurations restrict retained handoff/setup permissions to the bundled main window and contain no browser-auth capability. The production builder/profile adds only Node builtins and the existing local environment helper, pins its independent package/RP/directory and requires external release-signing environment inputs; no secret values or additional Rust dependency are part of this inventory. Both builders require native Credential Manager and reject browser-auth assets, retain all-WebGPU plus compatibility handoff/setup, and set OTA policy none. Local RP validation excludes official, loopback and uncertified raw hosts; selected-host association remains separate qualification. Existing unrelated notifications/media/update-download and Kotlin/JVM dependencies remain outside this scoped owner review. Source pins do not approve signing, publishing, advisory exceptions or runtime acceptance.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -859,11 +867,23 @@
         },
         {
           "path": "scripts/build-unofficial-local-apk.mjs",
-          "lines": [115, 116, 118, 119, 120, 121, 122, 123, 124, 125]
+          "lines": [126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139]
         },
         {
           "path": "frontend/unofficialLocalApkProfile.mjs",
-          "lines": [7, 33, 34, 35, 36, 67, 68]
+          "lines": [53, 72, 82, 83, 84, 85, 114, 115]
+        },
+        {
+          "path": "frontend/src-tauri/tauri.private.conf.json",
+          "lines": [6, 15, 16, 17, 18, 22, 23, 24, 25]
+        },
+        {
+          "path": "frontend/unofficialProductionApkProfile.mjs",
+          "lines": [2, 4, 20, 24, 30, 34, 42, 44, 47, 50, 56, 63, 67, 69, 76, 82, 86, 88]
+        },
+        {
+          "path": "scripts/build-unofficial-production-apk.mjs",
+          "lines": [28, 40, 41, 47, 50, 52, 54, 55, 57, 59]
         }
       ],
       "seeds": []
@@ -871,7 +891,7 @@
     {
       "id": "local-transport-retention",
       "disposition": "no-additional-external-owner-edge",
-      "explanation": "The feature-gated RetentionLease uses only std Arc/atomic synchronization and a payload-free RetentionBackend trait. Bounded startup is acknowledged before returning a relay URL; failure releases the owner, only the existing authenticated handoff claim can extend retention, loss fails closed, and release/drop is idempotent. Listener drain/terminal cleanup uses the already-reviewed Tokio and HTTP owners. Android-only mobile dispatch serializes owner/deadline metadata through existing serde/JSON/Tauri, never draft fields or credentials. Linux/Windows feature tests exercise actual Rust listener and lease code with an in-process test backend, not Android service/provider behavior. The Kotlin foreground-service overlay and Android dependencies have their own scoped inventory; this unit adds no Cargo dependency, feature declaration, advisory decision or runtime acceptance.",
+      "explanation": "The feature-gated RetentionLease uses only std Arc/atomic synchronization and a payload-free RetentionBackend trait. Bounded startup is acknowledged before returning a relay URL; failure releases the owner, only the existing authenticated handoff claim can extend retention, loss fails closed, and release/drop is idempotent. Listener drain/terminal cleanup uses the already-reviewed Tokio and HTTP owners. Android-only mobile dispatch serializes owner/deadline metadata through existing serde/JSON/Tauri, never draft fields or credentials. Linux/Windows feature tests exercise actual Rust listener and lease code with an in-process test backend, not Android service/provider behavior. The Kotlin foreground-service overlay and Android dependencies have their own scoped inventory; this unit adds no Cargo dependency, feature declaration, advisory decision or runtime acceptance. The reviewed listener changes retain task handles, await bounded drain before dedicated-port reuse and abort on timeout with the same Tokio/std owners; no new retention feature or dependency is added.",
       "profiles": [
         "android-arm64-local-webgpu",
         "android-x86_64-local-webgpu",
@@ -893,11 +913,11 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [4, 105, 145, 169, 239]
+          "lines": [4, 67, 69, 73, 128, 140, 185, 204, 281]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [5, 158, 215, 240, 257]
+          "lines": [5, 101, 103, 107, 170, 192, 250, 293]
         }
       ],
       "seeds": []

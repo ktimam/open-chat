@@ -1,0 +1,391 @@
+{
+  "schemaVersion": 1,
+  "reviewedOn": "2026-10-18",
+  "normalization": "CRLF-to-LF-only",
+  "editAlgorithm": "unique-common-line-anchors-v1",
+  "records": [
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components/Toast.svelte",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "5050631c36f1bca81c040fb9d11949cb0769217bb011d9ec98076f5b987bed97",
+      "candidateSha256": "46dff944651abf2626f0d316461946333c6b5d0229a7516edb176c656bfe4a7a",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "51a750d39893ff316a370851dbcb2f50fc2eddaa8f645ac6da4b9f1241ce100f",
+          "3fb3d56819fda771854aef9bde1c2dee02bcfdaf38ed94c90d90ff935cfb9bfd"
+        ],
+        "candidateEditSha256s": [
+          "51a750d39893ff316a370851dbcb2f50fc2eddaa8f645ac6da4b9f1241ce100f"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components/home/groupdetails/DirectChatDetails.svelte",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "a0142678b26bd611e4b953346d81e90462d230a65164ef1545ab9441feb033f0",
+      "candidateSha256": "6acd60ef56c3deae08b5d0e9a51453b928e8780647eb47545f1a815d3cd0cbb3",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "402ba113b9d16736ab7e43d300cd3c97b87e10b9739046f9e747be53374d9692",
+          "d1f5a0f1788038c62f5ebc7381278f2e4c703b83def244421ae61bd6b13dd1ed",
+          "99f709c796b1462a2a228910a340489dba477a2b65f747d54133320dccf1f748",
+          "b79a87b3bdfa64e23c3ad9cb97aa56e9c6c119c04e77b1cbb5e7ff1cdaf8aaab"
+        ],
+        "candidateEditSha256s": [
+          "402ba113b9d16736ab7e43d300cd3c97b87e10b9739046f9e747be53374d9692"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components/home/profile/UserProfile.svelte",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "a98e2892f83663e7ff08d803164a39633073d28f6945d252f25cc23bbb2a7c5f",
+      "candidateSha256": "1dc37cd87fad5f29163c61527a52e31fc02320e8870d15985005e4ef8a4cfac7",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "d3adb5f4f60f6d1f7c5304d42c79094cdbb85b9d3713c2599d5f34208c87eed0",
+          "d3adb5f4f60f6d1f7c5304d42c79094cdbb85b9d3713c2599d5f34208c87eed0",
+          "d3adb5f4f60f6d1f7c5304d42c79094cdbb85b9d3713c2599d5f34208c87eed0",
+          "aa6510a1dcfc1c5016708ec53a30525ffe4d2c0b0be8440a243d0d245efb613e",
+          "26465fd0d5b3a8510dd7a44c9eefd7c23928efca78aa67b15c34cd6461dee325",
+          "2ec8ba7df001cc6e940c27128a78308083fe6c35f1938e3b83ed1eafd4d5eeb3",
+          "e6f3a2293176afafb4162a667240ba5125dbb2a2086cf8a37266186bb6ab3e07",
+          "5a48e713dc796c662efc4075894977a390e1b06e74cede134194a1eaf3293532",
+          "9f80f253e942cf3e6a62a0e647f36f689be269e29c6234c323714e78d7bff733",
+          "be333a167e122749789b2a89c6dc087ada9848f511a8961cdb0efca10c6fc658",
+          "34e3d1c05f0e9d4213e7b08c99671019e06d40b2ab644ac1eb375a67bc90e02d",
+          "5e0f67cbbdd2ece95f28583d8ee0260dbda912e9de58e5ede0946e7400afa3b4",
+          "1d850f5ab1ac6326fe2a845bdd40f80f25e5c8201603d8d7bd2cbdc3ccd1fce2",
+          "aa35620c411cf8d8377975891c0d9d8c0123cf12d845ac69706e9fc8a69ce0c0",
+          "9d69e5a671c349a556933f45911cf8b06e161622d24daa54f11849e791e3f342",
+          "07befeb32db6b879f1645858551054b3dd975ed16983ae7d646dac737bf09113",
+          "bbb4faed1c0f9f195fab4732b11267ced5ad9600bb1927645380c1d712fb3a77",
+          "7cef7845e9e1464d5ea08ce3ee555ce6aabc170a18a414e840e44f26e4471a5d",
+          "bbb5f97020de6f730c1a8c685e8e548ec466b214c5ba27fb3d5ba1900b00cbe7",
+          "81b1c2e99ebbcb54d7a3fa1790a84ec15a012247c538dd0d30d4e7414e02e240",
+          "4d4f0374e22ee8be9f0e5b5e607f4c796c7a8cbae4b911ef958365b31872c7cf",
+          "b8476a535c4e1366ee90bad7292c346561c49da64a5b86fc0b41b74977052a76",
+          "bb594c74d62aeeca895df0a0ff55aea954906b0e679176c56d1224ca45f51844",
+          "b1ffa43707a1452aead08f88c028071aa13cfd71b9c7cd74d6e22bc73e57f212",
+          "66390f01bb554640ed5963300b6b3f9dceaba9f66ecbcb39d58f2c894273aaa5",
+          "d30d6fc01bbd309c1c8223903ff52cb3f2bdaa6a598a7f09988be72f0c3d115d",
+          "f47a9f126db5c8724bb0ea5099cf35fcf0c6354a7aaae34200a8a8af5a2c5228",
+          "6067d13e537aa08a5577d773e937e80d04fa4a76b0b03091085b387a01f1574e",
+          "3c7030dbd2a1d42c1cddd5e14ea72d6e9ce7f4ed26a4e13ccccce2eea184c056",
+          "7d994eeb15cdde90f02ba5a6383c1ec8704fc1ed36d6ae91ea386149037fd2bf",
+          "72d6c54b3184db98bd1c1443c1100396bb0a1c0eae0a733a7d7cde37cb0774ac",
+          "9e03d917b878a9cf984816f14301936f77876bf81ce1aec674c3cf934346a78f",
+          "4c8cc5717b3b038752d075b45e9acfcf6523aab98d9e79d168384b4b5174d47b",
+          "59877c0f8cc02e0b8fa443bc66fbe79c2fdefa1167c422b8caa3aba3bfa9d407",
+          "e55c17909c9cf991d36c2bcc3ab4022c9121bc404621b6faf8dc34973906dd87",
+          "bfc15382aa58d027221ef17f6282adfbe855b9a71bc1ba280a7ab0da893e84d5",
+          "4b4b71b9f54d0787b176a8c931b4eb03db5d45f137b631335e705d8137364064",
+          "4b4b71b9f54d0787b176a8c931b4eb03db5d45f137b631335e705d8137364064",
+          "1903c0be3c2e3c274c99a0bc52fcf7848d55613cdfb320f12c616984ffef7e3c",
+          "faecd952484889c689844560dd47db32016803a3da1e4172f783a681d73388c3",
+          "856607afa45642b6b06b8e603889f9b6b66386fb76e9c6184edd5160150a03d9",
+          "68a5aee257839216db4dc1213310f16c6bd58a07b28b90e20606ef7b471bf1de",
+          "794e910f950a5015a9cb8eb5e19a8d3a2f510aa283d8dc28d89f2488a11c0044"
+        ],
+        "candidateEditSha256s": [
+          "e6f3a2293176afafb4162a667240ba5125dbb2a2086cf8a37266186bb6ab3e07",
+          "5a48e713dc796c662efc4075894977a390e1b06e74cede134194a1eaf3293532",
+          "9f80f253e942cf3e6a62a0e647f36f689be269e29c6234c323714e78d7bff733",
+          "be333a167e122749789b2a89c6dc087ada9848f511a8961cdb0efca10c6fc658",
+          "34e3d1c05f0e9d4213e7b08c99671019e06d40b2ab644ac1eb375a67bc90e02d",
+          "5e0f67cbbdd2ece95f28583d8ee0260dbda912e9de58e5ede0946e7400afa3b4",
+          "bfc15382aa58d027221ef17f6282adfbe855b9a71bc1ba280a7ab0da893e84d5",
+          "4b4b71b9f54d0787b176a8c931b4eb03db5d45f137b631335e705d8137364064",
+          "4b4b71b9f54d0787b176a8c931b4eb03db5d45f137b631335e705d8137364064"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components_mobile/Toast.svelte",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "658e3051413523757becf419e67a8f1ccd15408eb53efbddf63b85d04ce37cbc",
+      "candidateSha256": "3a0aea059d2b1d168d990b3dde3e46f9615fa5b31bd114b8e160d5e85ed04a80",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "51a750d39893ff316a370851dbcb2f50fc2eddaa8f645ac6da4b9f1241ce100f",
+          "3fb3d56819fda771854aef9bde1c2dee02bcfdaf38ed94c90d90ff935cfb9bfd"
+        ],
+        "candidateEditSha256s": [
+          "51a750d39893ff316a370851dbcb2f50fc2eddaa8f645ac6da4b9f1241ce100f"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components_mobile/home/ZoomedImage.svelte",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "0fdf106f0f39ae1dd6a042171dc439dc681bf8eeea9ad60b8f05272fbb8dafa8",
+      "candidateSha256": "7fa7095d7aae585a0b0666efd69d6581e2cd0e9b20b2cba50762a5d4df1d6bce",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "2b8bfa26c51510080f1c8978f9461f8df5a08090bc18cc841fab59883444e4ef",
+          "de62dbbb1437ad228ebad1f2fc88cdfaa9930e2fbf0eff530c26e5b50dd3f653"
+        ],
+        "candidateEditSha256s": [
+          "2b8bfa26c51510080f1c8978f9461f8df5a08090bc18cc841fab59883444e4ef"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/stores/settings.ts",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "b073d3f460070e8893e5de93797b0d30d0e795b609b9da3bf26e4eda817cb8f0",
+      "candidateSha256": "1cb9a49db68b6499dc6c680dd3795b64cbe2bcd6bfb251997a82b0c1bf22d077",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "f338dd65cd245313ba8cec407b4b1b9a00cbbffdc9f5c86a5927f8a092bffebb"
+        ],
+        "candidateEditSha256s": [
+          "f338dd65cd245313ba8cec407b4b1b9a00cbbffdc9f5c86a5927f8a092bffebb"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/utils/openchatClient.ts",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "3d016352eefa87b39c3fc576a41ff018ec2645085016775c5c89c02130e78331",
+      "candidateSha256": "0cd3e5fa1d180c02c8a8a6ca3b40903ed892480bfe880fe4e260a6d7bd3dba6d",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "c498492789e4b1a404d632fd474ad95731f632d71af91dae4d740cc895972f06"
+        ],
+        "candidateEditSha256s": [
+          "c498492789e4b1a404d632fd474ad95731f632d71af91dae4d740cc895972f06"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/eslint.config.mjs",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "417722f81e6cec477f11a8e37f950d47ae9c77e0fedbaac490b27083a566ceee",
+      "candidateSha256": "9d91ec2605542cef444e607c19090e5ee3e591bc078a82f3a25391871d9c80dd",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "40f6eb2bae267938333c364432ae530a9634db2592391d4b83ba048f3bb142da",
+          "4df7d3049cdc5323c3dcb0aaa22c860f65539045cf45cea799bafda04fff4c48"
+        ],
+        "candidateEditSha256s": [
+          "40f6eb2bae267938333c364432ae530a9634db2592391d4b83ba048f3bb142da",
+          "4df7d3049cdc5323c3dcb0aaa22c860f65539045cf45cea799bafda04fff4c48"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/openchat-ui/src/lib/types.ts",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "6a949a917d8dc706fd4e6b9fe3b06ef74182cd209a44604de7d3783892b9f3b5",
+      "candidateSha256": "873a508b8ad563cf2a802bb4805147cc4e2cd37cd4f32b92299cfbe69761847b",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "2022e47c296cf4fb8b78022279578171ed7c4f19cd097bc6a4a75968123f810e",
+          "a248a5a955e8c03cb740e566238922d505592457fa33d8b1ed28f3a5b27da8f7",
+          "3bdc24a8f456727a59148ef372446c5627bbdbc3375e2f61a3f18896ff27188e",
+          "9ae5e987b96fc2097f411c6a57da36233b79fe6fca0196c6046e4abaf6152475",
+          "557797da4237dfa66f81f825b1ed68af2e443dc6a3aa33b43244204ca5f24361",
+          "d75baf26f752b7fdd42ea752e69d97152d52dfaf8ba876f920f7d35ebd013ce9",
+          "9736101b0acdfedee6cb4077e46af1f0e34ea8d80e0b253aa2542dabf7e427f0",
+          "883d331a1593a3424451ed0c7f3af41194d2c6d43fc5ee078f5271091c2e01e5",
+          "9ae408fce1e435da9fecc99393e572cafd8082d4f2db2e6304cd45be622ec76e",
+          "bd5a69d24158d38afdf5fc6212c10f09c3e49ec48bb00024d31edfab232ed173",
+          "db2f902a621ed24c638e3efd0d83c67b025a2d07b3507e621e0afec08bd31ea8",
+          "56d2491c714f7357432392b0e5c9029b34abeb1013539cbf44aac3c852bf8955",
+          "8e07d17e94050accc059269ee3b95f7510b98c5c49088f8c22cbb68b450e0dd9",
+          "8e0fb554d5940881eeb1d46509fe87cc31c4197278b765ad3b37787526ce6f54",
+          "bbbe3e9a973d5a31c5e6728a0744f7009e169755ef2d84a94be061d21cecf37f",
+          "a5da8a0e280e47b408759fe5059c35754e63e1c9c67cd620bce37b0c569b23c7",
+          "5bd6bf3f81920017508a06bf752dc982106aaed18794fe36c5a5485f0cf4bb9b",
+          "5719b0346b777869d2ebd2e8dfe1c7e4a282098c800f168e62f5b1785b449916",
+          "66a8d685cc801ad6d72e491d57197cd2049012fe2b44177e19330413be7adf4e",
+          "1e6b4dc48494c2d0302e6cd02579e6e2e2c852831c32d7336b3531a972cd3d09",
+          "e0b021d8a8874a7ac529c0ee9bfaf0cea1036ea3cbeb8a29b22d48c4ba502cc8",
+          "ea8fb22a564d89d65dde36e867755092e3698f3e624196013209783fb235d6f4",
+          "80b30423c737fc61c8e45a0eefc42990e9bab3a11aa079e432572ddf286632d8",
+          "da5d30d03b2f07effba72d0791a7908a67e822576fce7c60a1b19d026478323e",
+          "6d721c535e786ffa48fd2b560fbf40791c896721cf97f59d55937a24f7cce9f1",
+          "22d0676f35aefbc40df14c866c560ea066d7418589dae013b6216b2fcb94c04a"
+        ],
+        "candidateEditSha256s": [
+          "2022e47c296cf4fb8b78022279578171ed7c4f19cd097bc6a4a75968123f810e",
+          "a248a5a955e8c03cb740e566238922d505592457fa33d8b1ed28f3a5b27da8f7",
+          "3bdc24a8f456727a59148ef372446c5627bbdbc3375e2f61a3f18896ff27188e",
+          "9ae5e987b96fc2097f411c6a57da36233b79fe6fca0196c6046e4abaf6152475",
+          "557797da4237dfa66f81f825b1ed68af2e443dc6a3aa33b43244204ca5f24361",
+          "d75baf26f752b7fdd42ea752e69d97152d52dfaf8ba876f920f7d35ebd013ce9",
+          "9736101b0acdfedee6cb4077e46af1f0e34ea8d80e0b253aa2542dabf7e427f0",
+          "883d331a1593a3424451ed0c7f3af41194d2c6d43fc5ee078f5271091c2e01e5",
+          "9ae408fce1e435da9fecc99393e572cafd8082d4f2db2e6304cd45be622ec76e",
+          "bd5a69d24158d38afdf5fc6212c10f09c3e49ec48bb00024d31edfab232ed173",
+          "db2f902a621ed24c638e3efd0d83c67b025a2d07b3507e621e0afec08bd31ea8",
+          "56d2491c714f7357432392b0e5c9029b34abeb1013539cbf44aac3c852bf8955",
+          "8e07d17e94050accc059269ee3b95f7510b98c5c49088f8c22cbb68b450e0dd9",
+          "8e0fb554d5940881eeb1d46509fe87cc31c4197278b765ad3b37787526ce6f54",
+          "bbbe3e9a973d5a31c5e6728a0744f7009e169755ef2d84a94be061d21cecf37f",
+          "a5da8a0e280e47b408759fe5059c35754e63e1c9c67cd620bce37b0c569b23c7",
+          "5bd6bf3f81920017508a06bf752dc982106aaed18794fe36c5a5485f0cf4bb9b",
+          "5719b0346b777869d2ebd2e8dfe1c7e4a282098c800f168e62f5b1785b449916",
+          "66a8d685cc801ad6d72e491d57197cd2049012fe2b44177e19330413be7adf4e",
+          "1e6b4dc48494c2d0302e6cd02579e6e2e2c852831c32d7336b3531a972cd3d09",
+          "e0b021d8a8874a7ac529c0ee9bfaf0cea1036ea3cbeb8a29b22d48c4ba502cc8",
+          "ea8fb22a564d89d65dde36e867755092e3698f3e624196013209783fb235d6f4",
+          "80b30423c737fc61c8e45a0eefc42990e9bab3a11aa079e432572ddf286632d8",
+          "da5d30d03b2f07effba72d0791a7908a67e822576fce7c60a1b19d026478323e",
+          "6d721c535e786ffa48fd2b560fbf40791c896721cf97f59d55937a24f7cce9f1"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components_mobile/home/SlidingModals.svelte",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "2a6fdd7d9ce4a7cebe2647df42823514dd41df85a90f363372a46a00e13776e2",
+      "candidateSha256": "c082b6b6524e46d46cc2fe4cbf2b3673fb527a67d79ec46a9cd8e006c5d935ca",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "331e1cdeb6593a3fc010c992b95beca17d6f7ef71758cdd2a692c2867c0b1cdd",
+          "3a2c56c17b129b2bc5acea36477163d8bdce88f7adf14661ddf2e3ebce15c62d",
+          "1b46fb1f656a255c1e5ac9709092f6d7ae902b2f7ba319c4ca71d26ffc02ece9",
+          "4cec542c6fa3ab270c125660c23f85046781d84bc5429c6513dade5fd199952c",
+          "3994d63ce1c66b59cdec96aef3ffa19759f8b80b66b6dcc72e70f904ea25f61e",
+          "a6bb0f1dbcfb6619e623258c90afd30df914a63c37b2f1da287f935709daf91f",
+          "5bee40d5d123ceaa5552255cf88d1c4f7f8dc1bd10bb7df97188fa6c014f208e",
+          "5bee40d5d123ceaa5552255cf88d1c4f7f8dc1bd10bb7df97188fa6c014f208e"
+        ],
+        "candidateEditSha256s": [
+          "3994d63ce1c66b59cdec96aef3ffa19759f8b80b66b6dcc72e70f904ea25f61e"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components_mobile/home/groupdetails/DirectChatDetails.svelte",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "7911fc245fcdd61b880c2e40f11dc699b4a83f86d42fbd36bba2e4aaa1e0032b",
+      "candidateSha256": "81487497816e1b5af3f9a8913f7de328dc1941eee8550df0a746cd7f139eeac4",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "ff73d0d400b87b87a167258eda6fed91e347505929d1ad21342843eb41d08ce9",
+          "de91977856cdd6854a60a99d5f726a3178d2a804ab3ecde6c29020e75afe92e6",
+          "2651407dd438a8cda3a36e484359f4d152a486f0dc10d0d02d328722ddaec226",
+          "991f284eb418de44573051671ca2c755259ed6115f24e10d7d623c0225f6a30f"
+        ],
+        "candidateEditSha256s": [
+          "2651407dd438a8cda3a36e484359f4d152a486f0dc10d0d02d328722ddaec226"
+        ]
+      }
+    },
+    {
+      "scope": "current-client",
+      "path": "frontend/app/src/components_mobile/home/groupdetails/GroupDetails.svelte",
+      "baseCommit": "11ed95078e3ae8ae76bf2bdc094dd57b47459622",
+      "baseSha256": "b0c979b9a67bd5fb53fec77a51cc4784cf2eb95bc91ea661401d45279cfef83d",
+      "candidateSha256": "3c01a5859630336d80154d3efa1448a4769f4f849eda41324b587c6b9fdebc47",
+      "justification": "Only exact formatter edits already present in integrated upstream 11ed remain. All fork-owned formatter edits were applied; candidate bytes, formatter/config identity and live edit multiplicity remain mandatory.",
+      "formatter": {
+        "prettierVersion": "3.8.4",
+        "sveltePluginVersion": "3.5.2",
+        "configSha256": "6a608fe0bd06378aa252d9bc4bf291eea44b90d15657b5e95dc02cde509a44aa"
+      },
+      "proof": {
+        "baseEditSha256s": [
+          "17baac9205783bcce74fa27961796967864994360c54cd3704f5b130c47bc1e3",
+          "2bc45365cc09eee015e04b54b9ce7e21a5568e489911351e4ced593bfa5efcfe",
+          "423081dbdd30e38a6e4a108d6647cbb41ed1e70bd900c82757fa488dd153ee54",
+          "02d866175a2dee77f465095a6772222a1ab9a4386abb69d3a89c05ff95b2ba32",
+          "530abddc75715218350ad5087a9f3fa064ad532da5ceba64c9e213bcbd1220de",
+          "c21772c78d549273c6e80c684c0950737441feb5f4619d9ea4e84446a4cfe7e9",
+          "5d37d7ce6d0ff89188169e7d419a44406ebc3fe7f2de9eed2a4abe045d1a79e3",
+          "5595295a2e96802e6b8a51739ba696372b4b2c08cf382ad46a4bd90f07df1afa",
+          "5d37d7ce6d0ff89188169e7d419a44406ebc3fe7f2de9eed2a4abe045d1a79e3",
+          "a70fa90e19a58e4cc51f47c3b78a10715bf2a465eca38b86f2a4e5e05cab4b42",
+          "c68aaf6b2c2c5715b9a5c7f3b49526204669093d1cf3396aec7ee700e5a07f2a",
+          "8388e8824da2ba27c359f214788a8c74a4ac079fdb96eb7e15a980ae1055afd2",
+          "8388e8824da2ba27c359f214788a8c74a4ac079fdb96eb7e15a980ae1055afd2",
+          "8388e8824da2ba27c359f214788a8c74a4ac079fdb96eb7e15a980ae1055afd2",
+          "8388e8824da2ba27c359f214788a8c74a4ac079fdb96eb7e15a980ae1055afd2"
+        ],
+        "candidateEditSha256s": [
+          "02d866175a2dee77f465095a6772222a1ab9a4386abb69d3a89c05ff95b2ba32"
+        ]
+      }
+    }
+  ]
+}

@@ -26,7 +26,7 @@ vi.mock("../utils/localAppChatState", async () => ({
 }));
 vi.mock("../utils/mainAppsNavigation", () => ({ navigateToMainApps: calls.navigate }));
 vi.mock("@client", async () => ({
-        ...(await import("@client/utils/stores")),
+    ...(await import("@client/utils/stores")),
     currentUserIdStore: (await import("@client/utils/stores")).writable("viewer"),
 }));
 vi.mock("@shared", () => ({ chatIdentifierToString: () => "local-chat-a" }));

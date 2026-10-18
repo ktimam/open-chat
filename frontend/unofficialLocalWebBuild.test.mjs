@@ -209,6 +209,8 @@ test("public copy preserves generated key and relay, ignores associations, and r
 });
 
 const localWebWiring = {
+    environment:
+        /localClientBuild && !productionApk\s*\?\s*"development"\s*:\s*\(process\.env\.NODE_ENV \?\? "production"\)/,
     mode: /localClientBuild\s*\?\s*\{\s*"import\.meta\.env\.DEV": "false",\s*"import\.meta\.env\.PROD": "true"\s*\}/,
     key: /queryPublicKey: queryOfficialUserIndexPublicKey,\s*outputPath: outputPath\("public-key"\)/,
     otaPlugin: /\.\.\.\(!localClientBuild\s*\?\s*\[\s*androidBundlePlugin/,
@@ -224,14 +226,17 @@ test("Rollup local path has explicit safety replacements, isolated output, relay
     const extra = readFileSync(new URL("./app/rollup.extras.mjs", import.meta.url), "utf8");
     assert.match(source, /const localWebBuild = process\.env\.OC_UNOFFICIAL_WEB_BUILD === "true";/);
     assert.match(source, /const localTestApk = process\.env\.OC_UNOFFICIAL_LOCAL_APK === "true";/);
-    assert.match(source, /const localClientBuild = localWebBuild \|\| localTestApk \|\| productionApk;/);
+    assert.match(
+        source,
+        /const localClientBuild = localWebBuild \|\| localTestApk \|\| productionApk;/,
+    );
     assert.match(source, /"import\.meta\.env\.OC_UNOFFICIAL_CLIENT": JSON\.stringify/);
     assert.match(source, localWebWiring.mode);
     assert.match(
         source,
         /localClientBuild \? \{ "process\.env\.NODE_ENV": JSON\.stringify\("production"\)/,
     );
-    assert.match(source, /localClientBuild && !productionApk \? "development" : \(process\.env\.NODE_ENV/);
+    assert.match(source, localWebWiring.environment);
     assert.match(
         source,
         /localAppRelayPlugin\(\{\s*enabled: localWebBuild,\s*appDirectoryUrl: process\.env\.OC_APP_DIRECTORY_URL,?\s*\}\)/,
@@ -265,6 +270,12 @@ test("Rollup local path has explicit safety replacements, isolated output, relay
 
 test("wrapped local web wiring assertions retain their safety values and conditions", () => {
     for (const [pattern, compact, wrapped, changed] of [
+        [
+            localWebWiring.environment,
+            'localClientBuild && !productionApk ? "development" : (process.env.NODE_ENV ?? "production")',
+            'localClientBuild && !productionApk\n ? "development"\n : (process.env.NODE_ENV ?? "production")',
+            'localClientBuild && productionApk ? "development" : (process.env.NODE_ENV ?? "production")',
+        ],
         [
             localWebWiring.mode,
             'localClientBuild ? { "import.meta.env.DEV": "false", "import.meta.env.PROD": "true" }',

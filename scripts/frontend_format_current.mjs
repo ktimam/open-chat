@@ -8,15 +8,43 @@ import {
   inheritedFormattingDigest as digest,
 } from "./frontend_format_inherited.mjs";
 
+// Scope follows the complete fork delta from the currently integrated upstream.
+// Historical per-file debt proofs below retain their original reviewed identities.
+export const CURRENT_FORMAT_COMPARISON_BASE =
+  "11ed95078e3ae8ae76bf2bdc094dd57b47459622";
 export const CURRENT_FORMAT_BASE = "65e265f027cc50a1ea333dd94acbb7816992b54c";
 // Only these exact files were inherited byte-for-byte by merge 2384b716.
 // Older reviewed records retain their original base and live proof.
 export const CURRENT_FORMAT_MERGED_BASES = Object.freeze({
-  "frontend/app/src/components/home/Home.svelte": "0519aa39964a34d165173587b4d63e572c89670d",
-  "frontend/app/src/components/home/MessageEntry.spec.harness.svelte": "0519aa39964a34d165173587b4d63e572c89670d",
-  "frontend/app/src/components_shared/RichTextEditor.svelte": "0519aa39964a34d165173587b4d63e572c89670d",
-  "frontend/openchat-agent/src/services/localUserIndex/localUserIndex.client.ts": "0519aa39964a34d165173587b4d63e572c89670d",
+  "frontend/app/src/components/home/Home.svelte":
+    "0519aa39964a34d165173587b4d63e572c89670d",
+  "frontend/app/src/components/home/MessageEntry.spec.harness.svelte":
+    "0519aa39964a34d165173587b4d63e572c89670d",
+  "frontend/app/src/components_shared/RichTextEditor.svelte":
+    "0519aa39964a34d165173587b4d63e572c89670d",
+  "frontend/openchat-agent/src/services/localUserIndex/localUserIndex.client.ts":
+    "0519aa39964a34d165173587b4d63e572c89670d",
 });
+// Exact remaining upstream edits, re-proved after the 11ed merge. These are
+// not path-wide exclusions: candidate bytes and every edit multiplicity match.
+export const CURRENT_FORMAT_RECONCILED_BASES = Object.freeze(
+  Object.fromEntries(
+    [
+      "frontend/app/src/components/Toast.svelte",
+      "frontend/app/src/components/home/groupdetails/DirectChatDetails.svelte",
+      "frontend/app/src/components/home/profile/UserProfile.svelte",
+      "frontend/app/src/components_mobile/Toast.svelte",
+      "frontend/app/src/components_mobile/home/SlidingModals.svelte",
+      "frontend/app/src/components_mobile/home/ZoomedImage.svelte",
+      "frontend/app/src/components_mobile/home/groupdetails/DirectChatDetails.svelte",
+      "frontend/app/src/components_mobile/home/groupdetails/GroupDetails.svelte",
+      "frontend/app/src/stores/settings.ts",
+      "frontend/app/src/utils/openchatClient.ts",
+      "frontend/eslint.config.mjs",
+      "frontend/openchat-ui/src/lib/types.ts",
+    ].map((path) => [path, CURRENT_FORMAT_COMPARISON_BASE]),
+  ),
+);
 export const CURRENT_FORMAT_EDIT_ALGORITHM = "unique-common-line-anchors-v1";
 
 // Same edit identity as the historical review: exact removed/added lines,
@@ -125,7 +153,9 @@ export function createCurrentFormattingReview(registry, formatSource) {
   for (const record of registry.records)
     assert.equal(
       record.baseCommit,
-      CURRENT_FORMAT_MERGED_BASES[record.path] ?? CURRENT_FORMAT_BASE,
+      CURRENT_FORMAT_RECONCILED_BASES[record.path] ??
+        CURRENT_FORMAT_MERGED_BASES[record.path] ??
+        CURRENT_FORMAT_BASE,
       "Current review must pin current upstream",
     );
   const records = new Map(
@@ -156,11 +186,52 @@ export function createCurrentFormattingReview(registry, formatSource) {
   };
 }
 
-export function readCurrentFormattingRegistry() {
+export function readHistoricalCurrentFormattingRegistry() {
   return JSON.parse(
     readFileSync(
       new URL("./frontend_format_current.json", import.meta.url),
       "utf8",
+    ),
+  );
+}
+
+export function mergeCurrentFormattingRegistries(historical, reconciled) {
+  assert.equal(reconciled.schemaVersion, historical.schemaVersion);
+  assert.equal(reconciled.normalization, historical.normalization);
+  assert.equal(reconciled.editAlgorithm, historical.editAlgorithm);
+  assert.deepEqual(
+    reconciled.records.map((record) => record.path).sort(),
+    Object.keys(CURRENT_FORMAT_RECONCILED_BASES).sort(),
+    "Exact reconciled formatting proofs required",
+  );
+  for (const record of reconciled.records) {
+    assert.equal(record.scope, "current-client");
+    assert.equal(
+      record.baseCommit,
+      CURRENT_FORMAT_RECONCILED_BASES[record.path],
+      "Reconciled proof must pin the reviewed integrated upstream",
+    );
+  }
+  return {
+    ...historical,
+    records: [
+      ...historical.records.filter(
+        (record) =>
+          !Object.hasOwn(CURRENT_FORMAT_RECONCILED_BASES, record.path),
+      ),
+      ...reconciled.records,
+    ],
+  };
+}
+
+export function readCurrentFormattingRegistry() {
+  return mergeCurrentFormattingRegistries(
+    readHistoricalCurrentFormattingRegistry(),
+    JSON.parse(
+      readFileSync(
+        new URL("./frontend_format_current_upstream.json", import.meta.url),
+        "utf8",
+      ),
     ),
   );
 }

@@ -129,8 +129,8 @@
                 >
             {:else}
                 <BodySmall colour={"textSecondary"}
-                    >A verified connection address is not available. Check your connection and
-                    use Refresh apps to retry. Disconnect remains available.</BodySmall
+                    >A verified connection address is not available. Check your connection and use
+                    Refresh apps to retry. Disconnect remains available.</BodySmall
                 >
             {/if}
             {#if app.status}<p role="status">{app.status}</p>{/if}

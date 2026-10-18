@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { CURRENT_FORMAT_BASE } from "./frontend_format_current.mjs";
+import { CURRENT_FORMAT_COMPARISON_BASE } from "./frontend_format_current.mjs";
 import {
   checkCurrentClientSecurityCi,
   readCurrentClientSecurityInputs,
@@ -122,7 +122,10 @@ test("current-client collectors remain explicit, scoped and ordered behind offli
       "scripts/frontend_format_current.test.mjs",
     ),
   );
-  assert.equal(CURRENT_CLIENT_FORMAT_BASE_EXPRESSION, CURRENT_FORMAT_BASE);
+  assert.equal(
+    CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
+    CURRENT_FORMAT_COMPARISON_BASE,
+  );
   assert.equal(
     CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
     JSON.parse(
@@ -340,6 +343,14 @@ const mutations = [
   [
     "missing current live-format regression",
     (s) => s.replace(" scripts/frontend_format_current.test.mjs", ""),
+  ],
+  [
+    "superseded 65e265 formatting comparison base",
+    (s) =>
+      s.replace(
+        CURRENT_CLIENT_FORMAT_BASE_EXPRESSION,
+        "65e265f027cc50a1ea333dd94acbb7816992b54c",
+      ),
   ],
   [
     "legacy formatting comparison base",

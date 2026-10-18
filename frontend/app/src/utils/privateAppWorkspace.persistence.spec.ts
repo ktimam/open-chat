@@ -15,7 +15,9 @@ import type { LocalDraftDelivery } from "./localAppDrafts";
 import type { extractPrivateAppAction } from "./aiActionRunner";
 
 vi.mock("@client", async () => ({
-        ...(await import("@client/utils/stores")), currentUserIdStore: { value: "synthetic" } }));
+    ...(await import("@client/utils/stores")),
+    currentUserIdStore: { value: "synthetic" },
+}));
 vi.mock("@shared", () => ({ ANON_USER_ID: "anonymous" }));
 vi.mock("./aiActionRunner", () => ({ extractPrivateAppAction: vi.fn() }));
 vi.mock("./isolatedAppProcessor", () => ({

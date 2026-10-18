@@ -116,7 +116,7 @@ selectors["current-client-npm"] = [
   ["frontend/app/src", /^localBrowserAuth\.ts$/],
   [
     "frontend/app/src/utils",
-    /^(?:localApp|privateApp|nativeApp|isolatedAppProcessor)/,
+    /^(?:localApp|privateApp|nativeApp|isolatedAppProcessor|appSetupCodeCrypto)/,
   ],
   [
     "frontend/app/src/components_shared",

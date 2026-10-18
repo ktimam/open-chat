@@ -79,15 +79,27 @@
       "evidence": [
         {
           "file": "frontend/app/src/stores/customModels.ts",
-          "contains": "\"svelte/store\""
+          "contains": "\"@client/reactiveStores\""
         },
         {
           "file": "frontend/app/src/utils/privateAppWorkspace.ts",
-          "contains": "import { get, writable } from \"svelte/store\";"
+          "contains": "import { get, writable } from \"@client/reactiveStores\";"
         },
         {
           "file": "frontend/app/src/utils/nativeAppDelivery.ts",
-          "contains": "import { writable } from \"svelte/store\";"
+          "contains": "import { writable } from \"@client/reactiveStores\";"
+        },
+        {
+          "file": "frontend/openchat-client/src/reactiveStores.ts",
+          "contains": "export { writable, readable, derived, get } from \"./utils/stores\";"
+        },
+        {
+          "file": "frontend/openchat-client/src/utils/stores.ts",
+          "contains": "import { untrack } from \"svelte\";"
+        },
+        {
+          "file": "frontend/app/src/utils/openchatClient.ts",
+          "contains": "clientOnlyApps: import.meta.env.OC_UNOFFICIAL_CLIENT === \"true\","
         },
         {
           "file": "frontend/app/src/components_shared/LocalAppCards.svelte",
@@ -364,6 +376,22 @@
         {
           "file": "scripts/build-unofficial-local-apk.mjs",
           "contains": "\"node_modules/@tauri-apps/cli/tauri.js\""
+        },
+        {
+          "file": "scripts/build-unofficial-production-apk.mjs",
+          "contains": "\"node_modules/@tauri-apps/cli/tauri.js\""
+        },
+        {
+          "file": "frontend/unofficialProductionApkProfile.mjs",
+          "contains": "export function productionApkParentRpId(environment) {"
+        },
+        {
+          "file": "frontend/unofficialLocalApkProfile.mjs",
+          "contains": "export function localApkParentRpId(environment)"
+        },
+        {
+          "file": "frontend/src-tauri/tauri.private.conf.json",
+          "contains": "\"beforeBuildCommand\": \"node ../scripts/build-unofficial-production-apk.mjs --frontend-only\""
         }
       ]
     },
@@ -659,6 +687,11 @@
     ],
     "snapshots": [
       {
+        "sha256": "ba867b0b326bddc1c20bcc9a10c6459fad831a391758b78d6b6742f7cb5e1a20",
+        "reviewRecord": "npm_feature_scope.current-client.review.md",
+        "workingTreeReview": "2026-10-18: approved scoped release reconciliation of completed fork main 54f3307bc after upstream 11ed95078 and mechanically equivalent formatter corrections. Independently reconstructed all 179 Git blobs from 24e36a7e9 as c478ca7a and preserved the deferred October 7 RP checkpoint. The current composition is 194 sources, 139 dedicated modules, 115 anchors and the unchanged 26 dependency roots. New generic code-pairing crypto is a current-only dedicated owner; existing selectors capture inbox, per-chat routes and code transport. Seven precise mixed ownership anchors cover the production builder/profile/config, inherited local profile, DOM-free reactive-store seam and relocated client factory. All dedicated direct imports remain within existing reviewed roots. Current runtime semantic assertions remain on live sources; historical aggregates use explicit independent preimages, never as current acceptance. Current mutations, removals, unknown imports, escaped paths, test-fixture leakage and line-ending/UTF-8 failures remain rejected. No dependency or lock change, root expansion, advisory waiver, authentication redesign, prompt/model change, application-specific logic, backend modification or runtime feature edit is made by this metadata/test repair. Source ownership only; separate CI, build and device evidence remains required."
+      },
+      {
         "workingTreeReview": "2026-09-29: reviewed current model/private-app/native composition, all dedicated direct package imports and necessary reached edges. Retains 24 still-source-owned roots and adds only the explicitly reviewed node_modules/esbuild location for the native handoff asset build. No package, lock, installation, advisory decision, prompt or backend changes.",
         "reviewRecord": "npm_feature_scope.current-client.review.md",
         "sha256": "33b3ad8615b578d6d0f4d36aca795ddcaeb6baef4804f842b730bcecf57f3856"
@@ -795,6 +828,11 @@
         "sha256": "c478ca7aefd4551309ee18992f5705660a0f14e834069cabc12f8a2871b34b88",
         "reviewRecord": "npm_feature_scope.current-client.review.md",
         "workingTreeReview": "2026-10-06: bounded current-source binding for reviewed UI repair 1cf9e1a866c68a261acaa8679ab5a6fc9c0fc7cb and approved private-card reproposal/storage fixes. Reuse the prior frozen 41-source repair inventory and its browser/emulator evidence, without treating it as acceptance of today's new runtime bytes. Independently reading all 177 predecessor blobs at 2384b716 reproduces 6ae14948. Two local helpers, localAppRelayFrame and localAppReproposalPresentation, are discovered by the unchanged current-only selector; 24 existing owned or anchored inputs change. Equivalent current Connect and appDirectoryUrl anchors replace the removed Saved-cards-manager text and old one-line relay invocation. All 131 dedicated modules use the existing 26 roots; mixed hosts remain exact anchored only. Retained cards stay encrypted, approval is revoked before fresh extraction, prior delivery identities remain immutable, explicit source-matched regeneration creates a separate unapproved request, and the old eight-card cap is replaced by per-card and aggregate-byte bounds. Earlier technical handoff screens remain removed. Composition is 179 sources and unchanged 108 anchors. Exact historical preimages and two strict text reversals retain every earlier checkpoint; current source drift/removal and unreviewed imports remain rejected. Tests and docs are not runtime owners. No source-selector, dependency/lock, advisory decision, workflow, model/prompt, authentication, OpenChat backend, deployment or release acceptance change is made."
+      },
+      {
+        "sha256": "4f1ecfe59a1f3858dd3887607741cdae40a33ee2da8ac5f756f0e567e560ba70",
+        "reviewRecord": "npm_feature_scope.current-client.review.md",
+        "workingTreeReview": "2026-10-07: bounded explicit local-APK passkey RP configuration against 24e36a7e95813a73729c6cbc3dde53dfd8196980. Independently reading all 179 predecessor blobs reproduces c478ca7a. Only three already-anchored mixed inputs change: rollup.config.mjs, rollup.extras.mjs and build-unofficial-local-apk.mjs. The explicit validated RP is propagated through the marked Tauri child, WebAuthn origin, native RP resource and bundled marker; missing, mismatched or ambient-only values fail, while the original official-build fallback remains. No dedicated owner, external import/root or selector is added; composition remains 179 sources, 131 dedicated owners, 108 anchors and 26 roots. Exact historical preimages and bounded text reversals preserve prior checkpoints, with live source drift/removal rejection. The separate native source review still has three pre-existing unreviewed source-pin mismatches from 1cf9e1a; this does not accept or waive them. No dependency/lock, advisory decision, workflow, canister/backend, native UI, package/signing identity, OTA, model/prompt or runtime/device/release acceptance change is made by this inventory update."
       }
     ]
   }

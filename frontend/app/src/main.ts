@@ -67,7 +67,9 @@ async function startApplication() {
         isTauriApp(),
     );
 
-    linkFonts(layout === "v3" ? import.meta.env.OC_WEB_FONTS_URL : import.meta.env.OC_APP_FONTS_URL);
+    linkFonts(
+        layout === "v3" ? import.meta.env.OC_WEB_FONTS_URL : import.meta.env.OC_APP_FONTS_URL,
+    );
 
     if (layout === "v2") {
         setNativeTheme();

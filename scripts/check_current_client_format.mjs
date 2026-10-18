@@ -8,7 +8,9 @@ import {
 } from "./frontend_format_check.mjs";
 import {
   CURRENT_FORMAT_BASE,
+  CURRENT_FORMAT_COMPARISON_BASE,
   CURRENT_FORMAT_MERGED_BASES,
+  CURRENT_FORMAT_RECONCILED_BASES,
   createCurrentFormattingReview,
   formatCurrentSource,
   readCurrentFormattingRegistry,
@@ -44,7 +46,7 @@ export function currentFormattingCandidates(
 
 export function checkCurrentClientFormat({
   repositoryRoot = root,
-  comparisonBase = CURRENT_FORMAT_BASE,
+  comparisonBase = CURRENT_FORMAT_COMPARISON_BASE,
   ci = process.env.CI === "true",
   report = console.log,
   registry = readCurrentFormattingRegistry(),
@@ -61,7 +63,10 @@ export function checkCurrentClientFormat({
   );
   const groups = new Map();
   for (const path of paths) {
-    const base = CURRENT_FORMAT_MERGED_BASES[path] ?? CURRENT_FORMAT_BASE;
+    const base =
+      CURRENT_FORMAT_RECONCILED_BASES[path] ??
+      CURRENT_FORMAT_MERGED_BASES[path] ??
+      CURRENT_FORMAT_BASE;
     if (!groups.has(base)) groups.set(base, []);
     groups.get(base).push(path);
   }
@@ -112,7 +117,7 @@ if (
   try {
     parseCurrentFormatArgs(process.argv.slice(2));
     const result = checkCurrentClientFormat({
-      comparisonBase: process.env.PR_BASE_SHA || CURRENT_FORMAT_BASE,
+      comparisonBase: process.env.PR_BASE_SHA || CURRENT_FORMAT_COMPARISON_BASE,
     });
     console.log(JSON.stringify(result));
     if (!result.pass) process.exitCode = 1;

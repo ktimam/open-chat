@@ -10,7 +10,10 @@ import {
     createUnofficialLocalApkEnvironment,
     localApkParentRpId,
 } from "../unofficialLocalApkProfile.mjs";
-import { createUnofficialProductionApkEnvironment, productionApkParentRpId } from "../unofficialProductionApkProfile.mjs";
+import {
+    createUnofficialProductionApkEnvironment,
+    productionApkParentRpId,
+} from "../unofficialProductionApkProfile.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 export const __dirname = dirname(__filename);
@@ -106,23 +109,24 @@ export function initEnv({ websiteVersion } = {}) {
         };
         const profile = productionApk
             ? createUnofficialProductionApkEnvironment(canisters, {
-                  inherited: process.env, buildId: process.env.OC_UNOFFICIAL_APK_BUILD_ID,
-              })
-            : localApk
-            ? createUnofficialLocalApkEnvironment(canisters, {
                   inherited: process.env,
                   buildId: process.env.OC_UNOFFICIAL_APK_BUILD_ID,
-                  appDirectoryUrl: options.appDirectoryUrl,
-                  rpId: localApkParentRpId(process.env),
               })
-            : process.env.OC_UNOFFICIAL_WEB_BUILD === "true"
-              ? createUnofficialLocalWebBuildEnvironment(canisters, {
-                    ...options,
-                    output: process.env.OC_UNOFFICIAL_WEB_OUTPUT,
-                    buildId: process.env.OC_UNOFFICIAL_WEB_BUILD_ID,
-                    repositoryRoot: path.join(__dirname, "../.."),
+            : localApk
+              ? createUnofficialLocalApkEnvironment(canisters, {
+                    inherited: process.env,
+                    buildId: process.env.OC_UNOFFICIAL_APK_BUILD_ID,
+                    appDirectoryUrl: options.appDirectoryUrl,
+                    rpId: localApkParentRpId(process.env),
                 })
-              : createUnofficialLocalEnvironment(canisters, options);
+              : process.env.OC_UNOFFICIAL_WEB_BUILD === "true"
+                ? createUnofficialLocalWebBuildEnvironment(canisters, {
+                      ...options,
+                      output: process.env.OC_UNOFFICIAL_WEB_OUTPUT,
+                      buildId: process.env.OC_UNOFFICIAL_WEB_BUILD_ID,
+                      repositoryRoot: path.join(__dirname, "../.."),
+                  })
+                : createUnofficialLocalEnvironment(canisters, options);
         // A stale env file or inherited local deployment setting must not retarget this client.
         for (const key of Object.keys(process.env)) {
             if (/^(OC_|NODE_OPTIONS$|NODE_ENV$|VITE_)/i.test(key)) delete process.env[key];
@@ -131,7 +135,8 @@ export function initEnv({ websiteVersion } = {}) {
         if (
             websiteVersion !== undefined &&
             process.env.OC_UNOFFICIAL_WEB_BUILD !== "true" &&
-            !localApk && !productionApk
+            !localApk &&
+            !productionApk
         ) {
             process.env.OC_WEBSITE_VERSION = websiteVersion;
         }
@@ -407,7 +412,13 @@ export const STARTUP_DARK_BACKGROUND = "#1b1c21";
 // is only known in the browser. Both choices mirror what the app goes on to do (`selectLayout` in
 // utils/layout.ts and `getStoredLocale` in i18n/i18n.ts); if they ever disagree the cost is a
 // wasted download, not a broken page.
-export function generateStartupScript({ chunks, version, mobileLayout, webLayout = false, prestartWorker = true }) {
+export function generateStartupScript({
+    chunks,
+    version,
+    mobileLayout,
+    webLayout = false,
+    prestartWorker = true,
+}) {
     const chunksByFileName = new Map(chunks.map((c) => [c.fileName, c]));
     const entry = chunks.find((c) => c.isEntry);
     // The entry's own imports are preloaded by <link> tags, which the preload scanner can see

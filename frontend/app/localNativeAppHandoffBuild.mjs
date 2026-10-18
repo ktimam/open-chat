@@ -3,7 +3,10 @@ import { fileURLToPath, URL } from "node:url";
 import { build } from "esbuild";
 
 /** Fixed first-party private-draft relay only. Disabled for all official/browser builds. */
-export function localNativeAppHandoffBuildPlugin({ enabled = false, applicationId = "dev.openchatfork.localtest" } = {}) {
+export function localNativeAppHandoffBuildPlugin({
+    enabled = false,
+    applicationId = "dev.openchatfork.localtest",
+} = {}) {
     if (!["dev.openchatfork.localtest", "io.github.ktimam.openchatprivate"].includes(applicationId))
         throw new Error("Unsupported private app transport package");
     return {

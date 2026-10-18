@@ -78,9 +78,18 @@ describe("app imports the client only through public entry points", () => {
 
     it("allows the exact DOM-free store entry point but rejects private store paths", async () => {
         const file = "app/src/utils/example.ts";
-        expect(await importErrors('import { writable } from "@client/reactiveStores";', file)).toEqual([]);
-        expect(await importErrors('export const stores = import("@client/reactiveStores");', file)).toEqual([]);
-        for (const source of ["@client/utils/stores", "@client/stores", "@client/reactiveStores/internal", "@client/reactiveStores?raw"]) {
+        expect(
+            await importErrors('import { writable } from "@client/reactiveStores";', file),
+        ).toEqual([]);
+        expect(
+            await importErrors('export const stores = import("@client/reactiveStores");', file),
+        ).toEqual([]);
+        for (const source of [
+            "@client/utils/stores",
+            "@client/stores",
+            "@client/reactiveStores/internal",
+            "@client/reactiveStores?raw",
+        ]) {
             expect(await importErrors(`import { writable } from "${source}";`, file)).toEqual([
                 "no-restricted-imports",
             ]);

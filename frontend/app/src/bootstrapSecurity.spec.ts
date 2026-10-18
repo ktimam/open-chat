@@ -287,10 +287,12 @@ describe("application bootstrap security", () => {
         expect(result.chooseLayout).toHaveBeenCalledExactlyOnceWith("v2", "v3", false, false);
         expect(result.linkFonts).toHaveBeenCalledExactlyOnceWith("/web-fonts.css");
         expect(result.writeLayoutCssVariables).toHaveBeenCalledOnce();
-        expect(result.mount).toHaveBeenCalledExactlyOnceWith(result.webApp, { target: result.body });
-        expect(result.loadModule.mock.calls.filter(([name]) => name.endsWith("/App.svelte"))).toEqual([
-            ["./web/App.svelte"],
-        ]);
+        expect(result.mount).toHaveBeenCalledExactlyOnceWith(result.webApp, {
+            target: result.body,
+        });
+        expect(
+            result.loadModule.mock.calls.filter(([name]) => name.endsWith("/App.svelte")),
+        ).toEqual([["./web/App.svelte"]]);
     });
 
     test("a browser worker navigation stops this startup without mounting or restoring a model", async () => {

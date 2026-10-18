@@ -30,7 +30,11 @@ import { localAppRelayPlugin } from "./localAppRelayBuild.mjs";
 import { localNativeAppHandoffBuildPlugin } from "./localNativeAppHandoffBuild.mjs";
 import { localNativeAppSetupBuildPlugin } from "./localNativeAppSetupBuild.mjs";
 import { localApkBundleMarker, localApkParentRpId } from "../unofficialLocalApkProfile.mjs";
-import { productionApkBundleMarker, productionApkParentRpId, PRIVATE_APK_ID } from "../unofficialProductionApkProfile.mjs";
+import {
+    productionApkBundleMarker,
+    productionApkParentRpId,
+    PRIVATE_APK_ID,
+} from "../unofficialProductionApkProfile.mjs";
 import {
     copyUnofficialWebPublicFiles,
     unofficialLocalWebManifest,
@@ -110,10 +114,15 @@ function clean() {
                 }
                 if (productionApk) {
                     fs.writeFileSync(outputPath("android-rp-id"), androidRpId);
-                    fs.writeFileSync(outputPath("private-apk-profile.json"), JSON.stringify(
-                        productionApkBundleMarker(process.env.OC_IDENTITY_CANISTER,
-                            Principal.fromText(process.env.OC_IDENTITY_CANISTER).toHex()),
-                    ));
+                    fs.writeFileSync(
+                        outputPath("private-apk-profile.json"),
+                        JSON.stringify(
+                            productionApkBundleMarker(
+                                process.env.OC_IDENTITY_CANISTER,
+                                Principal.fromText(process.env.OC_IDENTITY_CANISTER).toHex(),
+                            ),
+                        ),
+                    );
                 }
                 return;
             }
@@ -577,7 +586,9 @@ export default {
                 process.env.OC_TRANSFORMERS_WEBGPU_ASSET_DELIVERY,
             ),
             "import.meta.env.OC_NODE_ENV": JSON.stringify(
-                localClientBuild && !productionApk ? "development" : (process.env.NODE_ENV ?? "production"),
+                localClientBuild && !productionApk
+                    ? "development"
+                    : (process.env.NODE_ENV ?? "production"),
             ),
             "import.meta.env.OC_WEBSITE_VERSION": JSON.stringify(process.env.OC_WEBSITE_VERSION),
             "import.meta.env.OC_ROLLBAR_ACCESS_TOKEN": JSON.stringify(
@@ -740,7 +751,12 @@ export default {
                     development,
                     process.env.OC_UNOFFICIAL_CLIENT === "true",
                 );
-                otaCsp = generateCspForScripts([startupScript, ...inlineScripts], false, false, true);
+                otaCsp = generateCspForScripts(
+                    [startupScript, ...inlineScripts],
+                    false,
+                    false,
+                    true,
+                );
 
                 const analyticsNoscript =
                     production && gaEnabled

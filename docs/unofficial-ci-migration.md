@@ -6,6 +6,37 @@ This migration does not modify backend sources, upstream backend/Candid workflow
 or deployment scripts. The separately approved current-client security route and
 ownership inventories below preserve historical inventories and advisory decisions.
 
+## October 18 scoped release-check repair
+
+The approved repair completes the deferred model/private-app source-owner reviews
+against `54f3307bc6cc3a2b88a6afbdc06d90720f227f52` plus the formatter-only changes
+in this repair. That commit is predecessor provenance; exact source digests bind
+the candidate. Dependency roots, native profiles and advisory decisions are not
+expanded. Existing production APK build/profile inputs are now explicitly covered.
+Historical fingerprints and lock closures use their original hash-pinned Git
+inputs; they are not asserted against the newer merged lockfile. Current imports,
+missing-source rejection and authentication boundaries remain live checks.
+
+Formatting compares the complete fork delta with the actually integrated upstream
+`11ed95078e3ae8ae76bf2bdc094dd57b47459622`. The original fourteen inherited-debt
+records remain unchanged. Separately pinned current-upstream proofs accept only
+exact source, formatter/config identities and repeated edit counts; they do not
+exempt entire files. Fork-owned differences are mechanically formatted. The typed
+portal test uses the real store type, and wrapped build-condition assertions retain
+their exact values and negative mutations. No feature, model prompt/weight,
+encryption behavior, backend, dependency version or scanner waiver changes.
+
+Local full-frontend verification passes 7,290 tests with one existing skip, lint
+with zero errors, and all UI/agent/client/shared/worker typechecks. Existing lint
+and type warnings remain visible. All 849 scoped offline contracts and both
+current-client workflow guards pass. The license policy refreshes only its
+source/lock bindings; a regression proves all 39 exact package identities and
+license decisions remain unchanged from the pinned historical review.
+Scoped checks and exact-commit hosted results,
+advisory disposition, signed-artifact verification and real-device acceptance
+remain distinct evidence; this documentation does not turn one into another.
+No core OpenChat audit is part of this repair.
+
 ## October 17 upstream synchronization
 
 Fork `main` integrates the official repository's `master` at

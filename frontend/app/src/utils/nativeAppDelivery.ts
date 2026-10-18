@@ -227,7 +227,8 @@ export function createNativeAppDelivery(deps: Dependencies) {
     return {
         deliver,
         pairing: {
-            subscribe: (...args: Parameters<typeof pairing.subscribe>) => pairing.subscribe(...args),
+            subscribe: (...args: Parameters<typeof pairing.subscribe>) =>
+                pairing.subscribe(...args),
             get value() {
                 return pairing.value;
             },

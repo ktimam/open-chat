@@ -35,7 +35,9 @@ vi.mock("../utils/privateAppWorkspace", async () => ({
 }));
 vi.mock("@utils/mainAppsNavigation", () => ({ navigateToMainApps: calls.navigate }));
 vi.mock("@client", async () => ({
-        ...(await import("@client/utils/stores")), mobileWidth: (await import("@client/utils/stores")).writable(false) }));
+    ...(await import("@client/utils/stores")),
+    mobileWidth: (await import("@client/utils/stores")).writable(false),
+}));
 vi.mock("@utils/aiAppSurfaces", () => ({ homeSurfaceOpening: calls.homeSurface }));
 vi.mock("@src/i18n/i18n", () => ({ i18nKey: (key: string) => key }));
 vi.mock("@src/stores/toast", () => ({

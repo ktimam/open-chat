@@ -4,10 +4,10 @@
   "feature": "unofficial-current-client-models-and-private-app-native-interface",
   "sourceRevision": {
     "base": "5f00758312735f2ddac9928e3aa60349964bf73a",
-    "head": "3b259b2f53c4d7b6bad30d9747bf3554281ca72f",
-    "pendingMergeHead": "319fb436857f35f61e12a9d47bebf6ddb0a72307"
+    "head": "54f3307bc6cc3a2b88a6afbdc06d90720f227f52",
+    "pendingMergeHead": "11ed95078e3ae8ae76bf2bdc094dd57b47459622"
   },
-  "cargoLockSha256": "cc7cd15531376a0f560e4626682a43deca6373bf01df1e7a064f7a4bdcb6493f",
+  "cargoLockSha256": "e868bffd4efea6e411f2d701ad53a2d30d1f1c05629b11a01c174b5fd6659a1f",
   "completeness": {
     "status": "incomplete",
     "unresolved": [
@@ -26,7 +26,7 @@
         "open-chat/local-test-app-handoff"
       ],
       "metadataSha256": null,
-      "purpose": "Local-test APK source profile only: all-WebGPU frontend, original native Credential Manager authentication, private-app handoff and one-time app-setup loopback return. Browser authentication listener is unselected. No provider/Digital Asset Links qualification, rebuilt APK or public release is claimed."
+      "purpose": "Shared local-test and OpenChat Private production APK Rust source profile: both wrappers select all-WebGPU plus the retained private-app handoff/setup compatibility feature, with original native Credential Manager authentication. Current app connection uses the separately reviewed frontend code exchange. Browser authentication listener is unselected. No provider/Digital Asset Links qualification, rebuilt APK or publication approval is claimed."
     },
     {
       "id": "android-x86_64-local-webgpu",
@@ -36,7 +36,7 @@
         "open-chat/local-test-app-handoff"
       ],
       "metadataSha256": null,
-      "purpose": "Local-test APK source profile only: all-WebGPU frontend, original native Credential Manager authentication, private-app handoff and one-time app-setup loopback return. Browser authentication listener is unselected. No provider/Digital Asset Links qualification, rebuilt APK or public release is claimed."
+      "purpose": "Shared local-test and OpenChat Private production APK Rust source profile: both wrappers select all-WebGPU plus the retained private-app handoff/setup compatibility feature, with original native Credential Manager authentication. Current app connection uses the separately reviewed frontend code exchange. Browser authentication listener is unselected. No provider/Digital Asset Links qualification, rebuilt APK or publication approval is claimed."
     },
     {
       "id": "linux-default-tests",
@@ -96,10 +96,10 @@
     }
   ],
   "sourceFiles": {
-    "Cargo.toml": "102d09f9ebc6da1b015e8d8ad38798dbb2dc1ec49bae5768ca697e876449acf0",
+    "Cargo.toml": "53764c7f816826bfc284ac9f625620f58c93791e71c8e0bf54d6f4c803cc8ae3",
     "frontend/tauri-plugin-oc/Cargo.toml": "3ece55c163a25b4d0f99ab49679a2e35b6db66218924beca4568155d06d44703",
     "frontend/src-tauri/Cargo.toml": "0dc8a7053d3978b483306bff04f084bb8183c21447be5e00fab8173b1527db40",
-    "frontend/tauri-plugin-oc/build.rs": "5bcd390e221eedf25ac628cd464eefd82f3106eb791ac7bc031f642e982e5a4e",
+    "frontend/tauri-plugin-oc/build.rs": "4a50fc51f937df4d1f8d39d954b273f0f54175a095c2a53e3c0ed1ed2df1ecc5",
     "frontend/src-tauri/build.rs": "09e49062eca8a2fde5addd0f98f6b5f87c08e0b2daa989502914a716bf5a5d4b",
     "frontend/tauri-plugin-oc/src/model_manager.rs": "f4cfb33a9460e778dd7325b3d78e84a2eb71f056ee583061f340b3fae0963236",
     "frontend/tauri-plugin-oc/src/inference.rs": "f7e13738502cd2e35de0afd878f5467a624cb2195565cc612a09b48498aa095f",
@@ -112,19 +112,22 @@
     "frontend/tauri-plugin-oc/src/bundle_manager.rs": "d6d534e5a2daec09af940d91a408666361f4ad45e5bfd7f8cc5d7e6d7503446f",
     "frontend/tauri-plugin-oc/src/update_manager.rs": "44072afcb06efca06e4527140b9eba84868f17c9cfba54dc139967c2ef865cac",
     "frontend/tauri-plugin-oc/src/local_browser_auth_protocol.rs": "92369a69e68e2c04cfb0a877d2bef47957863c83a1e3759ad83f36f328d9ef19",
-    "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs": "c4e85a73d9307178ec7a8c12def42bcba966a8a7099d2e3fb38dca35db6c1aa2",
+    "frontend/tauri-plugin-oc/src/local_app_handoff_protocol.rs": "3199e7c934886080fe48784116f3e32e5ebc64eb57c22d7687aff1375ce5965c",
     "frontend/tauri-plugin-oc/src/local_browser_auth.rs": "6c78debd919b12665553c298f7e70670435a3f2040c31d53b022d2172f64d475",
-    "frontend/tauri-plugin-oc/src/local_app_handoff.rs": "fc4e9de161f282e1d855cc3de501e0a9433f7b1ff5d16be810715bef6f18f906",
+    "frontend/tauri-plugin-oc/src/local_app_handoff.rs": "5767f35d3e3d626e3855faf8ad62da462ab0cfce3b865e8226e09f30af419978",
     "frontend/src-tauri/src/lib.rs": "f2b3c4d29956531cfd2f55eb8397a9d0be7ee749a9c5df37fa11dbd8422bfa7d",
     "frontend/src-tauri/src/main.rs": "e5dfab54c7a9843285d54ff5a783c00813cd3f28d1bb2f6982aa348697cbb1c4",
     "frontend/src-tauri/src/navigation.rs": "0ddee2abb8f0eb2fbcf094fcb293d4b28423aab744a6b20319831f2fba9ee4b3",
     "frontend/src-tauri/tauri.localtest.conf.json": "c7a4d7815d48df337d0cecdd1238b7ce8b9e5239bc0b7be43cd80ef3622ba397",
-    "scripts/build-unofficial-local-apk.mjs": "0b8e68a771047aa5d9108e46d6f3a1e4a4b20c8ca18591a74d7ba4ed8062b1f6",
-    "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs": "8bdef87fd52e33c5e6670a5057ad687551d3d6c91c16bec902efeaf69c6328a5",
-    "frontend/tauri-plugin-oc/src/local_app_setup.rs": "7ec5e36c1ac4631a9e62ea43ca25c2eab84a9fe8819f816b0814ad6f953ffb79",
+    "scripts/build-unofficial-local-apk.mjs": "92e6364ba2ef41dad1f7e64a668b7f8cf38d6d811970ae0ea1a744f9e19add5c",
+    "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs": "5fb9c4d05742e7a6ce485b25c378a803efe6310a5bc73002913c5a81b9dcec52",
+    "frontend/tauri-plugin-oc/src/local_app_setup.rs": "24a5ed49015ff4d0b21372317831559a4f6adeb6f9211f908ffe7f8f125a9d82",
     "frontend/tauri-plugin-oc/permissions/local-app-setup.toml": "e9400500332f244a4ebe35b564aa6fb8308682c882ed3e0d3535f5852b23b5f5",
-    "frontend/unofficialLocalApkProfile.mjs": "8d4bbe828183eab8a5122a7c8af3c6a713f80f510c84691a469fc703679b5676",
-    "frontend/tauri-plugin-oc/src/local_app_retention.rs": "0caf4b07e4dd87116c4e3a75ff219a10980179e88cc68e8dab1e86d466d02c41"
+    "frontend/unofficialLocalApkProfile.mjs": "d9a51012e214a44ba79aa8d7d708154fd2061733ab24623582299e9274685acb",
+    "frontend/tauri-plugin-oc/src/local_app_retention.rs": "0caf4b07e4dd87116c4e3a75ff219a10980179e88cc68e8dab1e86d466d02c41",
+    "frontend/src-tauri/tauri.private.conf.json": "34aa4d79bba3d30ce9d7cbbbca54f7cbfd92c4ecea1b218f24d48f991e413c22",
+    "frontend/unofficialProductionApkProfile.mjs": "c1a1a4ab8eba240dab3d6ee2d1d554015a37f0509eea34317cb79108ba8a9f09",
+    "scripts/build-unofficial-production-apk.mjs": "4a803f397d84ed9d372660df23f6be5b3ab1b8aa83a421ec086f920bf1118682"
   },
   "seeds": [
     {
@@ -203,7 +206,11 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
-          "lines": [77]
+          "lines": [94]
+        },
+        {
+          "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
+          "lines": [113]
         }
       ]
     },
@@ -287,7 +294,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
-          "lines": [4, 93]
+          "lines": [4, 113]
         }
       ]
     },
@@ -329,7 +336,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup_protocol.rs",
-          "lines": [5, 146, 175, 205]
+          "lines": [5, 297, 326, 355]
         }
       ]
     },
@@ -371,7 +378,7 @@
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [105]
+          "lines": [132]
         }
       ]
     },
@@ -685,11 +692,11 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_handoff.rs",
-          "lines": [66]
+          "lines": [93]
         },
         {
           "path": "frontend/tauri-plugin-oc/src/local_app_setup.rs",
-          "lines": [104]
+          "lines": [131]
         }
       ]
     },
@@ -1023,7 +1030,7 @@
       "evidence": [
         {
           "path": "frontend/tauri-plugin-oc/build.rs",
-          "lines": [14, 15, 16, 54]
+          "lines": [14, 15, 16, 55]
         }
       ]
     },

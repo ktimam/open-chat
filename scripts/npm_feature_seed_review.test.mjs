@@ -295,234 +295,688 @@ const appViewSourceSha256 =
 const outputBudgetAddition =
   "frontend/app/src/utils/transformersWebGpuOutputLimits.ts";
 const beforeOutputBudgetMerge = new Map([
-  ["frontend/app/src/components_shared/WebInferenceRuntimeSettings.svelte", "7b96f608f1f5ab4e2bd36b8eb276d71245475e047ce1d22060674ab4cdf53692"],
-  ["frontend/app/src/stores/transformersWebGpuSettings.ts", "0ba84809aef37c75acfe7448853ef4c06e990942f397dcd4ddaf55bb6b9dc4b7"],
-  ["frontend/app/src/utils/transformersWebGpuInference.ts", "e797afe96025f79b8b0b9ebfc64aeee86aa1a9fa14a83d394d32dbe23b0693a2"],
-  ["frontend/app/src/utils/webGpuModelCatalog.ts", "a345e1096e51913b2ba2ea7f9db803604443282d2a9d4b8a228bac3ad6d95ae1"],
-  ["frontend/app/src/utils/webInference.ts", "31172e06b768969269790eaa91dc9d0234300d5af085b88cffea464f19955ff8"],
-  ["frontend/openchat-agent/src/utils/chatsDb.ts", "379b342b02d8464c5b2840efc5b9315d4caf258a6b1a2b5b477687e6b0da651e"],
-  ["frontend/openchat-client/src/openchat.ts", "98202fa119b548407a0b34a648654c0978444ce86670015b52588963c06fd3dc"],
-  ["frontend/openchat-shared/src/domain/worker.ts", "49812cfcffde3e569e23be89bc1e33b6af4a4569926ce933dc11bf194d553e5e"],
-  ["frontend/openchat-worker/src/worker.ts", "91593aa7b006b7c12847c0afe4cba74ce029dd2466c540a90daf1373bf9791d7"],
+  [
+    "frontend/app/src/components_shared/WebInferenceRuntimeSettings.svelte",
+    "7b96f608f1f5ab4e2bd36b8eb276d71245475e047ce1d22060674ab4cdf53692",
+  ],
+  [
+    "frontend/app/src/stores/transformersWebGpuSettings.ts",
+    "0ba84809aef37c75acfe7448853ef4c06e990942f397dcd4ddaf55bb6b9dc4b7",
+  ],
+  [
+    "frontend/app/src/utils/transformersWebGpuInference.ts",
+    "e797afe96025f79b8b0b9ebfc64aeee86aa1a9fa14a83d394d32dbe23b0693a2",
+  ],
+  [
+    "frontend/app/src/utils/webGpuModelCatalog.ts",
+    "a345e1096e51913b2ba2ea7f9db803604443282d2a9d4b8a228bac3ad6d95ae1",
+  ],
+  [
+    "frontend/app/src/utils/webInference.ts",
+    "31172e06b768969269790eaa91dc9d0234300d5af085b88cffea464f19955ff8",
+  ],
+  [
+    "frontend/openchat-agent/src/utils/chatsDb.ts",
+    "379b342b02d8464c5b2840efc5b9315d4caf258a6b1a2b5b477687e6b0da651e",
+  ],
+  [
+    "frontend/openchat-client/src/openchat.ts",
+    "98202fa119b548407a0b34a648654c0978444ce86670015b52588963c06fd3dc",
+  ],
+  [
+    "frontend/openchat-shared/src/domain/worker.ts",
+    "49812cfcffde3e569e23be89bc1e33b6af4a4569926ce933dc11bf194d553e5e",
+  ],
+  [
+    "frontend/openchat-worker/src/worker.ts",
+    "91593aa7b006b7c12847c0afe4cba74ce029dd2466c540a90daf1373bf9791d7",
+  ],
 ]);
+// The 24e36a7e9 Git blobs were independently reconstructed as the exact 179-file
+// c478ca7a predecessor. These substitutions are HISTORY ONLY: the live gate and
+// exhaustive mutation/removal test always hash the current disk bytes.
+const releaseReviewAdditions = new Set([
+  "frontend/app/src/utils/aiAppCodeTransport.ts",
+  "frontend/app/src/utils/appSetupCodeCrypto.ts",
+  "frontend/app/src/utils/localAppChatRoutes.ts",
+  "frontend/app/src/utils/localAppInbox.ts",
+  "frontend/app/src/utils/localAppInboxDelivery.ts",
+  "frontend/app/src/utils/localAppScopedSetup.ts",
+  "frontend/app/src/utils/localAppSetupCode.ts",
+  "frontend/app/src/utils/localAppSetupCodeActor.ts",
+  "frontend/app/src/utils/openchatClient.ts",
+  "frontend/openchat-client/src/reactiveStores.ts",
+  "frontend/openchat-client/src/utils/stores.ts",
+  "frontend/src-tauri/tauri.private.conf.json",
+  "frontend/unofficialLocalApkProfile.mjs",
+  "frontend/unofficialProductionApkProfile.mjs",
+  "scripts/build-unofficial-production-apk.mjs",
+]);
+const beforeReleaseReview = new Map([
+  [
+    "frontend/app/localAppRelayHeaders.mjs",
+    "b73a882c51e4549e9e2d91daf7897e92c4dcac299e0d051a26893ff4d17c29d7",
+  ],
+  [
+    "frontend/app/localNativeAppHandoffBuild.mjs",
+    "d6768f89550c70531bf8953df7cd02c645f3d7347fa66da80387ee90b5df8b27",
+  ],
+  [
+    "frontend/app/localNativeAppSetupBuild.mjs",
+    "35201abf6695268da87ed2cdcd8fa9cc73504cf92d1502ac4d97d5c4f28bbdbf",
+  ],
+  [
+    "frontend/app/src/components/App.svelte",
+    "a1101babca57b1327e6baa3fbd10ecb6a176e04e20af3e88006a23cfbe5fe4c5",
+  ],
+  [
+    "frontend/app/src/components/home/ActionCardContent.svelte",
+    "12a0ce6a0d524d93131342c4f46afe7f5cb23e91106d50597bfff41a8a7894e5",
+  ],
+  [
+    "frontend/app/src/components/home/AiAppLinkModal.svelte",
+    "b32a2a52f73ee961ee7f914bef4f72c6955bf1a2978f9330542b234d98e526bd",
+  ],
+  [
+    "frontend/app/src/components/home/AiAppModal.svelte",
+    "de5d8114cbaab25d5abc89e475a0b4795d18a2a4ec94e3d3d10a5a0c00584cd0",
+  ],
+  [
+    "frontend/app/src/components/home/AiAppSurfaceModal.svelte",
+    "746c88ee3b258ca457e07a9738299df42c47a5d1d116b06a8cbd39e76a4b36d0",
+  ],
+  [
+    "frontend/app/src/components/home/ChatMessage.svelte",
+    "8a1ccc6f45a60c19ef194b30b940d3f46a6984a791734bd373995377fa2b755c",
+  ],
+  [
+    "frontend/app/src/components/home/communities/explore/AiAppCard.svelte",
+    "4997cf907e644885973c3c641f2d781540a420f9bc2ee104ca9af0f4b213a9e6",
+  ],
+  [
+    "frontend/app/src/components/home/communities/explore/Explore.svelte",
+    "661e0bd27b3b8481beea51caf955d5831c03db334b3275a892517511b6e9ec0e",
+  ],
+  [
+    "frontend/app/src/components/home/nav/MainMenu.svelte",
+    "ff81e2076f2349787724dea8c11bca339c10f5550d2f30928bd958852687d125",
+  ],
+  [
+    "frontend/app/src/components/home/profile/ModelManager.svelte",
+    "20aadec37f3318c4d71a6e4c2534d3110614f55ee11adac7be00f18ebe4abfab",
+  ],
+  [
+    "frontend/app/src/components/home/profile/MyApps.svelte",
+    "bb9021eabf6716bcc165739a09604111ccbd23e04e6740763ca99a0bfa6c344a",
+  ],
+  [
+    "frontend/app/src/components/onboard/OnboardModal.svelte",
+    "11011f54f3a396b309d89c953833e5cbc10261464865f32cb86c080fdcc7d1ff",
+  ],
+  [
+    "frontend/app/src/components_mobile/App.svelte",
+    "357814707c7a943d776a2d36fd9053d9cff4f55978e6bbb66e5fa6f4fe03fae7",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/AiAppLinkSheet.svelte",
+    "a344126eb6fa2050e2531e6fad6c810095999e7c6ebdb7756c310514b46fa629",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/AiAppSurfaceSheet.svelte",
+    "857c1c4c19a9163d92f920e161cf656bcb34cc6b0cfde3ff3dbaf0fa34ee1837",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/ChatMessage.svelte",
+    "cd7e6fc12a92129b2a3b75596398bd17d58941f44965b507b264888063696aba",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/communities/explore/AiAppCard.svelte",
+    "8223982058733a583c801a66d94b0178b3ec0c0e06c16b57d364e1f741792c56",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/communities/explore/AiAppSheet.svelte",
+    "6744898ccef2931e663277a2781b5a4c57f8d93a3d9e8aee2d372c2ac1a58245",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/communities/explore/Explore.svelte",
+    "1df9e4815f2c653c1343626ad9581cd6ea46f49b4020128227a140a2c3e5661b",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/user_profile/AppSettings.svelte",
+    "f71784bc4efb95b56aaf40e286665195c028442403329617a525edec54336a4b",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/user_profile/ModelManager.svelte",
+    "3e50fc5e936fa7f8d8faa1a3d7d763e68d1b79d17d8edffdf675ae6b20fcf357",
+  ],
+  [
+    "frontend/app/src/components_mobile/home/user_profile/MyApps.svelte",
+    "49ff7c460e664816fff9b1d2498da414a2b25c94c302f9301885aa1f57a5b9df",
+  ],
+  [
+    "frontend/app/src/components_mobile/onboard/OnboardModal.svelte",
+    "251df92cfea239711f19508c72e08c50c0a5424c9285c7762ba9bf262ffae6e8",
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppCards.svelte",
+    "b49bfd850fa53adf2df4785ec9eaa6d6227aca1beaddb868f524759803e8f5ec",
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppDirectory.svelte",
+    "83ef4f4401c8258f85ccb4a35fdf4dbaf94be098b94a1b0a6064610ebd0bb009",
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppSourceCardLink.svelte",
+    "06b0f32d7e6185a02d9683ec5bdcf4818321c7329118d97c817cc5b501967090",
+  ],
+  [
+    "frontend/app/src/components_shared/LocalAppsChatSettings.svelte",
+    "d2c0834e74682803303b97607dff109027367aadc6d1e1dc28c20b762c1f4e1d",
+  ],
+  [
+    "frontend/app/src/i18n/i18n.ts",
+    "4a37d8a771cf3a3c85efbdef6e7ce0eff02f538fd0e93da337574984edd1d183",
+  ],
+  [
+    "frontend/app/src/localAppSetupRelay.ts",
+    "fa488bebdb124e1031bc8057118775436e1aac83adad26bd18118a607dda93e2",
+  ],
+  [
+    "frontend/app/src/localBrowserAuth.ts",
+    "74588e9726202383b50926fa63d9b713d08a8b8ded3e2bb74c4bb00b11859058",
+  ],
+  [
+    "frontend/app/src/localNativeAppSetup.ts",
+    "6b928d0230128c5e11cb8f9c975f41a3061a611e8c4a37ca58156931eaabb0e2",
+  ],
+  [
+    "frontend/app/src/stores/customModels.ts",
+    "8574972d0cde91a500f93c8c3b0c1e226cac3a89fe73b277f9f269952030bb27",
+  ],
+  [
+    "frontend/app/src/stores/onDeviceModels.ts",
+    "bb50bc5bac3becf329899d6e6e2603270eb6d566586a37baf4115d47e1bd5931",
+  ],
+  [
+    "frontend/app/src/stores/transformersWebGpuSettings.ts",
+    "c2e5c178ecfadfaa41ae8bc9aca80677af27fd63c9542ee99b3537ed448af94d",
+  ],
+  [
+    "frontend/app/src/stores/webGpuModelCatalog.ts",
+    "418f0ceca0cd2742046d6d34ddeca19f787deebc2f703fcb820aa0b44b4f92c1",
+  ],
+  [
+    "frontend/app/src/utils/autoPropose.ts",
+    "09373afd3da848312f738f05737d387dd9e4d83b458683457db287ed6013bc02",
+  ],
+  [
+    "frontend/app/src/utils/browserOcr.ts",
+    "57bde8e86ef31e599a27f3ba542b1d353657ae0c40f1aa15c7e067ddfdbe1a62",
+  ],
+  [
+    "frontend/app/src/utils/localAppCardAnchors.ts",
+    "713a1feb86f36929ed8ddd61017d7a27e6ff75fdfddd16fecedee9b223fe33ef",
+  ],
+  [
+    "frontend/app/src/utils/localAppCatalog.ts",
+    "5f0565e2ea1980f32a33d76b041d43b65ae2dd9b7b5742e4141fafefeef65c98",
+  ],
+  [
+    "frontend/app/src/utils/localAppChatConfiguration.ts",
+    "6d8f47f7464b8f3a479a1f4fc95d812fb655a1e8eabb5be007b67f8c4d50fb3a",
+  ],
+  [
+    "frontend/app/src/utils/localAppChatState.ts",
+    "81340ffb12811da6cd43f2542949c0d6d572101b6ba431e1b3bf94367d444c6f",
+  ],
+  [
+    "frontend/app/src/utils/localAppDirectory.ts",
+    "384c2e42159bf35856f8020cc9eae36cb6a68363c77315d71bcb54d9acea6ade",
+  ],
+  [
+    "frontend/app/src/utils/localAppDraftPersistence.ts",
+    "9d34fffc2dfa6c55dd5b4a8f0d01cfc7b320df3c77b680f468efd895234d368a",
+  ],
+  [
+    "frontend/app/src/utils/localAppDrafts.ts",
+    "1aee3966a453c37b170fa4a979e730d63982d7e11834598548affa6e7bc267eb",
+  ],
+  [
+    "frontend/app/src/utils/localAppRelayDelivery.ts",
+    "ae6c5ebbb652f6f9e58559d1114d18d8ce2bddbd8360fe71a25ad94d98ef9a4e",
+  ],
+  [
+    "frontend/app/src/utils/localAppSetupConnection.ts",
+    "ddb57345db1e40a94b453886e214165537b3c81339812bc50511d59c68937e8d",
+  ],
+  [
+    "frontend/app/src/utils/localAppSetupPopup.ts",
+    "bc2bea71faac4c332b4b780a4ef17ffdc5f0ecda3da072b1b51cf5733dffd3bf",
+  ],
+  [
+    "frontend/app/src/utils/localAppSetupStore.ts",
+    "de94d2ee1e7552d274f383836f458a2ab7207c531898e2f98d8e1c846b95be1d",
+  ],
+  [
+    "frontend/app/src/utils/nativeAppDelivery.ts",
+    "69c34838418d35df10c8d0d4e5e5c282483108d9b166b965a77fa1199ed36d64",
+  ],
+  [
+    "frontend/app/src/utils/navigation.ts",
+    "7620af65babbdd75ce29b9851e91440c83650c3725193d2cfb5ef9ad99b3d9aa",
+  ],
+  [
+    "frontend/app/src/utils/onDeviceInference.ts",
+    "61c2da7850cd2a0b129ad67f0b9def704a845ebff45aa9027c7e49f13db71827",
+  ],
+  [
+    "frontend/app/src/utils/privateAppWorkspace.ts",
+    "53c41a966fc06e572fdce8b710e919d9aaf5b9e2d4ba9953d679b55a2d5ed740",
+  ],
+  [
+    "frontend/app/src/utils/webInference.ts",
+    "17bcfe6f52529856a2e80cd4607af5eb34afdefe8d5f7f5c9f79bc534082a3c8",
+  ],
+  [
+    "frontend/app/vite.config.ts",
+    "732e01be21aa0d2986586d37a77271cdeefaaaee2744d52b41d0019d8e4a4e93",
+  ],
+  [
+    "frontend/openchat-agent/src/services/canisterAgent/msgpack.ts",
+    "92e8efda57d178ac8acc23c8a50e14a3a7261cdd5723fec9c09d4921cddca6cf",
+  ],
+  [
+    "frontend/openchat-agent/src/services/userIndex/userIndex.client.ts",
+    "3b5600725d373962be87558cf28b053a1e44223c431f22164f541485bbba58ee",
+  ],
+  [
+    "frontend/openchat-agent/src/utils/chatsDb.ts",
+    "437a973f1b8ac3f4b254581a100f6dc8cad879bb6bfb0130dc4a29e5276cf82b",
+  ],
+  [
+    "frontend/openchat-client/src/openchat.ts",
+    "660efff628392c713417dc24a62dbbbc74c2588f4da74366fabd05fa7264071d",
+  ],
+  [
+    "frontend/openchat-shared/src/domain/worker.ts",
+    "630fbd153a0276fa494e6d301d6c5d7551ea0b1672ec6868c30c59f6a57e30ff",
+  ],
+  [
+    "frontend/openchat-worker/src/worker.ts",
+    "85cc7c4986c9dd0fd16034854a6c77fdb45b13f5ca03e3ed85d3fce96d8681e6",
+  ],
+  [
+    "frontend/tauri-plugin-oc/guest-js/commands/localAppSetup.ts",
+    "25412859b42245fc75754698451f839c2137935e0e3ba80a54598d7bbf5ea8e8",
+  ],
+]);
+function beforeReleaseSourceHash(file) {
+  return (
+    rpConfigurationCurrentHashes.get(file) ??
+    beforeReleaseReview.get(file) ??
+    sourceHash(file)
+  );
+}
+function beforeReleaseFingerprint(fingerprint) {
+  const files = fingerprint.files.filter(
+    (file) => !releaseReviewAdditions.has(file),
+  );
+  // Earlier reconstruction helpers compose this layer more than once. Already
+  // historical sets retain their own exact per-checkpoint size/hash assertions.
+  if (files.length === fingerprint.files.length) return fingerprint;
+  assert.equal(files.length, 179, "exact October 7 historical source set");
+  return {
+    ...fingerprint,
+    files,
+    sha256: createHash("sha256")
+      .update(
+        JSON.stringify(
+          files.map((file) => [file, beforeReleaseSourceHash(file)]),
+        ),
+      )
+      .digest("hex"),
+  };
+}
+const currentSourceCount = 194;
+const currentOwnedCount = 139;
+const currentAnchorCount = 115;
+const currentSemanticHashes = {
+  wallet: [
+    "267e70bc7099ff63e9b8933924ff46887eecceb7fbbe71e001e24da775ba30a0",
+    "d80d98b85415b09c7970a6389da0c5c9ab7e9e9e158b3b1a4ffa22426cfbc3dd",
+  ],
+  mobile: [
+    "01ffed45ce2063c52f5955bc2be9361f00bdee5d397177945c8548269defd1d1",
+    "fafc6f6f8bc56119433a614138e988b3333d033144ef2af464ec5e4ed3132982",
+  ],
+  extras: [
+    "eb55f6248bc1ea325d43b10978095d6240727647a85c33c777b17a197c2493e7",
+    "3cfad1fe071259c7c8eaf285febefe0be810bb7157045a283f289701a18c9b81",
+  ],
+  replica: [
+    [
+      "frontend/app/rollup.config.mjs",
+      "968e96d2ba4b19626b25fa5086a68c34ba0e0a50e2569cc2035536366b6215df",
+      "19d1ea1ee6356722e4c27f4c6f1833811b79e446d4f0bd878d17cd981eded8a9",
+    ],
+    [
+      "frontend/app/vite.config.ts",
+      "17b41cfe254febb093b5642d06041c69b9118f2af5cb0e6f49fd3e1e5fcd3c07",
+      "f737b4fdbae4b8aa28d0422b243c4521452ade212c306be6ba82acea28c0f807",
+    ],
+    [
+      "frontend/openchat-client/src/openchat.ts",
+      "267e70bc7099ff63e9b8933924ff46887eecceb7fbbe71e001e24da775ba30a0",
+      "67295bacee4235556e87c57500a570677e2da2956c3f36dfa511ad743a92848c",
+    ],
+  ],
+};
 const currentSourceSha256 =
+  "ba867b0b326bddc1c20bcc9a10c6459fad831a391758b78d6b6742f7cb5e1a20";
+// Exact preimages independently read from main 24e36a7e. Keep these separate
+// from sourceHash: the current-source gate must always read current bytes.
+const beforeRpConfiguration = new Map([
+  [
+    "frontend/app/rollup.config.mjs",
+    "249dc70d20e1c4de3bab4b067279506876604a83edacfbcc5bb30f093a255727",
+  ],
+  [
+    "frontend/app/rollup.extras.mjs",
+    "22bf93228b94a0cf4666eade3ca004278dc351fdfddc8937a69a86a11c3d5658",
+  ],
+  [
+    "scripts/build-unofficial-local-apk.mjs",
+    "0b8e68a771047aa5d9108e46d6f3a1e4a4b20c8ca18591a74d7ba4ed8062b1f6",
+  ],
+]);
+const rpConfigurationCurrentHashes = new Map([
+  [
+    "frontend/app/rollup.config.mjs",
+    "d63aed97063da901da7f75d93ab8cc3039df6a36ca6ccedd28a69d2b253c9c42",
+  ],
+  [
+    "frontend/app/rollup.extras.mjs",
+    "ba00babcec993925d28f6d2ff6769df924e89557935ba48e39a7d282364b4c64",
+  ],
+  [
+    "scripts/build-unofficial-local-apk.mjs",
+    "92e6364ba2ef41dad1f7e64a668b7f8cf38d6d811970ae0ea1a744f9e19add5c",
+  ],
+]);
+const beforeRpConfigurationSha256 =
   "c478ca7aefd4551309ee18992f5705660a0f14e834069cabc12f8a2871b34b88";
+function beforeRpConfigurationSourceHash(file) {
+  return beforeRpConfiguration.get(file) ?? beforeReleaseSourceHash(file);
+}
+const rpConfigurationTextReversals = new Map([
+  [
+    "frontend/app/rollup.config.mjs",
+    [
+      [
+        'import { localApkBundleMarker, localApkParentRpId } from "../unofficialLocalApkProfile.mjs";',
+        'import { localApkBundleMarker } from "../unofficialLocalApkProfile.mjs";',
+      ],
+      ["                                androidRpId,\n", ""],
+      [
+        '    : localTestApk\n      ? localApkParentRpId(process.env)\n      : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();',
+        '    : (process.env.OC_ANDROID_RP_ID ?? "oc.app").trim().toLowerCase();',
+      ],
+    ],
+  ],
+  [
+    "frontend/app/rollup.extras.mjs",
+    [
+      [
+        'import {\n    createUnofficialLocalApkEnvironment,\n    localApkParentRpId,\n} from "../unofficialLocalApkProfile.mjs";',
+        'import { createUnofficialLocalApkEnvironment } from "../unofficialLocalApkProfile.mjs";',
+      ],
+      ["                  rpId: localApkParentRpId(process.env),\n", ""],
+    ],
+  ],
+]);
+function beforeRpConfigurationSourceText(file, text) {
+  for (const [current, previous] of rpConfigurationTextReversals.get(file) ??
+    []) {
+    assert.equal(
+      text.split(current).length,
+      2,
+      "exact RP configuration hunk required",
+    );
+    text = text.replace(current, previous);
+  }
+  if (rpConfigurationTextReversals.has(file))
+    assert.equal(
+      createHash("sha256").update(text).digest("hex"),
+      file === "frontend/app/rollup.extras.mjs"
+        ? currentSemanticHashes.extras[0]
+        : beforeRpConfiguration.get(file),
+      file,
+    );
+  return text;
+}
 // The reviewed UI repair at 1cf9e1a and explicit reproposal change only these
 // existing sources and two local helpers. All 177 blobs from 2384b716 were read
 // independently and reproduce 6ae14948. These are historical preimages only;
 // every current byte is still bound by the live gate and drift/removal tests.
 const uiRepairAdditions = [
   "frontend/app/src/utils/localAppRelayFrame.ts",
-  "frontend/app/src/utils/localAppReproposalPresentation.ts"
+  "frontend/app/src/utils/localAppReproposalPresentation.ts",
 ];
 const beforeUiRepair = new Map([
   [
     "frontend/app/local-native-app-handoff.html",
-    "4b7db3930a4f7b6707c3da211e4469aefe5afa8ea5a96495b40cd733f89ced6f"
+    "4b7db3930a4f7b6707c3da211e4469aefe5afa8ea5a96495b40cd733f89ced6f",
   ],
   [
     "frontend/app/local-native-app-setup.html",
-    "6ebd5c040ba520633d0e846c7313477937249355ea2a7ef76c0611ea29d362d4"
+    "6ebd5c040ba520633d0e846c7313477937249355ea2a7ef76c0611ea29d362d4",
   ],
   [
     "frontend/app/localAppRelayBuild.mjs",
-    "3174a9e4b2fda365ea9c7d9fd9a9f7bed46e59e1a1ebce3792be1c361a8c4178"
+    "3174a9e4b2fda365ea9c7d9fd9a9f7bed46e59e1a1ebce3792be1c361a8c4178",
   ],
   [
     "frontend/app/localAppRelayHeaders.mjs",
-    "bd98276752818660ad9a5d95c68f5e3583841d943cca87e331ccb4ad57eb328b"
+    "bd98276752818660ad9a5d95c68f5e3583841d943cca87e331ccb4ad57eb328b",
   ],
   [
     "frontend/app/public/local-app-handoff.html",
-    "746958511e1b8087ddd6922e5ed34646a2395d2c82b16733ba1b08fe5e2f363e"
+    "746958511e1b8087ddd6922e5ed34646a2395d2c82b16733ba1b08fe5e2f363e",
   ],
   [
     "frontend/app/public/local-app-setup.html",
-    "65a484d81cce3c35f481067b76b4f9f716db8ecf1474f7de534403f1bb27a25e"
+    "65a484d81cce3c35f481067b76b4f9f716db8ecf1474f7de534403f1bb27a25e",
   ],
   [
     "frontend/app/rollup.config.mjs",
-    "903f6b5096626dbb130b8f38f21f8fe492ff81241757dd150184df323003ff90"
+    "903f6b5096626dbb130b8f38f21f8fe492ff81241757dd150184df323003ff90",
   ],
   [
     "frontend/app/src/components/home/ActionCardContent.svelte",
-    "c4b66e228cbdbede9c5cfb71db5c297cd417e6469fe3b5fa4953e474fbb8029c"
+    "c4b66e228cbdbede9c5cfb71db5c297cd417e6469fe3b5fa4953e474fbb8029c",
   ],
   [
     "frontend/app/src/components/home/ChatMessage.svelte",
-    "88f1dda0b9966747bcc93698116fe5eededc98cb4527c9f37d60d3e1eb7154bf"
+    "88f1dda0b9966747bcc93698116fe5eededc98cb4527c9f37d60d3e1eb7154bf",
   ],
   [
     "frontend/app/src/components_mobile/home/ChatMessage.svelte",
-    "54eb464be34aedbf2f688844665122841b2989d6aca8a1424527a16278734cdc"
+    "54eb464be34aedbf2f688844665122841b2989d6aca8a1424527a16278734cdc",
   ],
   [
     "frontend/app/src/components_shared/LocalAppCards.svelte",
-    "c70d3c3575e75ba4e1fee76bd2a90a925da48bdde0f5e9e103db317d21036f1a"
+    "c70d3c3575e75ba4e1fee76bd2a90a925da48bdde0f5e9e103db317d21036f1a",
   ],
   [
     "frontend/app/src/components_shared/LocalAppDirectory.svelte",
-    "e6322ff479aaaa13c20a365d620ab3eca6cf1f9e9ddbb7fb57f134f005cd1586"
+    "e6322ff479aaaa13c20a365d620ab3eca6cf1f9e9ddbb7fb57f134f005cd1586",
   ],
   [
     "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
-    "ccd84296b3ba15b41b62b75b2602ac78ddb6585deb665df908cfadcf97cf2066"
+    "ccd84296b3ba15b41b62b75b2602ac78ddb6585deb665df908cfadcf97cf2066",
   ],
   [
     "frontend/app/src/localAppHandoffRelay.ts",
-    "f6b99692b6339982a5509a5e25a38af5e6544291d06cb4f01b4856b05f092a0c"
+    "f6b99692b6339982a5509a5e25a38af5e6544291d06cb4f01b4856b05f092a0c",
   ],
   [
     "frontend/app/src/localAppSetupRelay.ts",
-    "3f4b731f7a63946220e1cc2814de242322132e43f7a5e850c9525081439141e8"
+    "3f4b731f7a63946220e1cc2814de242322132e43f7a5e850c9525081439141e8",
   ],
   [
     "frontend/app/src/localNativeAppHandoff.ts",
-    "ed7c334d9ad78f37280a888ce789264ba99161e0ff487b1f6ad508cc1d8ca308"
+    "ed7c334d9ad78f37280a888ce789264ba99161e0ff487b1f6ad508cc1d8ca308",
   ],
   [
     "frontend/app/src/localNativeAppSetup.ts",
-    "c43055fb050435a047c4e8ad9dc7550e6aa0a98259b456fd1b62fec9eff1014e"
+    "c43055fb050435a047c4e8ad9dc7550e6aa0a98259b456fd1b62fec9eff1014e",
   ],
   [
     "frontend/app/src/utils/localAppDraftPersistence.ts",
-    "ccecbcc08c86de43e3668a72d8f15343883e3c8c8a6f51d0778df5513c95a574"
+    "ccecbcc08c86de43e3668a72d8f15343883e3c8c8a6f51d0778df5513c95a574",
   ],
   [
     "frontend/app/src/utils/localAppSetupConnection.ts",
-    "c5fcd8a6031df9d820842bb0fb4f7779e099a99edf8e259c219e5dc847ef3536"
+    "c5fcd8a6031df9d820842bb0fb4f7779e099a99edf8e259c219e5dc847ef3536",
   ],
   [
     "frontend/app/src/utils/localAppSetupPopup.ts",
-    "4f16e73743599fc3ddba9175454b796a5c33907179672bb2f3607f066f15e648"
+    "4f16e73743599fc3ddba9175454b796a5c33907179672bb2f3607f066f15e648",
   ],
   [
     "frontend/app/src/utils/localAppView.ts",
-    "67825c6d9a2c00a57031d7a22bb363ef0a94dbe17dd843f1d4c54d5c0951ce65"
+    "67825c6d9a2c00a57031d7a22bb363ef0a94dbe17dd843f1d4c54d5c0951ce65",
   ],
   [
     "frontend/app/src/utils/nativeAppDelivery.ts",
-    "42e9c4c74111776aade15511ca2e838852a592bce96f3255a19ba8a0b58dd0d0"
+    "42e9c4c74111776aade15511ca2e838852a592bce96f3255a19ba8a0b58dd0d0",
   ],
   [
     "frontend/app/src/utils/privateAppWorkspace.ts",
-    "c15bf3528376d5a48de3f001a68eabb674fe41732419a5261eba8092f5e63334"
+    "c15bf3528376d5a48de3f001a68eabb674fe41732419a5261eba8092f5e63334",
   ],
   [
     "frontend/tauri-plugin-oc/guest-js/commands/localAppHandoff.ts",
-    "ab1bf68e9c1cc82e3451fa9867e34b7ac16f6890c79f23379b77ce93f6e6363a"
-  ]
+    "ab1bf68e9c1cc82e3451fa9867e34b7ac16f6890c79f23379b77ce93f6e6363a",
+  ],
 ]);
 const uiRepairCurrentHashes = new Map([
   [
     "frontend/app/local-native-app-handoff.html",
-    "556e3e7f039f3fe2a54e1cbb47eda88a2fd7886609294a001d6795cc7072b3f0"
+    "556e3e7f039f3fe2a54e1cbb47eda88a2fd7886609294a001d6795cc7072b3f0",
   ],
   [
     "frontend/app/local-native-app-setup.html",
-    "daf9371b7e6c49a763a526a8b6308d0c471962afbf3a884d87324e0ccddcd03c"
+    "daf9371b7e6c49a763a526a8b6308d0c471962afbf3a884d87324e0ccddcd03c",
   ],
   [
     "frontend/app/localAppRelayBuild.mjs",
-    "c07088e41fa8ca0da9b7c49782643a92608a7c0c21cb0aeb88ca21002a307b9d"
+    "c07088e41fa8ca0da9b7c49782643a92608a7c0c21cb0aeb88ca21002a307b9d",
   ],
   [
     "frontend/app/localAppRelayHeaders.mjs",
-    "b73a882c51e4549e9e2d91daf7897e92c4dcac299e0d051a26893ff4d17c29d7"
+    "b73a882c51e4549e9e2d91daf7897e92c4dcac299e0d051a26893ff4d17c29d7",
   ],
   [
     "frontend/app/public/local-app-handoff.html",
-    "f417bc1ee5fae4bcb3aa72c0feb7b2de34e8f8992d282454dabb98dcca5762ed"
+    "f417bc1ee5fae4bcb3aa72c0feb7b2de34e8f8992d282454dabb98dcca5762ed",
   ],
   [
     "frontend/app/public/local-app-setup.html",
-    "5cad5a76f103d35ab0fc7338c34f62a883992c79a6c35a55e6037a3a495a0432"
+    "5cad5a76f103d35ab0fc7338c34f62a883992c79a6c35a55e6037a3a495a0432",
   ],
   [
     "frontend/app/rollup.config.mjs",
-    "249dc70d20e1c4de3bab4b067279506876604a83edacfbcc5bb30f093a255727"
+    "249dc70d20e1c4de3bab4b067279506876604a83edacfbcc5bb30f093a255727",
   ],
   [
     "frontend/app/src/components/home/ActionCardContent.svelte",
-    "12a0ce6a0d524d93131342c4f46afe7f5cb23e91106d50597bfff41a8a7894e5"
+    "12a0ce6a0d524d93131342c4f46afe7f5cb23e91106d50597bfff41a8a7894e5",
   ],
   [
     "frontend/app/src/components/home/ChatMessage.svelte",
-    "8a1ccc6f45a60c19ef194b30b940d3f46a6984a791734bd373995377fa2b755c"
+    "8a1ccc6f45a60c19ef194b30b940d3f46a6984a791734bd373995377fa2b755c",
   ],
   [
     "frontend/app/src/components_mobile/home/ChatMessage.svelte",
-    "cd7e6fc12a92129b2a3b75596398bd17d58941f44965b507b264888063696aba"
+    "cd7e6fc12a92129b2a3b75596398bd17d58941f44965b507b264888063696aba",
   ],
   [
     "frontend/app/src/components_shared/LocalAppCards.svelte",
-    "b49bfd850fa53adf2df4785ec9eaa6d6227aca1beaddb868f524759803e8f5ec"
+    "b49bfd850fa53adf2df4785ec9eaa6d6227aca1beaddb868f524759803e8f5ec",
   ],
   [
     "frontend/app/src/components_shared/LocalAppDirectory.svelte",
-    "83ef4f4401c8258f85ccb4a35fdf4dbaf94be098b94a1b0a6064610ebd0bb009"
+    "83ef4f4401c8258f85ccb4a35fdf4dbaf94be098b94a1b0a6064610ebd0bb009",
   ],
   [
     "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
-    "c7f406a3bd269cbd22db79f505464bfb443ebcd731311f5c57f20e221a7d3c3b"
+    "c7f406a3bd269cbd22db79f505464bfb443ebcd731311f5c57f20e221a7d3c3b",
   ],
   [
     "frontend/app/src/localAppHandoffRelay.ts",
-    "22e9903abcf1d3fd8b25fdf2168eeeef038108e77112cac368e097954d5b0a53"
+    "22e9903abcf1d3fd8b25fdf2168eeeef038108e77112cac368e097954d5b0a53",
   ],
   [
     "frontend/app/src/localAppSetupRelay.ts",
-    "fa488bebdb124e1031bc8057118775436e1aac83adad26bd18118a607dda93e2"
+    "fa488bebdb124e1031bc8057118775436e1aac83adad26bd18118a607dda93e2",
   ],
   [
     "frontend/app/src/localNativeAppHandoff.ts",
-    "43a4ab1e7cf6ffc0c7d2f8293b0502169cdad0b4149d7120cf18e80269985128"
+    "43a4ab1e7cf6ffc0c7d2f8293b0502169cdad0b4149d7120cf18e80269985128",
   ],
   [
     "frontend/app/src/localNativeAppSetup.ts",
-    "6b928d0230128c5e11cb8f9c975f41a3061a611e8c4a37ca58156931eaabb0e2"
+    "6b928d0230128c5e11cb8f9c975f41a3061a611e8c4a37ca58156931eaabb0e2",
   ],
   [
     "frontend/app/src/utils/localAppDraftPersistence.ts",
-    "9d34fffc2dfa6c55dd5b4a8f0d01cfc7b320df3c77b680f468efd895234d368a"
+    "9d34fffc2dfa6c55dd5b4a8f0d01cfc7b320df3c77b680f468efd895234d368a",
   ],
   [
     "frontend/app/src/utils/localAppSetupConnection.ts",
-    "ddb57345db1e40a94b453886e214165537b3c81339812bc50511d59c68937e8d"
+    "ddb57345db1e40a94b453886e214165537b3c81339812bc50511d59c68937e8d",
   ],
   [
     "frontend/app/src/utils/localAppSetupPopup.ts",
-    "bc2bea71faac4c332b4b780a4ef17ffdc5f0ecda3da072b1b51cf5733dffd3bf"
+    "bc2bea71faac4c332b4b780a4ef17ffdc5f0ecda3da072b1b51cf5733dffd3bf",
   ],
   [
     "frontend/app/src/utils/localAppView.ts",
-    "ee3f1e483d08af0a079ddf4656c0dec38f036d7e8a9003124eda0591fba1dc06"
+    "ee3f1e483d08af0a079ddf4656c0dec38f036d7e8a9003124eda0591fba1dc06",
   ],
   [
     "frontend/app/src/utils/nativeAppDelivery.ts",
-    "69c34838418d35df10c8d0d4e5e5c282483108d9b166b965a77fa1199ed36d64"
+    "69c34838418d35df10c8d0d4e5e5c282483108d9b166b965a77fa1199ed36d64",
   ],
   [
     "frontend/app/src/utils/privateAppWorkspace.ts",
-    "53c41a966fc06e572fdce8b710e919d9aaf5b9e2d4ba9953d679b55a2d5ed740"
+    "53c41a966fc06e572fdce8b710e919d9aaf5b9e2d4ba9953d679b55a2d5ed740",
   ],
   [
     "frontend/tauri-plugin-oc/guest-js/commands/localAppHandoff.ts",
-    "4b286a2d3f98cf3870c2afec467fdb71a76ec8e2dd6328696044f463e2f24548"
-  ]
+    "4b286a2d3f98cf3870c2afec467fdb71a76ec8e2dd6328696044f463e2f24548",
+  ],
 ]);
 const beforeUiRepairSourceSha256 =
   "6ae14948ee5e532a901797b86790df515d397eca046290501f78b098b9f23d97";
 function beforeUiRepairSourceHash(file) {
-  return beforeUiRepair.get(file) ?? sourceHash(file);
+  return beforeUiRepair.get(file) ?? beforeRpConfigurationSourceHash(file);
 }
 function beforeUiRepairFingerprint(fingerprint) {
-  const files = fingerprint.files.filter((file) => !uiRepairAdditions.includes(file));
+  fingerprint = beforeReleaseFingerprint(fingerprint);
+  const files = fingerprint.files.filter(
+    (file) => !uiRepairAdditions.includes(file),
+  );
   return {
     ...fingerprint,
     files,
     sha256: createHash("sha256")
-      .update(JSON.stringify(files.map((file) => [file, beforeUiRepairSourceHash(file)])))
+      .update(
+        JSON.stringify(
+          files.map((file) => [file, beforeUiRepairSourceHash(file)]),
+        ),
+      )
       .digest("hex"),
   };
 }
@@ -535,143 +989,137 @@ const uiRepairTextReversals = new Map([
     [
       [
         "        localAppRelayPlugin({\n            enabled: localWebBuild,\n            appDirectoryUrl: process.env.OC_APP_DIRECTORY_URL,\n        }),\n        localAppRelayPlugin({\n            enabled: localWebBuild,\n            setup: true,\n            appDirectoryUrl: process.env.OC_APP_DIRECTORY_URL,\n        }),\n",
-        "        localAppRelayPlugin({ enabled: localWebBuild }),\n        localAppRelayPlugin({ enabled: localWebBuild, setup: true }),\n"
-      ]
-    ]
+        "        localAppRelayPlugin({ enabled: localWebBuild }),\n        localAppRelayPlugin({ enabled: localWebBuild, setup: true }),\n",
+      ],
+    ],
   ],
   [
     "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
     [
       [
-        "    import { untrack, type Snippet } from \"svelte\";\n",
-        "    import { untrack } from \"svelte\";\n"
+        '    import { untrack, type Snippet } from "svelte";\n',
+        '    import { untrack } from "svelte";\n',
       ],
-      [
-        "        resolveLocalAppViewPalette,\n",
-        ""
-      ],
-      [
-        "        showDisclosure = true,\n",
-        ""
-      ],
-      [
-        "        compactDetails = false,\n        detailsActions,\n",
-        ""
-      ],
-      [
-        "        showDisclosure?: boolean;\n",
-        ""
-      ],
+      ["        resolveLocalAppViewPalette,\n", ""],
+      ["        showDisclosure = true,\n", ""],
+      ["        compactDetails = false,\n        detailsActions,\n", ""],
+      ["        showDisclosure?: boolean;\n", ""],
       [
         "        /** Host-only presentation: consolidate secondary controls without changing field edits. */\n        compactDetails?: boolean;\n        /** Host-owned actions only; never supplied through app view metadata. */\n        detailsActions?: Snippet;\n",
-        ""
+        "",
       ],
       [
         "        if (!validatedView && !compactDetails) return undefined;\n",
-        "        if (!validatedView) return undefined;\n"
+        "        if (!validatedView) return undefined;\n",
       ],
       [
         "        // Validation bounds paint syntax; host resolution additionally keeps canonical values\n        // and labels readable across every supported surface, even before expanded review.\n        return Object.entries(resolveLocalAppViewPalette(palette, viewTheme))\n",
-        "        if (!palette) return \"\";\n        // Keys and exact hex values came from the strict validator, not arbitrary CSS.\n        return Object.entries(palette)\n"
+        '        if (!palette) return "";\n        // Keys and exact hex values came from the strict validator, not arbitrary CSS.\n        return Object.entries(palette)\n',
       ],
       [
         "    function primaryField(field: LocalAppDraftField): boolean {\n        return !compactDetails || !companionOwner(field);\n    }\n\n    function additionalPrimaryField(field: LocalAppDraftField): boolean {\n        return (\n            primaryField(field) && !viewFields.has(field.key) && (field.present || field.required)\n        );\n    }\n\n",
-        ""
+        "",
       ],
       [
         "        {:else if compact && !compactDetails && companionOwner(field)}\n",
-        "        {:else if compact && companionOwner(field)}\n"
+        "        {:else if compact && companionOwner(field)}\n",
       ],
       [
-        "                    {#if field.required && !(compact && validatedView)}<span class=\"required\"\n                            >Required</span\n                        >{/if}</span\n",
-        "                    {#if field.required}<span class=\"required\">Required</span>{/if}</span\n"
+        '                    {#if field.required && !(compact && validatedView)}<span class="required"\n                            >Required</span\n                        >{/if}</span\n',
+        '                    {#if field.required}<span class="required">Required</span>{/if}</span\n',
       ],
       [
         "        {#if !compactDetails && compact && fieldAction(field, index)}\n",
-        "        {#if compact && fieldAction(field, index)}\n"
+        "        {#if compact && fieldAction(field, index)}\n",
       ],
-      [
-        "        {:else if !compactDetails}\n",
-        "        {:else}\n"
-      ],
+      ["        {:else if !compactDetails}\n", "        {:else}\n"],
       [
         "            {#if field && primaryField(field)}\n",
-        "            {#if field}\n"
+        "            {#if field}\n",
       ],
       [
-        "    {#if showDisclosure && action.definition.card.disclosure}<p class=\"disclosure\">\n",
-        "    {#if action.definition.card.disclosure}<p class=\"disclosure\">\n"
+        '    {#if showDisclosure && action.definition.card.disclosure}<p class="disclosure">\n',
+        '    {#if action.definition.card.disclosure}<p class="disclosure">\n',
       ],
       [
-        "                    >{fields.items.length > 1\n                        ? `Entry ${index + 1} of ${fields.items.length}`\n                        : \"Draft fields\"}</legend\n",
-        "                    >{fields.items.length > 1 ? `Item ${index + 1}` : \"Draft fields\"}</legend\n"
+        '                    >{fields.items.length > 1\n                        ? `Entry ${index + 1} of ${fields.items.length}`\n                        : "Draft fields"}</legend\n',
+        '                    >{fields.items.length > 1 ? `Item ${index + 1}` : "Draft fields"}</legend\n',
       ],
       [
         "                    {#if item.some(additionalPrimaryField)}\n",
-        "                    {#if item.some((field) => !viewFields.has(field.key))}\n"
+        "                    {#if item.some((field) => !viewFields.has(field.key))}\n",
       ],
       [
         "                            {#each item.filter(additionalPrimaryField) as field (field.key)}\n",
-        "                            {#each item.filter((field) => !viewFields.has(field.key)) as field (field.key)}\n"
+        "                            {#each item.filter((field) => !viewFields.has(field.key)) as field (field.key)}\n",
       ],
       [
         "                    {#each item.filter(primaryField) as field (field.key)}\n",
-        "                    {#each item as field (field.key)}\n"
+        "                    {#each item as field (field.key)}\n",
       ],
       [
         "                Correct the highlighted fields before sending. If a field cannot be corrected,\n                cancel this card and propose the message again.\n",
-        "                The current draft does not match the app's schema. Correct the fields or advanced\n                JSON before review.\n"
+        "                The current draft does not match the app's schema. Correct the fields or advanced\n                JSON before review.\n",
       ],
       [
         "                Additional values are preserved and available in Details. If they need changing,\n                cancel this card and prepare a new proposal.\n",
-        "                Complex and additional values are preserved. Inspect the complete preview and use\n                advanced JSON to edit them.\n"
+        "                Complex and additional values are preserved. Inspect the complete preview and use\n                advanced JSON to edit them.\n",
       ],
       [
-        "            {#if !compactDetails && validatedView && reviewing}<p class=\"host-review-notice\">\n",
-        "            {#if validatedView && reviewing}<p class=\"host-review-notice\">\n"
+        '            {#if !compactDetails && validatedView && reviewing}<p class="host-review-notice">\n',
+        '            {#if validatedView && reviewing}<p class="host-review-notice">\n',
       ],
       [
         "                additionalOnly={compactDetails || !validatedView || !reviewing}\n",
-        "                additionalOnly={!validatedView || !reviewing}\n"
+        "                additionalOnly={!validatedView || !reviewing}\n",
       ],
       [
         "            {#if !compactDetails && validatedView && reviewing && exactViewPayload !== undefined}\n",
-        "            {#if validatedView && reviewing && exactViewPayload !== undefined}\n"
+        "            {#if validatedView && reviewing && exactViewPayload !== undefined}\n",
       ],
       [
         "            This card cannot be edited. Cancel it and propose the message again. No previous values\n            will be sent.\n",
-        "            Field editing is unavailable for this JSON structure. Correct the complete payload in\n            advanced JSON. No previous values are shown.\n"
+        "            Field editing is unavailable for this JSON structure. Correct the complete payload in\n            advanced JSON. No previous values are shown.\n",
       ],
       [
-        "    {#if compactDetails}\n        <details class=\"payload-details\">\n            <summary>Details</summary>\n            {#if !pending && exactViewPayload !== undefined}\n                <pre aria-label=\"Complete canonical outgoing values\">{exactViewPayload}</pre>\n            {:else}\n                <p role=\"status\">\n                    Exact outgoing values are unavailable until the current edit is corrected.\n                </p>\n            {/if}\n            {#each fields?.items ?? [] as item, index}\n                {#if item.some((field) => companionOwner(field) || fieldAction(field, index))}\n                    <section\n                        class=\"secondary-fields\"\n                        aria-label={`Field details for item ${index + 1}`}\n                    >\n                        {#if (fields?.items.length ?? 0) > 1}<h4>Entry {index + 1}</h4>{/if}\n                        {#each item as field (field.key)}\n                            {#if companionOwner(field)}\n                                {@render renderField(field, index)}\n                            {:else}\n                                {@render fieldActions(field, index)}\n                            {/if}\n                        {/each}\n                    </section>\n                {/if}\n            {/each}\n            {@render detailsActions?.()}\n        </details>\n    {/if}\n",
-        ""
+        '    {#if compactDetails}\n        <details class="payload-details">\n            <summary>Details</summary>\n            {#if !pending && exactViewPayload !== undefined}\n                <pre aria-label="Complete canonical outgoing values">{exactViewPayload}</pre>\n            {:else}\n                <p role="status">\n                    Exact outgoing values are unavailable until the current edit is corrected.\n                </p>\n            {/if}\n            {#each fields?.items ?? [] as item, index}\n                {#if item.some((field) => companionOwner(field) || fieldAction(field, index))}\n                    <section\n                        class="secondary-fields"\n                        aria-label={`Field details for item ${index + 1}`}\n                    >\n                        {#if (fields?.items.length ?? 0) > 1}<h4>Entry {index + 1}</h4>{/if}\n                        {#each item as field (field.key)}\n                            {#if companionOwner(field)}\n                                {@render renderField(field, index)}\n                            {:else}\n                                {@render fieldActions(field, index)}\n                            {/if}\n                        {/each}\n                    </section>\n                {/if}\n            {/each}\n            {@render detailsActions?.()}\n        </details>\n    {/if}\n',
+        "",
       ],
       [
         "    .compact .app-owned-view .field,\n    .compact .app-owned-view label {\n        gap: 2px;\n",
-        "    .app-owned-view .field,\n    .app-owned-view label {\n        gap: 4px;\n"
+        "    .app-owned-view .field,\n    .app-owned-view label {\n        gap: 4px;\n",
       ],
       [
         "    .app-owned-view label > span {\n        font-size: 11px;\n        color: var(--app-view-muted, inherit);\n",
-        "    .app-owned-view label > span {\n        font-size: 11px;\n"
+        "    .app-owned-view label > span {\n        font-size: 11px;\n",
       ],
       [
         "    .host-exact-review pre,\n    .payload-details pre {\n",
-        "    .host-exact-review pre {\n"
+        "    .host-exact-review pre {\n",
       ],
       [
         "    .payload-details {\n        min-width: 0;\n        color: var(--txt, #1b1b1b);\n        background: var(--bg, #ffffff);\n    }\n    .payload-details > summary {\n        cursor: pointer;\n        padding: 4px 0;\n        font-size: 12px;\n    }\n    .payload-details[open] > :not(summary) {\n        margin-top: 8px;\n    }\n    .secondary-fields {\n        display: flex;\n        flex-direction: column;\n        gap: 8px;\n        min-width: 0;\n    }\n",
-        ""
-      ]
-    ]
-  ]
+        "",
+      ],
+    ],
+  ],
 ]);
 function beforeUiRepairSourceText(file, text) {
+  text = beforeRpConfigurationSourceText(file, text);
   for (const [current, previous] of uiRepairTextReversals.get(file) ?? []) {
-    assert.equal(text.split(current).length, 2, "exact UI repair hunk required");
+    assert.equal(
+      text.split(current).length,
+      2,
+      "exact UI repair hunk required",
+    );
     text = text.replace(current, previous);
   }
   if (uiRepairTextReversals.has(file))
-    assert.equal(createHash("sha256").update(text).digest("hex"), beforeUiRepair.get(file), file);
+    assert.equal(
+      createHash("sha256").update(text).digest("hex"),
+      beforeUiRepair.get(file),
+      file,
+    );
   return text;
 }
 function beforeOutputBudgetSourceHash(file) {
@@ -679,12 +1127,18 @@ function beforeOutputBudgetSourceHash(file) {
 }
 function beforeOutputBudgetFingerprint(fingerprint) {
   fingerprint = beforeUiRepairFingerprint(fingerprint);
-  const files = fingerprint.files.filter((file) => file !== outputBudgetAddition);
+  const files = fingerprint.files.filter(
+    (file) => file !== outputBudgetAddition,
+  );
   return {
     ...fingerprint,
     files,
     sha256: createHash("sha256")
-      .update(JSON.stringify(files.map((file) => [file, beforeOutputBudgetSourceHash(file)])))
+      .update(
+        JSON.stringify(
+          files.map((file) => [file, beforeOutputBudgetSourceHash(file)]),
+        ),
+      )
       .digest("hex"),
   };
 }
@@ -693,17 +1147,35 @@ function beforeOutputBudgetFingerprint(fingerprint) {
 function beforeOutputBudgetInference(source) {
   let previous = source;
   for (const [current, prior] of [
-    ['import {\n    TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS,\n    transformersWebGpuAdapterOutputLimit,\n} from "./transformersWebGpuOutputLimits";\n', ""],
-    ["const MAX_IMAGE_BYTES = 20 * 1024 * 1024;\n", "const MAX_IMAGE_BYTES = 20 * 1024 * 1024;\nconst MAX_OUTPUT_TOKENS = 96;\n"],
-    ["request.maxTokens > TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS", "request.maxTokens > MAX_OUTPUT_TOKENS"],
-    ['        if (\n            request.maxTokens !== undefined &&\n            request.maxTokens > transformersWebGpuAdapterOutputLimit(spec.adapter)\n        ) {\n            return {\n                kind: "error",\n                error: "all-WebGPU browser request exceeds safety limits",\n            };\n        }\n', ""],
+    [
+      'import {\n    TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS,\n    transformersWebGpuAdapterOutputLimit,\n} from "./transformersWebGpuOutputLimits";\n',
+      "",
+    ],
+    [
+      "const MAX_IMAGE_BYTES = 20 * 1024 * 1024;\n",
+      "const MAX_IMAGE_BYTES = 20 * 1024 * 1024;\nconst MAX_OUTPUT_TOKENS = 96;\n",
+    ],
+    [
+      "request.maxTokens > TRANSFORMERS_WEBGPU_MAX_OUTPUT_TOKENS",
+      "request.maxTokens > MAX_OUTPUT_TOKENS",
+    ],
+    [
+      '        if (\n            request.maxTokens !== undefined &&\n            request.maxTokens > transformersWebGpuAdapterOutputLimit(spec.adapter)\n        ) {\n            return {\n                kind: "error",\n                error: "all-WebGPU browser request exceeds safety limits",\n            };\n        }\n',
+      "",
+    ],
   ]) {
-    assert.equal(previous.split(current).length, 2, "exact output-budget hunk required");
+    assert.equal(
+      previous.split(current).length,
+      2,
+      "exact output-budget hunk required",
+    );
     previous = previous.replace(current, prior);
   }
   assert.equal(
     createHash("sha256").update(previous).digest("hex"),
-    beforeOutputBudgetMerge.get("frontend/app/src/utils/transformersWebGpuInference.ts"),
+    beforeOutputBudgetMerge.get(
+      "frontend/app/src/utils/transformersWebGpuInference.ts",
+    ),
   );
   return previous;
 }
@@ -776,7 +1248,10 @@ function beforeWalletSpenderFingerprint(fingerprint) {
   };
 }
 function beforeWalletSpenderSourceText(file) {
-  let text = beforeUiRepairSourceText(file, readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n"));
+  let text = beforeUiRepairSourceText(
+    file,
+    readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n"),
+  );
   if (!beforeWalletSpenderMerge.has(file)) return text;
   for (const [current, previous] of [
     ["    paymentSpenderAccount,\n", "    userCanisterSpenderAccount,\n"],
@@ -1260,6 +1735,255 @@ test("current inline local-card rendering has exact runtime ownership without te
   }
 });
 
+test("October 18 live source composition rejects every current removal, mutation and new dependency", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const current = seedSourceFingerprint(root, config);
+  assert.equal(current.sha256, currentSourceSha256);
+  assert.equal(current.files.length, currentSourceCount);
+  assert.equal(
+    featureOwnedFiles(root, config.scopeId).length,
+    currentOwnedCount,
+  );
+  assert.equal(config.seeds.length, 26);
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
+  const prior = beforeReleaseFingerprint(current);
+  assert.equal(
+    prior.sha256,
+    "4f1ecfe59a1f3858dd3887607741cdae40a33ee2da8ac5f756f0e567e560ba70",
+  );
+  assertReviewedSourceFingerprint(prior, config.sourceReview);
+  assertReviewedSourceFingerprint(current, config.sourceReview);
+  assert.deepEqual(
+    current.files.filter((file) => !prior.files.includes(file)),
+    [...releaseReviewAdditions].sort(),
+  );
+  const entries = current.files.map((file) => [
+    file,
+    readFileSync(resolve(root, file)),
+  ]);
+  // Every current dedicated AND mixed source is checked. Historical preimages
+  // cannot satisfy these tests: all bytes and paths come directly from disk.
+  for (const file of current.files) {
+    for (const changed of [
+      entries.filter(([path]) => path !== file),
+      entries.map(([path, bytes]) => [
+        path,
+        path === file
+          ? Buffer.concat([bytes, Buffer.from("\n// unreviewed change\n")])
+          : bytes,
+      ]),
+    ])
+      assert.throws(
+        () =>
+          assertReviewedSourceFingerprint(
+            sourceReviewFingerprintFromBytes(changed),
+            config.sourceReview,
+          ),
+        /source set changed/u,
+        file,
+      );
+  }
+  const owned = featureOwnedFiles(root, config.scopeId);
+  const names = new Set(
+    config.seeds.map(
+      (seed) => seed.name ?? seed.location.replace(/^node_modules\//u, ""),
+    ),
+  );
+  for (const file of owned) {
+    const source = readFileSync(resolve(root, file), "utf8");
+    assertReviewedFeatureImports(source, names);
+    assert.throws(
+      () =>
+        assertReviewedFeatureImports(
+          source + '\nimport "unreviewed-release-package";\n',
+          names,
+        ),
+      /no reviewed root/u,
+      file,
+    );
+  }
+  const cryptoFile = "frontend/app/src/utils/appSetupCodeCrypto.ts";
+  assert(owned.includes(cryptoFile));
+  assert.deepEqual(
+    featureDependencySpecifiers(
+      readFileSync(resolve(root, cryptoFile), "utf8"),
+    ),
+    [],
+  );
+  for (const scope of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
+    assert(
+      !featureOwnedFiles(root, scope).includes(cryptoFile),
+      "the new selector must remain current-only",
+    );
+  for (const file of [
+    "frontend/app/src/utils/appSetupCodeCrypto.spec.ts",
+    "frontend/app/src/utils/localAppChatRoutes.testFixtures.ts",
+    "frontend/app/src/components_shared/LocalAppCodeConnection.realPortal.spec.ts",
+  ]) {
+    assert(!owned.includes(file), file);
+    assert(!current.files.includes(file), file);
+  }
+});
+
+test("current release pairing and inbox preserve ordinary authentication and explicit encrypted delivery", () => {
+  const read = (file) =>
+    readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
+  const connection = read(
+    "frontend/app/src/utils/localAppSetupConnection.ts",
+  ).match(/export function connectLocalAppSetup\([\s\S]*?\n\}/u)?.[0];
+  assert(connection);
+  assert.match(
+    connection,
+    /return connectCodeAppSetup\(descriptor, signal, setupContext, publicApp\)/u,
+  );
+  assert.doesNotMatch(
+    connection,
+    /connectBrowserAppSetup|window\.open|startLocalAppSetup/u,
+  );
+  const code = read("frontend/app/src/utils/localAppSetupCode.ts");
+  assert.match(code, /Ed25519KeyIdentity\.generate\(\)/u);
+  assert.match(code, /attempt \?\?= await createSetupCode\(\)/u);
+  assert.match(code, /CODE_LIFETIME_MS = APP_SETUP_TIMEOUT_MS - 60_000/u);
+  assert.match(code, /localAppCodeConnection\.set\(undefined\)/u);
+  assert.doesNotMatch(code, /localStorage|indexedDB|sessionStorage/u);
+  const cryptoSource = read("frontend/app/src/utils/appSetupCodeCrypto.ts");
+  assert.match(cryptoSource, /"HKDF"/u);
+  assert.match(cryptoSource, /"AES-GCM"/u);
+  assert.match(cryptoSource, /additionalData\(purpose, requestId\)/u);
+  assert.match(cryptoSource, /frame\.slice\(\)/u);
+  const inbox = read("frontend/app/src/utils/localAppInboxDelivery.ts");
+  assert.match(inbox, /identity: new AnonymousIdentity\(\)/u);
+  assert(
+    inbox.indexOf("await sealLocalAppDelivery(request, signal)") <
+      inbox.indexOf("await options.persist(saved)"),
+  );
+  assert(
+    inbox.indexOf("await options.persist(saved)") <
+      inbox.indexOf("await (options.deposit ?? depositLocalAppInbox)"),
+  );
+  for (const source of [
+    inbox,
+    read("frontend/app/src/utils/localAppSetupCodeActor.ts"),
+  ]) {
+    assert.match(source, /credentials: "omit"/u);
+    assert.match(source, /redirect: "error"/u);
+    assert.match(source, /retryTimes: 0/u);
+    assert.match(source, /shouldFetchRootKey: false/u);
+    assert.match(source, /logToConsole: false/u);
+  }
+  const setup = read("frontend/app/src/utils/localAppSetupStore.ts");
+  assert.match(setup, /validateLocalAppChatRoutes\(/u);
+  assert.match(
+    setup,
+    /crypto\.subtle\.generateKey\(\{ name: "AES-GCM", length: 256 \}, false/u,
+  );
+  assert.match(
+    setup,
+    /setupAdditionalData\(saved\.scope, saved\.generation\)/u,
+  );
+  assert.match(
+    setup,
+    /storedSetup\(owner, latest\)\?\.generation !== saved\?\.generation/u,
+  );
+  const profile = read("frontend/unofficialProductionApkProfile.mjs");
+  assert.match(
+    profile,
+    /OC_ANDROID_NATIVE_AUTH: "android-credential-manager-v1"/u,
+  );
+  assert.match(profile, /OC_ANDROID_REQUIRE_RELEASE_SIGNING: "true"/u);
+  assert.match(profile, /OC_OTA_UPDATES: "none"/u);
+  const builder = read("scripts/build-unofficial-production-apk.mjs");
+  assert.match(
+    builder,
+    /"transformers-webgpu-android,local-test-app-handoff"/u,
+  );
+  assert.match(builder, /"local-browser-auth\.html"/u);
+  assert.doesNotMatch(builder, /local-test-browser-auth/u);
+  const stores = read("frontend/openchat-client/src/reactiveStores.ts");
+  assert.deepEqual(featureDependencySpecifiers(stores), [
+    "./utils/stores",
+    "./utils/stores",
+    "./state/localStorageStore",
+  ]);
+  assert.doesNotMatch(
+    stores,
+    /from ["']\.\/openchat["']|new OpenChat|window\./u,
+  );
+});
+
+test("explicit local APK RP keeps every historical source identity and existing ownership boundary", () => {
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
+  const actual = seedSourceFingerprint(root, config);
+  assert.equal(actual.sha256, currentSourceSha256);
+  assert.equal(actual.files.length, currentSourceCount);
+  assert.equal(
+    featureOwnedFiles(root, config.scopeId).length,
+    currentOwnedCount,
+  );
+  assert.equal(config.seeds.length, 26);
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
+  const previous = {
+    ...actual,
+    sha256: createHash("sha256")
+      .update(
+        JSON.stringify(
+          beforeReleaseFingerprint(actual).files.map((file) => [
+            file,
+            beforeRpConfigurationSourceHash(file),
+          ]),
+        ),
+      )
+      .digest("hex"),
+  };
+  assert.equal(previous.sha256, beforeRpConfigurationSha256);
+  assertReviewedSourceFingerprint(previous, config.sourceReview);
+  assertReviewedSourceFingerprint(actual, config.sourceReview);
+  const entries = actual.files.map((file) => [
+    file,
+    readFileSync(resolve(root, file)),
+  ]);
+  for (const file of beforeRpConfiguration.keys()) {
+    assert(actual.files.includes(file), file);
+    assert.equal(
+      beforeReleaseSourceHash(file),
+      rpConfigurationCurrentHashes.get(file),
+      file,
+    );
+    assert.notEqual(sourceHash(file), beforeRpConfiguration.get(file), file);
+    for (const changed of [
+      entries.filter(([entry]) => entry !== file),
+      entries.map(([entry, bytes]) => [
+        entry,
+        entry === file
+          ? Buffer.concat([bytes, Buffer.from("\n// unreviewed RP drift\n")])
+          : bytes,
+      ]),
+    ]) {
+      assert.throws(() =>
+        assertReviewedSourceFingerprint(
+          sourceReviewFingerprintFromBytes(changed),
+          config.sourceReview,
+        ),
+      );
+    }
+  }
+});
 
 test("normal app flow and explicit reproposal retain exact history without expanding dependency roots", () => {
   const config = JSON.parse(
@@ -1271,15 +1995,18 @@ test("normal app flow and explicit reproposal retain exact history without expan
   const actual = seedSourceFingerprint(root, config);
   const previous = beforeUiRepairFingerprint(actual);
   assert.equal(actual.sha256, currentSourceSha256);
-  assert.equal(actual.files.length, 179);
+  assert.equal(actual.files.length, currentSourceCount);
   assert.equal(previous.files.length, 177);
   assert.equal(previous.sha256, beforeUiRepairSourceSha256);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   const owned = featureOwnedFiles(root, config.scopeId);
-  assert.equal(owned.length, 131);
+  assert.equal(owned.length, currentOwnedCount);
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
   const names = new Set(
     config.seeds.map(
       (seed) => seed.name ?? seed.location.replace(/^node_modules\//u, ""),
@@ -1292,8 +2019,16 @@ test("normal app flow and explicit reproposal retain exact history without expan
   for (const file of [...beforeUiRepair.keys(), ...uiRepairAdditions]) {
     assert(actual.files.includes(file), file);
     if (beforeUiRepair.has(file)) {
-      assert.equal(sourceHash(file), uiRepairCurrentHashes.get(file), file);
-      assert.notEqual(sourceHash(file), beforeUiRepair.get(file), file);
+      assert.equal(
+        beforeRpConfigurationSourceHash(file),
+        uiRepairCurrentHashes.get(file),
+        file,
+      );
+      assert.notEqual(
+        beforeRpConfigurationSourceHash(file),
+        beforeUiRepair.get(file),
+        file,
+      );
     }
     if (uiRepairAdditions.includes(file)) {
       assert(owned.includes(file), file);
@@ -1352,49 +2087,128 @@ test("normal app flow and explicit reproposal retain exact history without expan
   );
 });
 test("bounded model budgets and 0519 merge retain the exact predecessor without expanding roots", () => {
-  const config = JSON.parse(readFileSync(resolve(root, "scripts/npm_feature_scope.current-client.json"), "utf8"));
+  const config = JSON.parse(
+    readFileSync(
+      resolve(root, "scripts/npm_feature_scope.current-client.json"),
+      "utf8",
+    ),
+  );
   const actual = seedSourceFingerprint(root, config);
   const previous = beforeOutputBudgetFingerprint(actual);
   assert.equal(actual.sha256, currentSourceSha256);
-  assert.equal(actual.files.length, 179);
+  assert.equal(actual.files.length, currentSourceCount);
   assert.equal(previous.sha256, appViewSourceSha256);
   assert.equal(previous.files.length, 176);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   const owned = featureOwnedFiles(root, config.scopeId);
-  assert.equal(owned.length, 131);
+  assert.equal(owned.length, currentOwnedCount);
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
   assert(owned.includes(outputBudgetAddition));
-  assert(!actual.files.includes(outputBudgetAddition.replace(/\.ts$/u, ".spec.ts")));
+  assert(
+    !actual.files.includes(outputBudgetAddition.replace(/\.ts$/u, ".spec.ts")),
+  );
   const expected = new Map([
-    [outputBudgetAddition, "358af7690e0bcf75e7a944b4f9c4efc3ac59fafbe3d772082120c215e17288f8"],
-    ["frontend/app/src/components_shared/WebInferenceRuntimeSettings.svelte", "393c18bd4cd94a9a4e68837df9483d64cff74c4afbff30b6df4c023cffe60eef"],
-    ["frontend/app/src/stores/transformersWebGpuSettings.ts", "c2e5c178ecfadfaa41ae8bc9aca80677af27fd63c9542ee99b3537ed448af94d"],
-    ["frontend/app/src/utils/transformersWebGpuInference.ts", "ffcb87c9ea6203da53ce257256b20ef3fa6aad2a47b3c13a572c6a8be69d4178"],
-    ["frontend/app/src/utils/webGpuModelCatalog.ts", "ea74ab64a9499efc9d9f22265d2f65051117d4d588d19181d8c4dec985eee948"],
-    ["frontend/app/src/utils/webInference.ts", "17bcfe6f52529856a2e80cd4607af5eb34afdefe8d5f7f5c9f79bc534082a3c8"],
-    ["frontend/openchat-agent/src/utils/chatsDb.ts", "437a973f1b8ac3f4b254581a100f6dc8cad879bb6bfb0130dc4a29e5276cf82b"],
-    ["frontend/openchat-client/src/openchat.ts", "660efff628392c713417dc24a62dbbbc74c2588f4da74366fabd05fa7264071d"],
-    ["frontend/openchat-shared/src/domain/worker.ts", "630fbd153a0276fa494e6d301d6c5d7551ea0b1672ec6868c30c59f6a57e30ff"],
-    ["frontend/openchat-worker/src/worker.ts", "85cc7c4986c9dd0fd16034854a6c77fdb45b13f5ca03e3ed85d3fce96d8681e6"],
+    [
+      outputBudgetAddition,
+      "358af7690e0bcf75e7a944b4f9c4efc3ac59fafbe3d772082120c215e17288f8",
+    ],
+    [
+      "frontend/app/src/components_shared/WebInferenceRuntimeSettings.svelte",
+      "393c18bd4cd94a9a4e68837df9483d64cff74c4afbff30b6df4c023cffe60eef",
+    ],
+    [
+      "frontend/app/src/stores/transformersWebGpuSettings.ts",
+      "c2e5c178ecfadfaa41ae8bc9aca80677af27fd63c9542ee99b3537ed448af94d",
+    ],
+    [
+      "frontend/app/src/utils/transformersWebGpuInference.ts",
+      "ffcb87c9ea6203da53ce257256b20ef3fa6aad2a47b3c13a572c6a8be69d4178",
+    ],
+    [
+      "frontend/app/src/utils/webGpuModelCatalog.ts",
+      "ea74ab64a9499efc9d9f22265d2f65051117d4d588d19181d8c4dec985eee948",
+    ],
+    [
+      "frontend/app/src/utils/webInference.ts",
+      "17bcfe6f52529856a2e80cd4607af5eb34afdefe8d5f7f5c9f79bc534082a3c8",
+    ],
+    [
+      "frontend/openchat-agent/src/utils/chatsDb.ts",
+      "437a973f1b8ac3f4b254581a100f6dc8cad879bb6bfb0130dc4a29e5276cf82b",
+    ],
+    [
+      "frontend/openchat-client/src/openchat.ts",
+      "660efff628392c713417dc24a62dbbbc74c2588f4da74366fabd05fa7264071d",
+    ],
+    [
+      "frontend/openchat-shared/src/domain/worker.ts",
+      "630fbd153a0276fa494e6d301d6c5d7551ea0b1672ec6868c30c59f6a57e30ff",
+    ],
+    [
+      "frontend/openchat-worker/src/worker.ts",
+      "85cc7c4986c9dd0fd16034854a6c77fdb45b13f5ca03e3ed85d3fce96d8681e6",
+    ],
   ]);
-  assert.deepEqual([...expected.keys()].sort(), [outputBudgetAddition, ...beforeOutputBudgetMerge.keys()].sort());
-  assert.deepEqual(featureDependencySpecifiers(readFileSync(resolve(root, outputBudgetAddition), "utf8")), []);
-  const names = new Set(config.seeds.map((seed) => seed.name ?? seed.location.replace(/^node_modules\//u, "")));
-  const entries = actual.files.map((file) => [file, readFileSync(resolve(root, file))]);
+  assert.deepEqual(
+    [...expected.keys()].sort(),
+    [outputBudgetAddition, ...beforeOutputBudgetMerge.keys()].sort(),
+  );
+  assert.deepEqual(
+    featureDependencySpecifiers(
+      readFileSync(resolve(root, outputBudgetAddition), "utf8"),
+    ),
+    [],
+  );
+  const names = new Set(
+    config.seeds.map(
+      (seed) => seed.name ?? seed.location.replace(/^node_modules\//u, ""),
+    ),
+  );
+  const entries = actual.files.map((file) => [
+    file,
+    readFileSync(resolve(root, file)),
+  ]);
   for (const [file, digest] of expected) {
     assert.equal(beforeUiRepairSourceHash(file), digest, file);
-    if (beforeOutputBudgetMerge.has(file)) assert.notEqual(digest, beforeOutputBudgetMerge.get(file), file);
+    if (beforeOutputBudgetMerge.has(file))
+      assert.notEqual(digest, beforeOutputBudgetMerge.get(file), file);
     if (owned.includes(file)) {
       const source = readFileSync(resolve(root, file), "utf8");
       assertReviewedFeatureImports(source, names);
-      assert.throws(() => assertReviewedFeatureImports(`${source}\nimport "unreviewed-budget-package";\n`, names), /no reviewed root/u);
+      assert.throws(
+        () =>
+          assertReviewedFeatureImports(
+            `${source}\nimport "unreviewed-budget-package";\n`,
+            names,
+          ),
+        /no reviewed root/u,
+      );
     }
     for (const changed of [
       entries.filter(([path]) => path !== file),
-      entries.map(([path, bytes]) => [path, path === file ? Buffer.concat([bytes, Buffer.from("\n// unreviewed budget drift\n")]) : bytes]),
-    ]) assert.throws(() => assertReviewedSourceFingerprint(sourceReviewFingerprintFromBytes(changed), config.sourceReview), /source set changed/u);
+      entries.map(([path, bytes]) => [
+        path,
+        path === file
+          ? Buffer.concat([
+              bytes,
+              Buffer.from("\n// unreviewed budget drift\n"),
+            ])
+          : bytes,
+      ]),
+    ])
+      assert.throws(
+        () =>
+          assertReviewedSourceFingerprint(
+            sourceReviewFingerprintFromBytes(changed),
+            config.sourceReview,
+          ),
+        /source set changed/u,
+      );
   }
 });
 
@@ -1407,9 +2221,15 @@ test("inline-card source checkpoint preserves the exact committed predecessor an
   );
   const actual = seedSourceFingerprint(root, config);
   const previous = beforeInlineCardFingerprint(actual);
-  assert.equal(actual.files.length, 179);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(actual.files.length, currentSourceCount);
+  assert.equal(
+    featureOwnedFiles(root, config.scopeId).length,
+    currentOwnedCount,
+  );
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
   assert.equal(config.seeds.length, 26);
   assert.equal(previous.files.length, 171);
   assert.equal(
@@ -1521,13 +2341,13 @@ test("inert app views bind every current source and preserve the exact 175-sourc
   const actual = seedSourceFingerprint(root, config);
   const previous = beforeAppViewFingerprint(actual);
   assert.equal(actual.sha256, currentSourceSha256);
-  assert.equal(actual.files.length, 179);
+  assert.equal(actual.files.length, currentSourceCount);
   assert.equal(previous.sha256, inlineCardSourceSha256);
   assert.equal(previous.files.length, 175);
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   const owned = featureOwnedFiles(root, config.scopeId);
-  assert.equal(owned.length, 131);
+  assert.equal(owned.length, currentOwnedCount);
   assert(owned.includes(appViewAddition));
   for (const historical of ["pr1-model-npm", "pr2-app-card-ocr-npm"])
     assert(!featureOwnedFiles(root, historical).includes(appViewAddition));
@@ -1627,7 +2447,10 @@ test("inert app views bind every current source and preserve the exact 175-sourc
 });
 
 function beforeOptionalFieldCorrections(source) {
-  source = beforeUiRepairSourceText("frontend/app/src/components_shared/PrivateAppDraftFields.svelte", source);
+  source = beforeUiRepairSourceText(
+    "frontend/app/src/components_shared/PrivateAppDraftFields.svelte",
+    source,
+  );
   const replacements = [
     [
       '    import { localAppDraftChoiceCompanionFields } from "../utils/localAppDraftChoices";\n',
@@ -1801,7 +2624,9 @@ test("modal-only card focus preserves the exact prior inert-view source checkpoi
         JSON.stringify(
           historical.files.map((path) => [
             path,
-            path === file ? beforeAppViews.get(file) : beforeOutputBudgetSourceHash(path),
+            path === file
+              ? beforeAppViews.get(file)
+              : beforeOutputBudgetSourceHash(path),
           ]),
         ),
       )
@@ -1903,10 +2728,16 @@ test("main Apps flow, retained local cards and startup completion have an exact 
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
-  assert.equal(actual.files.length, 179);
+  assert.equal(
+    featureOwnedFiles(root, config.scopeId).length,
+    currentOwnedCount,
+  );
+  assert.equal(actual.files.length, currentSourceCount);
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
   assert.equal(
     beforeReplicaPortMergeFingerprint(actual).sha256,
     "83d70d96f0b74618f59ef52327f2d3bf104a2895231e686f9557cb9e068a5b14",
@@ -1954,7 +2785,11 @@ test("main Apps flow, retained local cards and startup completion have an exact 
     "utf8",
   );
   assert(directory.includes("ok = await workspace.connectApp(id);"));
-  assert(directory.includes("onCancelConnection={connecting ? cancelConnection : undefined}"));
+  assert(
+    directory.includes(
+      "onCancelConnection={connecting ? cancelConnection : undefined}",
+    ),
+  );
   assert(!directory.includes("Saved cards ({workspaceView.cards.length})"));
   assert(!directory.includes("workspace.open();"));
   const userIndex = readFileSync(
@@ -2002,10 +2837,13 @@ test("current encryption, recovery and enum-label owners use existing selectors 
         `frontend/app/src/utils/localAppEncryption${suffix}`,
       ),
     );
-  assert.equal(owned.length, 131);
-  assert.equal(fingerprint.files.length, 179);
+  assert.equal(owned.length, currentOwnedCount);
+  assert.equal(fingerprint.files.length, currentSourceCount);
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
   assert.equal(fingerprint.sha256, currentSourceSha256);
   assertReviewedSourceFingerprint(fingerprint, config.sourceReview);
 });
@@ -2029,16 +2867,13 @@ test("upstream wallet spender merge preserves the reviewed mixed-file boundary a
     "\n",
   );
   const previous = beforeWalletSpenderSourceText(file);
-  assert.equal(
-    sourceHash(file),
-    "660efff628392c713417dc24a62dbbbc74c2588f4da74366fabd05fa7264071d",
-  );
+  assert.equal(sourceHash(file), currentSemanticHashes.wallet[0]);
   // The same four wallet hunks remain exactly reversible in the new upstream
   // context. This synthetic reversal is not the old full file; its historical
   // identity is independently retained by beforeOutputBudgetMerge above.
   assert.equal(
     createHash("sha256").update(previous).digest("hex"),
-    "2a0f965cc7dd12feeed16d0ad92e5f259d6b486ef614c533684908b7c8600283",
+    currentSemanticHashes.wallet[1],
   );
   assert.notEqual(previous, current);
   assert.deepEqual(
@@ -2058,8 +2893,14 @@ test("upstream wallet spender merge preserves the reviewed mixed-file boundary a
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assert.equal(actual.files.length, 171);
   // Ownership discovery is live; the reconstructed historical source count above is unchanged.
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(
+    featureOwnedFiles(root, config.scopeId).length,
+    currentOwnedCount,
+  );
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
   assert.equal(config.seeds.length, 26);
 });
 
@@ -2098,8 +2939,14 @@ test("generic context framing preserves exact prior source identity and existing
   assertReviewedSourceFingerprint(actual, config.sourceReview);
   assert.equal(actual.files.length, 171);
   // Ownership discovery is live; the reconstructed historical source count above is unchanged.
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(
+    featureOwnedFiles(root, config.scopeId).length,
+    currentOwnedCount,
+  );
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
   assert.equal(config.seeds.length, 26);
   assert(
     !actual.files.includes("frontend/app/src/utils/localAiCommand.spec.ts"),
@@ -2119,8 +2966,14 @@ test("saved-card opt-in and recovery feedback preserve exact prior source identi
   );
   assert.equal(actual.files.length, 171);
   // Ownership discovery is live; the reconstructed historical source count above is unchanged.
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(
+    featureOwnedFiles(root, config.scopeId).length,
+    currentOwnedCount,
+  );
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
   assert.equal(config.seeds.length, 26);
   const expected = new Map([
     [
@@ -2170,7 +3023,10 @@ test("incoming replica-port support preserves exact main Apps source history and
     ),
   );
   const fingerprint = seedSourceFingerprint(root, config);
-  const read = beforeWalletSpenderSourceText;
+  // Verify the same replica-port hunks against CURRENT files. Old identities
+  // remain independently pinned in beforeReplicaPortMergeFingerprint below.
+  const read = (file) =>
+    readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
   const reversals = [
     [
       "frontend/app/rollup.config.mjs",
@@ -2206,9 +3062,7 @@ test("incoming replica-port support preserves exact main Apps source history and
     // old full-file identity remains pinned in the historical aggregate below.
     assert.equal(
       createHash("sha256").update(previous).digest("hex"),
-      file === "frontend/openchat-client/src/openchat.ts"
-        ? "125d04c7f350611011882fb1567e5b03653c4bff5e9440fcd5ce1e604de2e5d4"
-        : beforeReplicaPortMerge.get(file),
+      currentSemanticHashes.replica.find(([path]) => path === file)[2],
       file,
     );
     assert.deepEqual(
@@ -2248,10 +3102,9 @@ test("cache hashing responsiveness preserves exact prior source identity and int
   );
   const actual = seedSourceFingerprint(root, config);
   const file = "frontend/app/src/utils/transformersWebGpuInference.ts";
-  const source = beforeOutputBudgetInference(readFileSync(resolve(root, file), "utf8").replaceAll(
-    "\r\n",
-    "\n",
-  ));
+  const source = beforeOutputBudgetInference(
+    readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n"),
+  );
   assert.equal(
     createHash("sha256").update(source).digest("hex"),
     "e797afe96025f79b8b0b9ebfc64aeee86aa1a9fa14a83d394d32dbe23b0693a2",
@@ -2268,10 +3121,16 @@ test("cache hashing responsiveness preserves exact prior source identity and int
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 179);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
+  assert.equal(actual.files.length, currentSourceCount);
+  assert.equal(
+    featureOwnedFiles(root, config.scopeId).length,
+    currentOwnedCount,
+  );
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
   for (const unchanged of [
     "const CACHED_HASH_UPDATE_MAX_BYTES = 64 * 1024;",
     "const CACHED_HASH_TASK_MAX_BYTES = 4 * 1024 * 1024;",
@@ -2305,7 +3164,9 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
     ],
     [
       inference,
-      beforeCachedHashResponsiveness(beforeOutputBudgetInference(text(inference)))
+      beforeCachedHashResponsiveness(
+        beforeOutputBudgetInference(text(inference)),
+      )
         .replaceAll(
           "transformersWebGpuImmutableAssetsEnabled",
           "transformersWebGpuProductionAssetsEnabled",
@@ -2337,9 +3198,12 @@ test("unofficial immutable-asset routing preserves the exact prior source aggreg
   );
   assertReviewedSourceFingerprint(previous, config.sourceReview);
   assertReviewedSourceFingerprint(actual, config.sourceReview);
-  assert.equal(actual.files.length, 179);
+  assert.equal(actual.files.length, currentSourceCount);
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
   assert(
     !actual.files.includes("frontend/app/transformersWebGpuFeatureFlag.d.mts"),
   );
@@ -2438,12 +3302,12 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
   const clientPath = "frontend/openchat-client/src/openchat.ts";
   const owned = featureOwnedFiles(root, config.scopeId);
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(owned.length, 131);
-  assert.equal(fingerprint.files.length, 179);
+  assert.equal(owned.length, currentOwnedCount);
+  assert.equal(fingerprint.files.length, currentSourceCount);
   assert.equal(config.seeds.length, 26);
   assert.equal(
     config.seeds.reduce((count, seed) => count + seed.evidence.length, 0),
-    108,
+    currentAnchorCount,
   );
   assert(owned.includes(storePath));
   assert(
@@ -2481,6 +3345,7 @@ test("current setup persistence is a dedicated builtin-API consumer with an exac
     "./localAppCatalog",
     "./isolatedAppProcessor",
     "./localAppDirectory",
+    "./localAppChatRoutes",
   ]);
   assert.match(source, /globalThis\.indexedDB/u);
   assert.match(source, /crypto\.subtle\.digest\("SHA-256"/u);
@@ -2750,12 +3615,19 @@ test("source navigation uses the real host codec and only the precisely reached 
     /\b(?:fetch|WebSocket|XMLHttpRequest|Worker|indexedDB|localStorage|sessionStorage)\s*\(/u,
   );
   const ui = readFileSync(
-    resolve(root, "frontend/app/src/components_shared/LocalAppSourceCardLink.svelte"),
+    resolve(
+      root,
+      "frontend/app/src/components_shared/LocalAppSourceCardLink.svelte",
+    ),
     "utf8",
   );
   assert(ui.includes('workspace.open("source");'));
   assert(ui.includes("workspace.selectCard(id);"));
-  assert(ui.includes("localAppCardAnchorKey(namespace, current.cardSources[id]) !== sourceKey"));
+  assert(
+    ui.includes(
+      "localAppCardAnchorKey(namespace, current.cardSources[id]) !== sourceKey",
+    ),
+  );
   const expected = new Map([
     [
       "svelte",
@@ -2891,28 +3763,48 @@ test("current app discovery and setup include every production owner but no test
   const additions = new Map([
     [
       "frontend/app/src/utils/localAppDirectory.ts",
-      ["./localAppCatalog", "./isolatedAppProcessor"],
+      [
+        "@icp-sdk/core/principal",
+        "./localAppInbox",
+        "./localAppCatalog",
+        "./isolatedAppProcessor",
+      ],
     ],
     [
       "frontend/app/src/utils/localAppSetupConnection.ts",
       [
-        "@tauri-apps/api/core",
+        "./localAppCatalog",
+        "./localAppSetupCode",
         "./localAppDirectory",
         "./localAppHandoff",
+        "./localAppScopedSetup",
         "./localAppSetupPopup",
         "tauri-plugin-oc-api/commands/localAppSetup",
         "tauri-plugin-oc-api/commands/openUrl",
       ],
     ],
-    ["frontend/app/src/utils/localAppSetupPopup.ts", ["./localAppHandoff"]],
+    [
+      "frontend/app/src/utils/localAppSetupPopup.ts",
+      ["./localAppHandoff", "./localAppScopedSetup"],
+    ],
     ["frontend/app/local-native-app-setup.html", []],
     ["frontend/app/public/local-app-setup.html", []],
-    ["frontend/app/src/localAppSetupRelay.ts", ["./utils/localAppSetupPopup", "./utils/localAppRelayFrame"]],
+    [
+      "frontend/app/src/localAppSetupRelay.ts",
+      [
+        "./utils/localAppSetupPopup",
+        "./utils/localAppRelayFrame",
+        "./utils/localAppScopedSetup",
+      ],
+    ],
     [
       "frontend/app/localNativeAppSetupBuild.mjs",
       ["node:fs/promises", "node:url", "esbuild"],
     ],
-    ["frontend/app/src/localNativeAppSetup.ts", ["./utils/localAppSetupPopup"]],
+    [
+      "frontend/app/src/localNativeAppSetup.ts",
+      ["./utils/localAppSetupPopup", "./utils/localAppScopedSetup"],
+    ],
     [
       "frontend/tauri-plugin-oc/guest-js/commands/localAppSetup.ts",
       ["@tauri-apps/api/core"],
@@ -2966,18 +3858,7 @@ test("retained legacy native sign-in helpers have exact reviewed imports and fai
       ["node:fs/promises", "node:url", "esbuild"],
     ],
     ["frontend/app/local-browser-auth.html", []],
-    [
-      "frontend/app/src/localBrowserAuth.ts",
-      [
-        "@icp-sdk/core/identity",
-        "@icp-sdk/core/agent",
-        "@agent/services/identityAgent",
-        "@agent/services/nativeBrowserAccountSession",
-        "@client/utils/browserAccountLink",
-        "@client/utils/nativeBrowserAuth",
-        "@client/utils/nativeBrowserSigner",
-      ],
-    ],
+    ["frontend/app/src/localBrowserAuth.ts", ["@client"]],
     [
       "frontend/openchat-client/src/utils/nativeBrowserAuth.ts",
       [
@@ -3170,12 +4051,19 @@ test("current auth uses original upstream paths without activating retained brow
     "frontend/app/src/components/App.svelte",
     "frontend/app/src/components_mobile/App.svelte",
   ]) {
-    assert.match(
-      read(file),
-      /clientOnlyApps: import\.meta\.env\.OC_UNOFFICIAL_CLIENT === "true"/u,
-    );
+    assert.match(read(file), /createOpenChatClient\(/u);
     assert.doesNotMatch(read(file), /existingAccountOnly/u);
   }
+  const clientFactory = "frontend/app/src/utils/openchatClient.ts";
+  assert(fingerprint.files.includes(clientFactory));
+  assert.match(
+    read(clientFactory),
+    /clientOnlyApps: import\.meta\.env\.OC_UNOFFICIAL_CLIENT === "true"/u,
+  );
+  assert.match(
+    read(clientFactory),
+    /appDirectoryUrl: import\.meta\.env\.OC_APP_DIRECTORY_URL/u,
+  );
   for (const file of [
     "frontend/app/src/utils/nativeAppDelivery.ts",
     "frontend/app/src/components_shared/LocalAppCards.svelte",
@@ -3223,22 +4111,16 @@ test("current mobile error translation is an exact presentation-only source chec
     "\n",
   );
   const hash = (text) => createHash("sha256").update(text).digest("hex");
-  assert.equal(
-    hash(source),
-    "251df92cfea239711f19508c72e08c50c0a5424c9285c7762ba9bf262ffae6e8",
-  );
+  assert.equal(hash(source), currentSemanticHashes.mobile[0]);
   const prior = source
     .replace(
       '    import { nativeAuthErrorKey } from "@src/utils/nativeAuthErrorKey";\n',
       "",
     )
     .replace("i18nKey(nativeAuthErrorKey(error))", "i18nKey(error)");
-  assert.equal(
-    hash(prior),
-    "1c93d07d7b15826a5c0af8a593a86cffc092ff3dd1eb39911cb4a37114fb7785",
-  );
-  // The mobile file is unchanged by the later upstream merge. Preserve its exact
-  // two-line proof and both historical aggregates by using only these eight
+  assert.equal(hash(prior), currentSemanticHashes.mobile[1]);
+  // Current upstream changed mobile layout but preserved this exact two-line
+  // translation proof above. Preserve both historical aggregates using eight
   // pre-merge UTF-8/LF identities, independently read from committed 77346e24c.
   // The later extension helper preserves the separately committed September inputs.
   const beforeUpstreamMerge = new Map([
@@ -3277,7 +4159,7 @@ test("current mobile error translation is an exact presentation-only source chec
   ]);
   for (const entry of beforeUpstreamMerge.keys())
     assert(fingerprint.files.includes(entry), entry);
-  const checkpointFingerprint = (mobileSource) => ({
+  const checkpointFingerprint = (historicalMobileHash) => ({
     ...fingerprint,
     sha256: hash(
       JSON.stringify(
@@ -3285,15 +4167,19 @@ test("current mobile error translation is an exact presentation-only source chec
           ([entry, checkpointHash]) => [
             entry,
             entry === file
-              ? hash(mobileSource)
+              ? historicalMobileHash
               : (beforeUpstreamMerge.get(entry) ?? checkpointHash),
           ],
         ),
       ),
     ),
   });
-  const previousFingerprint = checkpointFingerprint(prior);
-  const translatedFingerprint = checkpointFingerprint(source);
+  const previousFingerprint = checkpointFingerprint(
+    "1c93d07d7b15826a5c0af8a593a86cffc092ff3dd1eb39911cb4a37114fb7785",
+  );
+  const translatedFingerprint = checkpointFingerprint(
+    beforeReleaseReview.get(file),
+  );
   assert.equal(
     previousFingerprint.sha256,
     "425a64c8f66fb23956590bc0a698e865bbf1e606d3144b2e8411ad3dc2f1898c",
@@ -3318,10 +4204,16 @@ test("current upstream merge preserves scoped startup, model and private-app bou
     readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n");
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const fingerprint = seedSourceFingerprint(root, config);
-  assert.equal(fingerprint.files.length, 179);
-  assert.equal(featureOwnedFiles(root, config.scopeId).length, 131);
+  assert.equal(fingerprint.files.length, currentSourceCount);
+  assert.equal(
+    featureOwnedFiles(root, config.scopeId).length,
+    currentOwnedCount,
+  );
   assert.equal(config.seeds.length, 26);
-  assert.equal(config.seeds.flatMap((seed) => seed.evidence).length, 108);
+  assert.equal(
+    config.seeds.flatMap((seed) => seed.evidence).length,
+    currentAnchorCount,
+  );
   // Preserve the committed merge identity after the separately reviewed Windows
   // path-only repair and the independently bound later-extension identities.
   const mergeFingerprint = {
@@ -3359,7 +4251,7 @@ test("current upstream merge preserves scoped startup, model and private-app bou
   const main = read("frontend/app/src/main.ts");
   assert.equal(
     hash(main),
-    "ee353591455581bda225592981fbc9ec9f0f56641c50fe9b070d6f84f0327696",
+    "c212466da31c5212e1425e507cdfed5e93674981952ac67e7351ec5dfffc9dc1",
   );
   assert(
     main.indexOf("await prepareServiceWorkerBeforeApplicationStart()") <
@@ -3373,7 +4265,7 @@ test("current upstream merge preserves scoped startup, model and private-app bou
   const worker = read("frontend/openchat-client/src/workerAgent.ts");
   assert.equal(
     hash(worker),
-    "e6542c4c3900ac708aa7d3df2a9f2f038e41b40cda3e6682d6da71d50274e5a6",
+    "9b00ffcaeff60c5d7e3834ef3ade1a5946fc90d366392c9cebc77147484cce79",
   );
   assert.match(worker, /try \{\s*worker =\s*takePrestartedWorker\(\) \?\?/u);
   assert.match(worker, /window\.OC_PRESTARTED_WORKER = undefined/u);
@@ -3398,15 +4290,12 @@ test("Windows startup module-ID repair preserves the exact committed merge check
   );
   const fingerprint = seedSourceFingerprint(root, config);
   const file = "frontend/app/rollup.extras.mjs";
-  const source = readFileSync(resolve(root, file), "utf8").replaceAll(
-    "\r\n",
-    "\n",
+  const source = beforeRpConfigurationSourceText(
+    file,
+    readFileSync(resolve(root, file), "utf8").replaceAll("\r\n", "\n"),
   );
   const hash = (text) => createHash("sha256").update(text).digest("hex");
-  assert.equal(
-    hash(source),
-    "22bf93228b94a0cf4666eade3ca004278dc351fdfddc8937a69a86a11c3d5658",
-  );
+  assert.equal(hash(source), currentSemanticHashes.extras[0]);
   const prior = source
     .replace(
       '        const app = chunks.find((c) =>\n            c.moduleIds.some((id) => id.replaceAll("\\\\", "/").endsWith(root)),\n        );',
@@ -3416,10 +4305,7 @@ test("Windows startup module-ID repair preserves the exact committed merge check
       '                // Rollup preserves native separators for JSON modules on Windows,\n                // while other plugins may already return slash-normalized IDs.\n                const locale = id.replaceAll("\\\\", "/").match',
       "                const locale = id.match",
     );
-  assert.equal(
-    hash(prior),
-    "ed9641516ca65a821c6b4a5f4bcae1e51449be786d1ddbed04fdc2b2d7e32203",
-  );
+  assert.equal(hash(prior), currentSemanticHashes.extras[1]);
   const checkpointEntries = septemberCheckpointEntries(fingerprint);
   const restored = {
     ...fingerprint,
@@ -3428,7 +4314,9 @@ test("Windows startup module-ID repair preserves the exact committed merge check
       JSON.stringify(
         checkpointEntries.map(([entry, checkpointHash]) => [
           entry,
-          entry === file ? hash(prior) : checkpointHash,
+          entry === file
+            ? "ed9641516ca65a821c6b4a5f4bcae1e51449be786d1ddbed04fdc2b2d7e32203"
+            : checkpointHash,
         ]),
       ),
     ),
@@ -3539,6 +4427,8 @@ test("reviewed persistence writes setup-only fields at explicit mutations, never
       "installations",
       "disabledAppIds",
       "enabledChats",
+      "connections",
+      "chatSetups",
     ],
   );
   assert.doesNotMatch(
@@ -3591,7 +4481,7 @@ test("reviewed persistence writes setup-only fields at explicit mutations, never
   );
   assert.match(
     store,
-    /exact\(\s*value,\s*\["catalog", "enabledChats"\],\s*\["appId", "actionId", "processor", "processors", "installations", "disabledAppIds"\],?\s*\)/u,
+    /exact\(\s*value,\s*\["catalog", "enabledChats"\],\s*\[\s*"appId",\s*"actionId",\s*"processor",\s*"processors",\s*"installations",\s*"disabledAppIds",\s*"connections",\s*"chatSetups",?\s*\],?\s*\)/u,
   );
   assert.match(store, /exact\(row, \["appId", "artifact"\]\)/u);
   assert.match(

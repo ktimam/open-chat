@@ -1,6 +1,6 @@
 # Current unofficial-client npm source ownership
 
-Latest disposition: see **October 6 normal app flow and deliberate re-proposal**
+Latest disposition: see **October 18 release source reconciliation**
 below. Earlier sections and their hashes remain historical evidence; they do not
 describe the now-removed active browser-auth transport.
 
@@ -923,13 +923,13 @@ Independently reading all 175 predecessor Git blobs reproduces
 `274cc344469da04f63e1959dea1508030e54ecc2187355f1798e787ef3314164`.
 Only five runtime paths differ (identities are UTF-8/LF SHA256):
 
-| Runtime path under `frontend/app/src/` | Previous identity | Current identity |
-| --- | --- | --- |
-| `utils/localAppView.ts` | Added | `67825c6d9a2c00a57031d7a22bb363ef0a94dbe17dd843f1d4c54d5c0951ce65` |
-| `components_shared/LocalAppCards.svelte` | `ba1d846994b4d3a3b2abc9a3895a4cab2db4d10756f27995f61e24d649bde83e` | `c70d3c3575e75ba4e1fee76bd2a90a925da48bdde0f5e9e103db317d21036f1a` |
+| Runtime path under `frontend/app/src/`           | Previous identity                                                  | Current identity                                                   |
+| ------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `utils/localAppView.ts`                          | Added                                                              | `67825c6d9a2c00a57031d7a22bb363ef0a94dbe17dd843f1d4c54d5c0951ce65` |
+| `components_shared/LocalAppCards.svelte`         | `ba1d846994b4d3a3b2abc9a3895a4cab2db4d10756f27995f61e24d649bde83e` | `c70d3c3575e75ba4e1fee76bd2a90a925da48bdde0f5e9e103db317d21036f1a` |
 | `components_shared/PrivateAppDraftFields.svelte` | `d96e2057200a574753662533636a41f95c36dbbd6d1d1cfb856871db5fcdef75` | `53d7336c24532532e41b2ed354f15e2eb72fcc66d20821439dab6025101292ab` |
-| `utils/localAppCatalog.ts` | `76968c6a2f96247dce636bc5b34d671cb4b5e1866c97fe0deadd6c487c11e4e4` | `5f0565e2ea1980f32a33d76b041d43b65ae2dd9b7b5742e4141fafefeef65c98` |
-| `utils/localAppDirectory.ts` | `f0e444625be5dc8f8207189ec7fb9827ba429c5901c0a895dd5365251f30da22` | `384c2e42159bf35856f8020cc9eae36cb6a68363c77315d71bcb54d9acea6ade` |
+| `utils/localAppCatalog.ts`                       | `76968c6a2f96247dce636bc5b34d671cb4b5e1866c97fe0deadd6c487c11e4e4` | `5f0565e2ea1980f32a33d76b041d43b65ae2dd9b7b5742e4141fafefeef65c98` |
+| `utils/localAppDirectory.ts`                     | `f0e444625be5dc8f8207189ec7fb9827ba429c5901c0a895dd5365251f30da22` | `384c2e42159bf35856f8020cc9eae36cb6a68363c77315d71bcb54d9acea6ade` |
 
 The new validator belongs to the existing current-only `localApp` selector.
 No selector or package root is broadened. Optional `draftView` is inert bounded
@@ -1159,3 +1159,133 @@ workflows, root declarations, manifests/locks, historical PR inventories,
 advisory decisions, authentication, model weights/prompts and backend
 configuration remain untouched. These offline source checks are not a new
 advisory scan, rebuilt-artifact result, device qualification or release approval.
+
+## October 7 explicit local-APK RP configuration
+
+This bounded review compares against `24e36a7e95813a73729c6cbc3dde53dfd8196980`.
+Reading all 179 predecessor blobs independently reproduces `c478ca7aefd4551309ee18992f5705660a0f14e834069cabc12f8a2871b34b88`;
+the current aggregate is `4f1ecfe59a1f3858dd3887607741cdae40a33ee2da8ac5f756f0e567e560ba70`. Only these three already-anchored
+mixed source inputs change:
+
+| Source                                   | Predecessor SHA-256                                                | Current SHA-256                                                    |
+| ---------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `frontend/app/rollup.config.mjs`         | `249dc70d20e1c4de3bab4b067279506876604a83edacfbcc5bb30f093a255727` | `d63aed97063da901da7f75d93ab8cc3039df6a36ca6ccedd28a69d2b253c9c42` |
+| `frontend/app/rollup.extras.mjs`         | `22bf93228b94a0cf4666eade3ca004278dc351fdfddc8937a69a86a11c3d5658` | `ba00babcec993925d28f6d2ff6769df924e89557935ba48e39a7d282364b4c64` |
+| `scripts/build-unofficial-local-apk.mjs` | `0b8e68a771047aa5d9108e46d6f3a1e4a4b20c8ca18591a74d7ba4ed8062b1f6` | `92e6364ba2ef41dad1f7e64a668b7f8cf38d6d811970ae0ea1a744f9e19add5c` |
+
+The approved local APK profile now requires an explicit validated RP hostname.
+The build wrapper, second Rollup environment normalization, WebAuthn origin,
+Android RP resource and profile marker retain the same hostname; a mismatched
+or unmarked inherited continuation fails. The official non-local build keeps
+its existing fallback. The imported profile remains separately native-scoped.
+There are still 179 sources, 131 dedicated owners, 108 exact mixed-source
+anchors and 26 dependency roots. No selectors, roots, dependency manifests,
+locks, workflow or advisory decisions changed. Current bytes are still bound;
+three exact historical preimages and strict hunk reversals retain the earlier
+checkpoints without substituting historical values into the live gate.
+
+This is source-ownership evidence only, not Digital Asset Links/provider,
+APK/device, or release acceptance. The separate native inventory has three
+pre-existing source-pin mismatches from the earlier `1cf9e1a` normal-app-flow
+repair (`local_app_handoff_protocol.rs`, `local_app_handoff.rs`, and
+`local_app_setup.rs`). Their older pins remain unchanged and the native gate
+must continue to reject them pending their own review; this update does not
+silently accept, bypass, or waive those semantic changes.
+
+## October 18 release source reconciliation
+
+User-approved scope: repair the fork's failing scoped checks without weakening
+assertions or changing features. Reviewed fork source is main
+54f3307bc6cc3a2b88a6afbdc06d90720f227f52, including its 11ed95078 upstream merge
+and the separately verified mechanical formatter corrections. No dependency
+installation/audit, model change, advisory acceptance, runtime feature edit or
+release publication is performed by this review.
+
+The final UTF-8/LF source identity is
+ba867b0b326bddc1c20bcc9a10c6459fad831a391758b78d6b6742f7cb5e1a20:
+**194 source files, 139 dedicated owners, 115 anchors, unchanged 26 roots**.
+The compiler/build dependency edges and lockfile location roots remain the
+previously reviewed exact set. All 139 dedicated modules pass direct-import
+review with that set. Historical PR configurations and advisory decisions are
+not modified.
+
+### Reviewed changes and precise source ownership
+
+The seven additions already found by existing selectors are aiAppCodeTransport,
+localAppChatRoutes, localAppInbox, localAppInboxDelivery, localAppScopedSetup,
+localAppSetupCode and localAppSetupCodeActor. The generic appSetupCodeCrypto
+helper is now explicitly selected **only in the current-client scope**. It uses
+browser WebCrypto (HKDF, AES-GCM, SHA-256, random bytes) and no external imports.
+Test files, test shells and test fixtures remain excluded.
+
+Seven added mixed-source anchors close concrete reached ownership seams:
+
+| Source                                         | Reviewed reason; existing root                                                                             |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| frontend/app/src/utils/openchatClient.ts       | Upstream extracted client factory carries clientOnlyApps and directory configuration; Svelte consumer seam |
+| frontend/openchat-client/src/reactiveStores.ts | DOM-free store exports used by model/private-app modules; existing Svelte root                             |
+| frontend/openchat-client/src/utils/stores.ts   | Reached untrack/store implementation, not a new whole-client import scan; existing Svelte root             |
+| scripts/build-unofficial-production-apk.mjs    | Calls the existing Tauri CLI; no publish/install/key creation                                              |
+| frontend/unofficialProductionApkProfile.mjs    | Production package/RP/directory/signing/OTA profile validation; builtins and inherited local profile       |
+| frontend/unofficialLocalApkProfile.mjs         | Shared parent/child profile validation actually imported by the production profile                         |
+| frontend/src-tauri/tauri.private.conf.json     | Production builder and exact native app permissions; existing Tauri CLI                                    |
+
+Three old svelte/store anchors now point to @client/reactiveStores. This follows
+the actual reached Svelte edge; it does not exempt unknown aliases/packages or
+select every package imported by the mixed client. The active code-pairing actor
+uses the already reviewed IC SDK, an ephemeral identity, an allowlisted host and
+paths, omitted credentials, zero automatic SDK retries, and production root-key
+verification. The durable inbox uses anonymous calls and sends only the sealed
+payload after write-ahead persistence. Scoped app/chat metadata is strictly
+validated and stored separately from proposal/approval/delivery fields; setup
+storage now uses nonextractable WebCrypto keys and account/backend/generation
+binding. None introduces an npm dependency root.
+
+Other changed owned files were reconciled against 24e36a7e9: original
+desktop/mobile code dialogs and their generic transport injection; independent
+directory/inbox delivery; preserved chat routes across reconnect; browser/native
+callback compatibility retained but not selected by active Connect; and upstream
+reactive-store, startup/client-factory and UI import migrations. Model-facing
+changes in this delta use the same reviewed roots, including the store seam;
+no weights or prompts are accepted/changed by this review. Mixed upstream files
+remain anchored at their reached feature edges, never whole-core dependency
+owners.
+
+### Historical proofs versus current behavioral checks
+
+All 179 normalized Git blobs at 24e36a7e95813a73729c6cbc3dde53dfd8196980 were read
+independently and reproduced c478ca7a exactly. The three retained October 7 RP
+postimages independently reproduce 4f1ecfe5. The review records those old
+per-file identities explicitly; the 15 newly included paths are removed only
+while reconstructing historical sets. Historical 177/176/175/171/158/153/151/148
+source counts and earlier aggregates are retained, not relabelled as current.
+
+No current behavioral contract is satisfied by historical bytes:
+
+- Original authentication/no-browser-bridge assertions still inspect current
+  client, worker, onboarding and APK builder source. Both current App trees
+  must call createOpenChatClient; the now-anchored current factory must carry
+  clientOnlyApps and appDirectoryUrl.
+- Mobile error translation, wallet-spender, replica-port and Windows module-ID
+  tests still reverse the exact corresponding hunks from **current source** and
+  bind their current identities. Their old aggregate identities are separately
+  preserved with independent historical hashes. Startup/worker safety assertions
+  also continue to inspect current source.
+- Strict setup persistence assertions now explicitly allow only the additional
+  completed connections/chatSetups metadata; they retain prohibitions on message,
+  draft, payload, approval and delivery persistence through the setup writer.
+- The new October 18 composition test rejects removal and mutation of **each
+  of all 194 current sources**, and rejects an unreviewed package on **each of
+  all 139 dedicated owners**. Historical replacements never participate in these
+  checks or the live source gate.
+- The new current pairing/inbox test binds the active original code flow,
+  ephemeral/uncached attempt, authenticated crypto framing, sealed durable inbox,
+  restricted network transport, encrypted setup persistence and ordinary native
+  authentication/production signing/OTA boundaries.
+
+Validation with pinned Node v24.18.1: all **92 npm source-review tests pass**,
+including all 90 existing cases and the two stronger current-source cases.
+The CLI source ownership gate is separately run with --scope current-client.
+This is source/dependency-ownership evidence only: it does not itself approve
+advisories, publish the APK, substitute for scoped CI, or certify device/model
+accuracy. Separate native review and runtime evidence remain required.

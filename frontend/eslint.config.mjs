@@ -27,7 +27,8 @@ const agentOrWorker = {
 };
 const insideClient = {
     regex: "^@client(?:/(?!reactiveStores$)|\\?)|(^|/)openchat-client/",
-    message: "Import from @client or the DOM-free @client/reactiveStores entry point, not from an internal path.",
+    message:
+        "Import from @client or the DOM-free @client/reactiveStores entry point, not from an internal path.",
 };
 
 function restrictAppImports(...patterns) {

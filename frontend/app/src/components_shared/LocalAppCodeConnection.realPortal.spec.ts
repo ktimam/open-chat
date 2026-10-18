@@ -3,7 +3,7 @@
 // Only unrelated layout, translations, client/network and account state are fixtures.
 import { webcrypto } from "node:crypto";
 import { flushSync, mount, tick, unmount } from "svelte";
-import { get, writable } from "@client/utils/stores";
+import { get } from "@client/utils/stores";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LocalAppDirectory from "./LocalAppDirectory.svelte";
 import LocalAppCards from "./LocalAppCards.svelte";
@@ -109,7 +109,7 @@ vi.mock("component-lib", async (importOriginal) => {
     };
 });
 
-const state = privateAppWorkspaceState as ReturnType<typeof writable<any>>;
+const state = privateAppWorkspaceState;
 const mounted: ReturnType<typeof mount>[] = [];
 let connection: LocalAppCodeConnection;
 let resolveCode: (value: { code: string; expiresAt: bigint }) => void;
@@ -175,6 +175,22 @@ beforeEach(async () => {
         appUpdates: {},
         disabledAppIds: [],
         open: false,
+        cardPresentation: "saved",
+        processorReady: false,
+        busy: false,
+        fieldEditBlocked: false,
+        setupLoading: false,
+        setupStatus: "",
+        setupGeneration: 0,
+        draftLoading: false,
+        draftStorageStatus: "",
+        enabledChats: [],
+        connections: [],
+        chatSetups: [],
+        recipient: "",
+        draftManualValues: false,
+        directoryLoading: false,
+        message: "",
         editorJson: "{}",
     });
     connection = {
