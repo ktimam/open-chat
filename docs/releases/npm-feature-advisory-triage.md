@@ -260,3 +260,51 @@ deferrals remain intact; no other finding is waived. The fresh Qwen normal-UI
 acceptance and native IOU connection, encrypted delivery, recovery and readback
 checks remain required. No core OpenChat audit or shared dependency upgrade is
 authorized by this deferral.
+
+## October 18 OpenChat Private release deferral
+
+The hosted scoped check for candidate
+`8946db226f3de1d947cf09542733da9596f1c8ab` returned two additional npm findings.
+After these exact findings were presented, the user explicitly instructed
+"defer and publish" for this OpenChat Private release. The October 10 mainnet
+extension covered the earlier recorded deferrals, not these new IDs; this is a
+separate, exact-version decision.
+
+| Package | Reported severity | Advisory | Selected model dependency path |
+| --- | --- | --- | --- |
+| sharp 0.35.4 | High | GHSA-wq5f-xc86-pv6w | @huggingface/transformers 4.2.0 -> sharp 0.35.4 |
+| sprintf-js 1.1.3 | Moderate | GHSA-hp3w-g68c-fv3c | @huggingface/transformers 4.2.0 -> onnxruntime-node 1.24.3 -> global-agent 3.0.0 -> roarr 2.15.4 -> sprintf-js 1.1.3 |
+
+The npm response describes the Sharp finding as a librsvg dependency issue
+(`CVE-2026-96889`, affected `<0.35.5`) and the sprintf-js finding as denial of
+service through unbounded precision specifiers (affected `<=1.1.3`). These are
+returned advisory descriptions, not a new exploit or runtime reachability
+assessment. The selected scope is `current-client-npm`: 26 reviewed roots and
+194 source pins, not a whole OpenChat core audit. The previously deferred
+`braces@3.0.3 / GHSA-vfj7-8cjw-p6xm` also remains in the response.
+
+Evidence is retained in hosted run
+[39164532063](https://github.com/ktimam/open-chat/actions/runs/39164532063),
+artifact `openchat-current-client-scoped-npm-report`, directory
+`npm-feature-advisories-8J4XhS`. SHA-256 identities:
+
+- Request file: `b86452ce602995c5d04db6977d0101b1c176d9e4ccec73203da574cfb13909a1`.
+- Response file: `e43c91f517eead66e4f908a9992b30b910d7acf81f10a93071283eaca56378e2`.
+- Summary: `9fefad0cd7c348c3c37ed688c9d3ef2f290867351110b5472db891927d259e9f`.
+- Selected inventory: `520f5b242dc54a33e3db780bb83a65ced87e5c913e88dcf8f7eba3a1b4d07905`.
+
+All six functional jobs in that run passed: frontend model contracts, real
+inference, Linux and Windows native tests/shipping compilation, and both Android
+contract/SDK jobs. The separate [frontend run 39164532047](https://github.com/ktimam/open-chat/actions/runs/39164532047)
+passed, including lint/type checks/tests and production, WebGPU and unofficial
+local-web builds. Formatting, offline scoped security contracts and license
+checks also passed. The advisory job and both npm/Rust advisory gates remain
+**failed**, with their raw results preserved; functional success is not security
+clearance.
+
+Keep these two exact findings open and disclosed. This decision permits this
+release with the recorded findings; it is not a clean scan, dependency fix,
+mitigation claim, gate suppression, future-version or future-advisory waiver.
+No dependency, runtime feature or CI policy changed. The release APK remains
+built from candidate `8946db226f3de1d947cf09542733da9596f1c8ab`; this later
+documentation-only decision does not change its source provenance.

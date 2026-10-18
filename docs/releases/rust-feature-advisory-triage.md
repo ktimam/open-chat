@@ -94,3 +94,59 @@ local-test approval blocker. Preserve the original failed scanner results and
 do not suppress findings or claim a clean scan. This narrow decision does not
 cover future findings or versions, approve public publication, or authorize
 OpenChat core dependency upgrades or a broad core audit.
+
+## October 18 OpenChat Private release deferral
+
+The hosted scoped check for candidate
+`8946db226f3de1d947cf09542733da9596f1c8ab` returned nine new Rust advisory rows.
+The user explicitly instructed "defer and publish" after these exact findings
+were presented, for this OpenChat Private release only. Neither the earlier
+`rustls@0.23.42 / RUSTSEC-2026-0285` decision nor the October 10 mainnet extension
+covered these new versions/IDs; this is a separate decision.
+
+| Package | Exact returned advisory IDs |
+| --- | --- |
+| quinn-proto 0.11.16 | RUSTSEC-2026-0338; RUSTSEC-2026-0339; RUSTSEC-2026-0340; RUSTSEC-2026-0341; RUSTSEC-2026-0342 |
+| rustls 0.23.45 | RUSTSEC-2026-0346; RUSTSEC-2026-0347; RUSTSEC-2026-0348; RUSTSEC-2026-0349 |
+
+The captured OSV batch response supplies IDs and modification times, not severity
+or vulnerability details. No severity is inferred and no additional query or
+exploitability review was performed for this disposition.
+
+Both packages occur in all ten selected current-client profiles through the
+production-context `plugin.model-and-handoff.url` seed in
+`frontend/tauri-plugin-oc/Cargo.toml`: `reqwest@0.12.28 -> quinn@0.11.11 ->
+quinn-proto@0.11.16`, and `reqwest@0.12.28 -> rustls@0.23.45`. The two Android
+profiles additionally record the Tauri app/plugin roots through
+`tauri@2.11.5 -> reqwest@0.13.4` (then the same quinn or rustls packages).
+This is the existing scoped native model/app dependency closure, not an audit
+of OpenChat backend/core dependencies. Its Cargo workspace-resolved feature
+union is an overapproximation, not proof of shipping-binary exploitability or
+absence of risk. No broader runtime reachability claim is made.
+
+Evidence is retained in hosted run
+[39164532063](https://github.com/ktimam/open-chat/actions/runs/39164532063),
+artifact `openchat-current-client-scoped-rust-report`, directory
+`rust-feature-ci-VgR8ih/rust-feature-advisories-q7d0lZ`. SHA-256 identities:
+
+- Request: `9d650165871391bf92732546da2b865bc9b14c9522beec21d239c498b7f53f95`.
+- Raw response: `a055713d8e00d1a392bf3e52d7acb6274cc78eb74f85fb30de71d06918971cc1`.
+- Advisory summary: `efa9bac4af061c29a8b77835804525085bdca08b86f4b470a1ac3a9e7b7dc863`.
+- Outer CI summary: `4f26324556a5f59e9fc3de80161be2750a8861485b50edb1cd31bd7039ba9f1b`.
+- Selected Cargo lock: `e868bffd4efea6e411f2d701ad53a2d30d1f1c05629b11a01c174b5fd6659a1f`.
+- Reviewed scope: `d2b5d752aafb9e2af76266d4400b3dca3bec38c282fbc3d4d3d97a8511f5f800`.
+
+All six functional jobs in the scoped run passed, including actual fixture
+inference, Linux/Windows native tests and shipping-feature compilation, and
+Android contract/SDK compilation. The separate frontend run `39164532047`
+passed. Scope/formatting/offline security/license checks passed; the advisory
+job and npm/Rust advisory gates remain **failed**. The nine older rows still
+returned (glib, h2, proc-macro-error and five unic packages) retain their earlier
+exact dispositions. None of these outcomes is relabeled as a clean scan.
+
+Keep the nine new rows open and disclosed. This permits this release with these
+exact findings, not other versions, future advisories or a blanket waiver.
+Preserve raw failures and strict gates. No dependency, source feature, CI policy
+or model changed. The release APK remains built from
+`8946db226f3de1d947cf09542733da9596f1c8ab`; the subsequent documentation-only
+decision is not a claim that the APK was rebuilt from that later commit.
